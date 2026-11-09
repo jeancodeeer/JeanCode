@@ -137,13 +137,21 @@ python -m http.server 8000 --directory web
 
 # desktop
 cd desktop && npm install && npm start
+
+# tests
+node --test tests/unit.test.mjs
 ```
 
-### Release the desktop app
+### Release a new version
+
+One version for everything (web, desktop, service worker), set by one script:
 
 ```bash
-git tag v0.1.0 && git push origin v0.1.0   # the desktop workflow builds and publishes the installers
+node scripts/version.mjs 1.1.0            # updates web/js/version.js, desktop/package.json, sw cache
+git commit -am "JeanCode 1.1.0" && git tag v1.1.0 && git push origin main v1.1.0
 ```
+
+The `desktop` workflow refuses a tag that does not match the version, builds the installers and adds the web `.zip` to the Release. The desktop app tells users when a newer release exists. History: [CHANGELOG.md](CHANGELOG.md).
 
 <br>
 

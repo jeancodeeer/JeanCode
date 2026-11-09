@@ -13,4 +13,6 @@ Cliente gráfico de los modelos Jean. La API vive en otro repo (`Jean-API-Genera
 ## Comandos
 - Web local: `python -m http.server 8000 --directory web`
 - Escritorio: `cd desktop && npm install && npm start` · sintaxis: `npm run check`
-- Publicar instaladores: etiqueta `vX.Y.Z` (workflow `desktop.yml`).
+- Pruebas: `node --test tests/unit.test.mjs` · versión única: `node scripts/version.mjs` (comprueba) / `node scripts/version.mjs X.Y.Z` (cambia).
+- Publicar: `node scripts/version.mjs X.Y.Z`, commit, etiqueta `vX.Y.Z` (workflow `desktop.yml`; rechaza etiquetas que no coinciden).
+- Nunca dupliques una versión completa: una sola rama `main`, una sola versión en `web/js/version.js`.

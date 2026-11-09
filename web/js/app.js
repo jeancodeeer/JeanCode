@@ -1,5 +1,6 @@
 // JeanCode — interfaz. Modos: chat · code (archivos descargables) · agent (solo escritorio).
 import { CONFIG, BRAND } from './config.js';
+import { VERSION, isNewer } from './version.js';
 import { store } from './store.js';
 import { getEndpoints, saveEndpoints, addEndpoint, listModels, probe, chatStream, generateKey, discoverSiblings, detectLocal, ollamaPull } from './api.js';
 import { renderMarkdown, esc } from './md.js';
@@ -65,6 +66,7 @@ async function enterApp() {
   $('#splash').hidden = true;
   $('#app').hidden = false;
   $('#repo-link').href = CONFIG.repoUrl;
+  $('#app-version').textContent = `JeanCode ${VERSION}${desktop ? ' · escritorio' : ' · web'}`;
   if (desktop) $$('.desktop-only').forEach((el) => { el.hidden = false; });
   if (!store.get('siblingsChecked', false)) {
     // conexiones anteriores a v0.2.1 solo guardaban un puerto: se buscan los otros modelos una vez
@@ -74,6 +76,19 @@ async function enterApp() {
   await refreshModels();
   renderThreads();
   openThread(state.threads.find((t) => t.mode === state.mode)?.id || null);
+  if (desktop) checkUpdate();
+}
+
+/** Escritorio: avisa una vez por sesión si hay una versión publicada más nueva. La web se actualiza sola. */
+async function checkUpdate() {
+  if (sessionStorage.getItem('jeancode.updateChecked')) return;
+  sessionStorage.setItem('jeancode.updateChecked', '1');
+  try {
+    const res = await fetch(CONFIG.releasesApi, { headers: { Accept: 'application/vnd.github+json' } });
+    if (!res.ok) return;
+    const rel = await res.json();
+    if (isNewer(rel.tag_name)) toast(`JeanCode ${rel.tag_name.replace(/^v/, '')} disponible · Más → Descargar la app`);
+  } catch { /* sin red: nada que avisar */ }
 }
 
 /** Diagnóstico claro de una conexión fallida (queja típica de OpenCode: errores crípticos de proveedor). */
@@ -1163,7 +1178,9 @@ async function loadReleases() {
       a.classList.toggle('disabled', !asset);
       if (asset) { a.href = asset.browser_download_url; $('.os-file', a).textContent = `${asset.name} · ${(asset.size / 1048576).toFixed(0)} MB`; }
     });
-    note.textContent = `Versión ${rel.tag_name}. En macOS, la primera vez abre la app con clic derecho → Abrir (no está firmada).`;
+    const latest = rel.tag_name.replace(/^v/, '');
+    const mine = isNewer(rel.tag_name) ? `Tienes la ${VERSION}: hay una versión nueva.` : `Tienes la ${VERSION}.`;
+    note.textContent = `Última versión: ${latest}. ${desktop ? mine + ' ' : ''}En macOS, la primera vez abre la app con clic derecho → Abrir (no está firmada).`;
   } catch {
     note.innerHTML = `Todavía no hay una versión publicada. Puedes compilarla desde <a href="${CONFIG.repoUrl}/tree/main/desktop" target="_blank" rel="noopener">desktop/</a>.`;
   }
@@ -1338,6 +1355,7 @@ if ('serviceWorker' in navigator && location.protocol.startsWith('http') && !des
 
 (async function init() {
   applyBrand();
+  $('#splash-version').textContent = `v${VERSION}`;
   setThink(state.think);
   updateHint();
   if (desktop?.config) {

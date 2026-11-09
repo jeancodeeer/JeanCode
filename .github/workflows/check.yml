@@ -17,3 +17,7 @@ jobs:
         run: for f in web/js/*.js; do node --input-type=module --check < "$f"; done
       - name: desktop
         run: for f in desktop/main.js desktop/preload.js desktop/lib/*.js; do node --check "$f"; done
+      - name: single version
+        run: node scripts/version.mjs
+      - name: unit tests
+        run: node --test tests/unit.test.mjs

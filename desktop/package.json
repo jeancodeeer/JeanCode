@@ -1,7 +1,7 @@
 {
   "name": "jeancode-desktop",
   "productName": "JeanCode",
-  "version": "0.4.2",
+  "version": "1.0.0",
   "repository": "github:jeancodeeer/JeanCode",
   "description": "JeanCode — agente de programación de escritorio para los modelos Jean (trae tu propia jean-api).",
   "main": "main.js",
@@ -11,7 +11,8 @@
   "scripts": {
     "copy-web": "node scripts/copy-web.mjs",
     "start": "npm run copy-web && electron .",
-    "check": "node --check main.js && node --check preload.js && node --check lib/tools.js && node --check lib/skills.js",
+    "check": "node --check main.js && node --check preload.js && node --check lib/tools.js && node --check lib/skills.js && node ../scripts/version.mjs",
+    "test": "node --test ../tests/unit.test.mjs",
     "dist": "npm run copy-web && electron-builder"
   },
   "devDependencies": {

@@ -110,8 +110,14 @@ Los instaladores para **Windows (.exe)**, **macOS (.dmg)** y **Linux (.AppImage)
 ```bash
 python -m http.server 8000 --directory web      # web
 cd desktop && npm install && npm start          # escritorio
-git tag v0.1.0 && git push origin v0.1.0        # publicar instaladores
+node --test tests/unit.test.mjs                 # pruebas
+node scripts/version.mjs 1.1.0                  # nueva versión (web, escritorio y caché a la vez)
+git tag v1.1.0 && git push origin main v1.1.0   # publicar instaladores
 ```
+
+<br>
+
+Historial de versiones: [CHANGELOG.md](CHANGELOG.md).
 
 <br>
 

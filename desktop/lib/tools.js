@@ -70,6 +70,17 @@ async function edit(root, rel, oldStr, newStr) {
   return `editado ${rel}`;
 }
 
+/** Recorre lo que no es carpeta bajo dir (sin SKIP). onFile(p, dirent) devuelve false para detener todo. */
+async function walkFiles(dir, onFile) {
+  for (const e of await fs.readdir(dir, { withFileTypes: true }).catch(() => [])) {
+    if (SKIP.has(e.name)) continue;
+    const p = path.join(dir, e.name);
+    if (e.isDirectory()) { if (await walkFiles(p, onFile) === false) return false; }
+    else if (await onFile(p, e) === false) return false;
+  }
+  return true;
+}
+
 async function search(root, pattern, rel = '.') {
   let re;
   try { re = new RegExp(pattern, 'i'); } catch (e) { throw new Error('regex inválida: ' + e.message); }
@@ -77,26 +88,18 @@ async function search(root, pattern, rel = '.') {
   const start = await inside(root, rel);
   const hits = [];
   let files = 0;
-  async function walk(dir) {
-    if (hits.length >= 200 || files >= 5000) return;
-    for (const e of await fs.readdir(dir, { withFileTypes: true }).catch(() => [])) {
-      if (SKIP.has(e.name)) continue;
-      const p = path.join(dir, e.name);
-      if (e.isDirectory()) await walk(p);
-      else if (e.isFile()) {
-        files++;
-        const st = await fs.stat(p).catch(() => null);
-        if (!st || st.size > 1024 * 1024) continue;
-        const text = await fs.readFile(p, 'utf8').catch(() => '');
-        if (text.includes('\u0000')) continue;
-        text.split(/\r?\n/).forEach((line, i) => {
-          if (hits.length < 200 && re.test(line)) hits.push(`${path.relative(base, p)}:${i + 1}: ${line.trim().slice(0, 200)}`);
-        });
-      }
-      if (hits.length >= 200) return;
-    }
-  }
-  await walk(start);
+  await walkFiles(start, async (p, e) => {
+    if (!e.isFile()) return true; // enlaces simbólicos: nunca se siguen
+    if (++files > 5000) return false;
+    const st = await fs.stat(p).catch(() => null);
+    if (!st || st.size > 1024 * 1024) return true;
+    const text = await fs.readFile(p, 'utf8').catch(() => '');
+    if (text.includes('\u0000')) return true;
+    text.split(/\r?\n/).forEach((line, i) => {
+      if (hits.length < 200 && re.test(line)) hits.push(`${path.relative(base, p)}:${i + 1}: ${line.trim().slice(0, 200)}`);
+    });
+    return hits.length < 200;
+  });
   return hits.length ? hits.join('\n') + (hits.length >= 200 ? '\n…(más de 200 coincidencias)' : '') : 'sin coincidencias';
 }
 
@@ -300,20 +303,11 @@ async function glob(root, pattern = '**/*', limit = 500) {
   const base = await fs.realpath(root);
   const re = globToRegex(String(pattern).replace(/\\/g, '/'));
   const out = [];
-  async function walk(dir) {
-    if (out.length >= limit) return;
-    for (const e of await fs.readdir(dir, { withFileTypes: true }).catch(() => [])) {
-      if (SKIP.has(e.name)) continue;
-      const p = path.join(dir, e.name);
-      if (e.isDirectory()) await walk(p);
-      else {
-        const rel = path.relative(base, p).split(path.sep).join('/');
-        if (re.test(rel)) out.push(rel);
-      }
-      if (out.length >= limit) return;
-    }
-  }
-  await walk(base);
+  await walkFiles(base, (p) => {
+    const rel = path.relative(base, p).split(path.sep).join('/');
+    if (re.test(rel)) out.push(rel);
+    return out.length < limit;
+  });
   return out;
 }
 
