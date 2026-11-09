@@ -42,6 +42,7 @@ async function list(root, rel) {
 async function read(root, rel, offset = 0, limit = 400) {
   const file = await inside(root, rel);
   const st = await fs.stat(file);
+  if (st.isDirectory()) return `${rel} es una carpeta, no un archivo. Contenido:\n${await list(root, rel)}`;
   if (st.size > 5 * 1024 * 1024) throw new Error('archivo de más de 5 MB; usa search o un comando');
   const lines = (await fs.readFile(file, 'utf8')).split(/\r?\n/);
   const start = Math.max(0, offset | 0);

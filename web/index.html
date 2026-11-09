@@ -17,11 +17,38 @@
 <body>
 
 <!-- SPLASH: se muestra si este navegador no tiene una API registrada -->
+<!-- filtro de "fotocopia": textura de tóner para el wordmark -->
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <filter id="xerox" x="-5%" y="-5%" width="110%" height="110%">
+    <feTurbulence type="fractalNoise" baseFrequency="1.4" numOctaves="2" seed="7" result="n"/>
+    <feColorMatrix in="n" type="matrix" values="0 0 0 0 0  0 0 0 0 0  0 0 0 0 0  0 0 0 -2.2 1.35" result="holes"/>
+    <feComposite in="SourceGraphic" in2="holes" operator="in" result="eaten"/>
+    <feTurbulence type="fractalNoise" baseFrequency="0.02 0.6" numOctaves="1" seed="3" result="w"/>
+    <feDisplacementMap in="eaten" in2="w" scale="5" xChannelSelector="R" yChannelSelector="G"/>
+  </filter>
+</svg>
+
 <div id="splash" class="splash" hidden>
-  <div class="splash-card">
-    <div class="tag-row"><span>N&deg; 001 — JEANCODER</span><span>REF. JEANCODE / CLIENT</span></div>
-    <h1 class="display">JEANCODE</h1>
-    <p class="lede">Este equipo todavía no tiene una API Jean registrada. Pega la URL y la clave de <strong>tu</strong> <code>Jean-API-Generator</code> para entrar.</p>
+  <div class="splash-frame">
+    <span class="reg tl" aria-hidden="true"></span><span class="reg tr" aria-hidden="true"></span>
+    <span class="reg bl" aria-hidden="true"></span><span class="reg br" aria-hidden="true"></span>
+
+    <section class="splash-brand">
+      <div class="logo-slot" data-logo aria-label="Logo de JeanCode"></div>
+      <svg class="wordmark" viewBox="0 0 1000 300" role="img" aria-label="JeanCode">
+        <text class="wm-ghost" x="14" y="294" textLength="986" lengthAdjust="spacingAndGlyphs">JEANCODE</text>
+        <text class="wm-ink" x="0" y="280" textLength="986" lengthAdjust="spacingAndGlyphs" filter="url(#xerox)">JEANCODE</text>
+      </svg>
+      <p class="splash-claim">El cliente de los modelos Jean. Conversa, genera proyectos enteros y deja que un agente trabaje en tu PC.</p>
+      <ul class="spec">
+        <li><span>Modelos</span><span>Grey · Marvel · Fénix</span></li>
+        <li><span>Contexto</span><span>131 072 tokens</span></li>
+        <li><span>Servidor</span><span>el tuyo</span></li>
+      </ul>
+    </section>
+
+    <section class="splash-form">
+    <p class="lede">Este equipo todavía no tiene una API registrada. Pega la URL y la clave de tu <code>Jean-API-Generator</code>.</p>
 
     <form id="splash-form" class="stack" autocomplete="off">
       <label class="field">
@@ -37,25 +64,26 @@
       </label>
       <label class="check"><input id="splash-remember" type="checkbox" checked> Recordar en este equipo</label>
       <div id="splash-msg" class="msg" role="status" aria-live="polite"></div>
-      <button class="btn primary big" type="submit" id="splash-go">PROBAR Y ENTRAR →</button>
+      <button class="btn primary big" type="submit" id="splash-go">Conectar</button>
     </form>
 
-    <div class="splash-grid">
-      <div class="box">
-        <span class="label">¿NO TIENES API?</span>
-        <p>Créala gratis en tu propio Codespace con el repo de APIs:</p>
-        <a class="btn" id="api-repo-link" href="https://github.com/jeancodeeer/Jean-API-Generator" target="_blank" rel="noopener">JEAN-API-GENERATOR ↗</a>
+    <div class="splash-aux">
+      <div class="aux">
+        <h2 class="aux-title">¿Sin API?</h2>
+        <p>Créala gratis en un Codespace propio.</p>
+        <a class="btn" id="api-repo-link" href="https://github.com/jeancodeeer/Jean-API-Generator" target="_blank" rel="noopener">Crear mi API</a>
       </div>
-      <div class="box">
-        <span class="label">GENERAR UNA CLAVE</span>
-        <p>Úsala como secreto <code>JEAN_API_KEY</code> al crear tu Codespace.</p>
+      <div class="aux">
+        <h2 class="aux-title">Clave nueva</h2>
+        <p>Úsala como secreto <code>JEAN_API_KEY</code>.</p>
         <div class="input-row">
-          <input id="gen-key" type="text" readonly placeholder="pulsa GENERAR" spellcheck="false">
-          <button type="button" class="btn" id="gen-btn">GENERAR</button>
+          <input id="gen-key" type="text" readonly placeholder="—" spellcheck="false" aria-label="Clave generada">
+          <button type="button" class="btn" id="gen-btn">Generar</button>
         </div>
       </div>
     </div>
-    <p class="fine">La URL y la clave se guardan solo en este navegador. JeanCode no tiene servidor propio ni ve tus datos.</p>
+    <p class="fine">La URL y la clave se quedan en este navegador. JeanCode no tiene servidor propio.</p>
+    </section>
   </div>
 </div>
 
@@ -63,8 +91,10 @@
 <div id="app" class="app" hidden>
   <aside class="rail" id="rail">
     <div class="brand">
-      <span class="brand-mark">JC</span>
-      <span class="brand-name">JEANCODE</span>
+      <div class="logo-slot sm" data-logo aria-label="Logo de JeanCode"></div>
+      <svg class="wordmark sm" viewBox="0 0 1000 220" role="img" aria-label="JeanCode">
+        <text class="wm-ink" x="0" y="200" textLength="1000" lengthAdjust="spacingAndGlyphs">JEANCODE</text>
+      </svg>
     </div>
 
     <nav class="modes" role="tablist" aria-label="Modo">
@@ -90,6 +120,7 @@
       <button class="btn ghost icon" id="rail-toggle" aria-label="Menú">☰</button>
       <div class="crumb"><span id="crumb-mode">CHAT</span><span class="sep">/</span><span id="crumb-title">NUEVA CONVERSACIÓN</span></div>
       <div class="top-actions">
+        <button class="toggle" id="think-btn" type="button" aria-pressed="false" title="Razonar antes de responder: mejor en tareas difíciles, mucho más lento en CPU">RAZONAR</button>
         <div class="ctx" id="ctx-meter" title="Contexto usado de 131072 tokens (estimado)">
           <span class="ctx-bar"><i id="ctx-fill"></i></span><span class="mono" id="ctx-text">0%</span>
         </div>

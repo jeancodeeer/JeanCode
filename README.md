@@ -65,7 +65,8 @@ The repository contains **no URLs and no keys**: every user brings their own. In
 | **Task list** | For multi-step work the agent keeps a visible checklist (`todo_write`), like Claude Code. |
 | **`@` mentions** | Type `@` to pick a file from the workspace; its content is attached to your message. |
 | **Project commands** | Every `.jeancode/commands/<name>.md` becomes `/<name>` (`$ARGUMENTS` = what you type after it). |
-| **Model-agnostic tools** | Tool calls use a plain-text protocol, so they work even when the server has no native function calling. |
+| **Native tool calls** | Uses OpenAI function calling (verified on llama-server with Jean Grey) and falls back to a plain-text protocol on servers without it. |
+| **THINK toggle** | Off by default: Jean answers without its reasoning phase, about 8× faster on a CPU Codespace (1.3 s vs 10.1 s measured). Turn it on for hard tasks. |
 
 Installers are built by GitHub Actions for **Windows (.exe)**, **macOS (.dmg, Intel + Apple Silicon)** and **Linux (.AppImage)**, together with the **web version as a .zip** for self-hosting, and attached to each [release](https://github.com/jeancodeeer/JeanCode/releases). The macOS build is not signed: open it the first time with right-click → Open.
 
@@ -73,7 +74,7 @@ Installers are built by GitHub Actions for **Windows (.exe)**, **macOS (.dmg, In
 
 ### Commands and shortcuts (web + desktop)
 
-`/new` · `/clear` · `/compact` (summarise to free context) · `/model <id>` · `/export` (Markdown) · `/help` · `/zip` (CODE) · `/init` · `/plan` · `/build` · `/undo` · `/review` (AGENT). A context meter in the top bar estimates how much of the 131072-token window is used. `Esc` stops a reply, `Ctrl+K` starts a new conversation, `Ctrl+1/2/3` switches mode.
+`/new` · `/clear` · `/compact` (summarise to free context) · `/model <id>` · `/export` (Markdown) · `/help` · `/zip` (CODE) · `/init` · `/plan` · `/build` · `/undo` · `/review` (AGENT). The **RAZONAR** switch in the top bar turns the model's reasoning on or off. A context meter estimates how much of the 131072-token window is used. `Esc` stops a reply, `Ctrl+K` starts a new conversation, `Ctrl+1/2/3` switches mode.
 
 <br>
 

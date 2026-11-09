@@ -15,6 +15,13 @@ function detectRepo() {
 
 const { owner, repo } = detectRepo();
 
+// Logo de la marca. Mientras sea null se muestra un hueco vacío marcado.
+// Para usar uno: guarda el archivo en web/assets/ (SVG o PNG cuadrado) y pon su ruta,
+// por ejemplo  logo: 'assets/logo.svg'. También reemplaza web/favicon.svg.
+export const BRAND = {
+  logo: null,
+};
+
 export const CONFIG = {
   owner,
   repo,

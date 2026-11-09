@@ -1,5 +1,5 @@
 // JeanCode — interfaz. Modos: chat · code (archivos descargables) · agent (solo escritorio).
-import { CONFIG } from './config.js';
+import { CONFIG, BRAND } from './config.js';
 import { store } from './store.js';
 import { getEndpoints, saveEndpoints, addEndpoint, listModels, probe, chatStream, generateKey } from './api.js';
 import { renderMarkdown, esc } from './md.js';
@@ -27,6 +27,7 @@ const state = {
   workspace: store.get('workspace', null),
   perm: store.get('perm', 'ask'),
   agent: store.get('agent', 'build'),
+  think: store.get('think', false),
   custom: [],          // comandos del proyecto (.jeancode/commands)
   fileCache: null,     // archivos de la carpeta para @menciones
   popup: { items: [], index: 0, kind: null, start: 0 },
@@ -259,7 +260,11 @@ function updateContext() {
 
 /* ------------------------------------------------------------- composer */
 const input = $('#input');
-function autosize() { input.style.height = 'auto'; input.style.height = Math.min(input.scrollHeight, 220) + 'px'; }
+function autosize() {
+  input.style.height = 'auto';
+  input.style.height = Math.min(input.scrollHeight, 220) + 'px';
+  input.style.overflowY = input.scrollHeight > 220 ? 'auto' : 'hidden';
+}
 
 function updateHint() {
   const base = 'ENTER envía · / comandos · ESC para';
@@ -443,7 +448,7 @@ async function compact(t) {
     const transcript = (t.agentMessages || t.messages).filter((x) => x.role !== 'system')
       .map((x) => `${x.role.toUpperCase()}: ${x.content}`).join('\n\n').slice(-120000);
     const summary = await chatStream({
-      ep: m.ep, model: m.id, signal: state.abort.signal,
+      ep: m.ep, model: m.id, signal: state.abort.signal, think: false,
       messages: [{ role: 'system', content: PROMPTS.compact }, { role: 'user', content: transcript }],
     });
     const content = `RESUMEN DE LA CONVERSACIÓN ANTERIOR:\n${summary.trim()}`;
@@ -483,7 +488,7 @@ async function sendChat(t, m) {
   };
   try {
     await chatStream({
-      ep: m.ep, model: m.id, signal: state.abort.signal,
+      ep: m.ep, model: m.id, signal: state.abort.signal, think: state.think,
       messages: [{ role: 'system', content: sys }, ...history],
       onDelta: (d) => { text += d; paint(); },
       onReasoning: (d) => { reasoning += d; paint(); },
@@ -616,7 +621,7 @@ async function sendAgent(t, m, text) {
 
   let row = null;
   const ctx = {
-    ep: m.ep, model: m.id, desktop, workspace: state.workspace, mode: state.perm, agent: state.agent, sys,
+    ep: m.ep, model: m.id, desktop, workspace: state.workspace, mode: state.perm, agent: state.agent, sys, think: state.think,
     signal: state.abort.signal, confirm: confirmDialog,
     onEvent: (ev) => {
       if (ev.type === 'assistant-start') row = addMessage('assistant', '', { streaming: true, cls: ev.nested ? 'nested' : '' });
@@ -780,7 +785,26 @@ if (desktop) {
 }
 
 /* ------------------------------------------------------------------ init */
+function setThink(on) {
+  state.think = on;
+  store.set('think', on);
+  $('#think-btn').setAttribute('aria-pressed', String(on));
+}
+$('#think-btn').addEventListener('click', () => { setThink(!state.think); toast(state.think ? 'RAZONAR: SÍ (MÁS LENTO)' : 'RAZONAR: NO (MÁS RÁPIDO)'); });
+
+function applyBrand() {
+  if (!BRAND.logo) return;
+  $$('[data-logo]').forEach((slot) => {
+    const img = new Image();
+    img.alt = '';
+    img.onload = () => { slot.replaceChildren(img); slot.classList.add('filled'); };
+    img.src = BRAND.logo;
+  });
+}
+
 (async function init() {
+  applyBrand();
+  setThink(state.think);
   updateHint();
   if (desktop?.config) {
     const saved = await desktop.config.load();

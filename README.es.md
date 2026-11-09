@@ -56,6 +56,8 @@ El repositorio **no contiene URLs ni claves**: cada usuario trae las suyas. En e
 | **Lista de tareas** | En trabajos de varios pasos el agente mantiene una lista visible (`todo_write`), como Claude Code. |
 | **Menciones `@`** | Escribe `@` para elegir un archivo de la carpeta; su contenido se adjunta al mensaje. |
 | **Comandos del proyecto** | Cada `.jeancode/commands/<nombre>.md` se vuelve `/<nombre>` (`$ARGUMENTS` = lo que escribas después). |
+| **Herramientas nativas** | Usa function calling de OpenAI (verificado en llama-server con Jean Grey) y, si el servidor no lo admite, un protocolo de texto. |
+| **Interruptor RAZONAR** | Apagado por defecto: Jean responde sin su fase de razonamiento, unas 8 veces más rápido en un Codespace con CPU (1,3 s frente a 10,1 s medidos). Enciéndelo para tareas difíciles. |
 | **Skills** | Carpetas con `SKILL.md` (`name` + `description`). Se instalan desde una carpeta, un repo git o la URL de un `SKILL.md`. Ver [`skills/`](skills/). |
 
 Los instaladores para **Windows (.exe)**, **macOS (.dmg)** y **Linux (.AppImage)**, junto con la **versión web en .zip**, los compila GitHub Actions en cada [release](https://github.com/jeancodeeer/JeanCode/releases). La versión de macOS no está firmada: ábrela la primera vez con clic derecho → Abrir.

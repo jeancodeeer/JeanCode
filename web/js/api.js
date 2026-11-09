@@ -91,15 +91,29 @@ export async function probe(url, key) {
  * Chat en streaming. onDelta(texto), onReasoning(texto). Devuelve el texto completo.
  * El razonamiento de Qwen puede llegar como reasoning_content o dentro de <think>…</think>.
  */
-export async function chatStream({ ep, model, messages, signal, onDelta, onReasoning, temperature }) {
-  const body = JSON.stringify({ model, messages, stream: true, temperature: temperature ?? 0.2 });
+export async function chatStream({ ep, model, messages, signal, onDelta, onReasoning, onToolCalls, temperature, think, tools }) {
+  const payload = { model, messages, stream: true, temperature: temperature ?? 0.2 };
+  // Modelos Qwen/Jean: sin la fase de razonamiento responden varias veces más rápido en CPU.
+  if (typeof think === 'boolean') payload.chat_template_kwargs = { enable_thinking: think };
+  // Herramientas nativas (function calling de OpenAI): el servidor interpreta la plantilla del modelo.
+  if (tools?.length) payload.tools = tools;
+  const body = JSON.stringify(payload);
   const b = bridge();
   let full = '';
+  const calls = []; // acumuladas por índice mientras llegan en streaming
   const handleChunk = (json) => {
     const d = json.choices?.[0]?.delta || {};
     if (d.reasoning_content) onReasoning?.(d.reasoning_content);
     if (d.content) { full += d.content; onDelta?.(d.content); }
+    for (const tc of d.tool_calls || []) {
+      const i = tc.index ?? calls.length;
+      calls[i] ||= { id: '', name: '', arguments: '' };
+      if (tc.id) calls[i].id = tc.id;
+      if (tc.function?.name) calls[i].name += tc.function.name;
+      if (tc.function?.arguments) calls[i].arguments += tc.function.arguments;
+    }
   };
+  const finish = () => { if (calls.length) onToolCalls?.(calls.filter(Boolean)); return full; };
 
   if (b?.stream) {
     await new Promise((resolve, reject) => {
@@ -113,7 +127,7 @@ export async function chatStream({ ep, model, messages, signal, onDelta, onReaso
       );
       signal?.addEventListener('abort', () => { b.abort(id); reject(new DOMException('aborted', 'AbortError')); });
     });
-    return full;
+    return finish();
   }
 
   let res;
@@ -140,12 +154,12 @@ export async function chatStream({ ep, model, messages, signal, onDelta, onReaso
       const line = buf.slice(0, nl).trim();
       buf = buf.slice(nl + 1);
       if (!line.startsWith('data:')) continue;
-      const payload = line.slice(5).trim();
-      if (payload === '[DONE]') return full;
-      try { handleChunk(JSON.parse(payload)); } catch { /* línea parcial */ }
+      const data = line.slice(5).trim();
+      if (data === '[DONE]') return finish();
+      try { handleChunk(JSON.parse(data)); } catch { /* línea parcial */ }
     }
   }
-  return full;
+  return finish();
 }
 
 /** Clave aleatoria segura (256 bits, base64url) para usar como JEAN_API_KEY. */
