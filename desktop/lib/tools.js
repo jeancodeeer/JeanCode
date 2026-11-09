@@ -145,4 +145,136 @@ async function systemInfo() {
 
 const osShort = () => `${os.type()} ${os.release()} ${os.arch()}`;
 
-module.exports = { inside, list, read, write, edit, search, run, systemInfo, osShort };
+/* ---------------- deshacer: copia de cada archivo antes de escribirlo ---------------- */
+const snapshots = []; // { root, rel, existed, content }
+async function snapshot(root, rel) {
+  const file = await inside(root, rel);
+  const content = await fs.readFile(file, 'utf8').catch(() => null);
+  snapshots.push({ root, rel, existed: content !== null, content });
+  if (snapshots.length > 200) snapshots.shift();
+}
+async function writeTracked(root, rel, content) { await snapshot(root, rel); return write(root, rel, content); }
+async function editTracked(root, rel, a, b) { await snapshot(root, rel); return edit(root, rel, a, b); }
+async function undo(root) {
+  for (let i = snapshots.length - 1; i >= 0; i--) {
+    if (snapshots[i].root !== root) continue;
+    const s = snapshots.splice(i, 1)[0];
+    const file = await inside(root, s.rel);
+    if (s.existed) await fs.writeFile(file, s.content, 'utf8');
+    else await fs.rm(file, { force: true });
+    return `deshecho: ${s.rel} ${s.existed ? 'restaurado' : 'eliminado (era nuevo)'}`;
+  }
+  return 'no hay cambios que deshacer en esta carpeta';
+}
+
+/** Contenido actual de un archivo (para mostrar el diff antes de aprobar). */
+async function peek(root, rel) {
+  try { return await fs.readFile(await inside(root, rel), 'utf8'); } catch { return null; }
+}
+
+/* ---------------- glob: lista de archivos por patrón (** , *, ?) ---------------- */
+function globToRegex(glob) {
+  let re = '';
+  for (let i = 0; i < glob.length; i++) {
+    const c = glob[i];
+    if (c === '*') {
+      if (glob[i + 1] === '*') { re += '.*'; i++; if (glob[i + 1] === '/') i++; } else re += '[^/]*';
+    } else if (c === '?') re += '[^/]';
+    else re += c.replace(/[.+^${}()|[\]\\]/g, '\\$&');
+  }
+  return new RegExp(`^${re}$`, 'i');
+}
+async function glob(root, pattern = '**/*', limit = 500) {
+  const base = await fs.realpath(root);
+  const re = globToRegex(String(pattern).replace(/\\/g, '/'));
+  const out = [];
+  async function walk(dir) {
+    if (out.length >= limit) return;
+    for (const e of await fs.readdir(dir, { withFileTypes: true }).catch(() => [])) {
+      if (SKIP.has(e.name)) continue;
+      const p = path.join(dir, e.name);
+      if (e.isDirectory()) await walk(p);
+      else {
+        const rel = path.relative(base, p).split(path.sep).join('/');
+        if (re.test(rel)) out.push(rel);
+      }
+      if (out.length >= limit) return;
+    }
+  }
+  await walk(base);
+  return out;
+}
+
+/* ---------------- webfetch: texto de una página (solo http/https) ---------------- */
+const dns = require('node:dns').promises;
+const net = require('node:net');
+
+/** true si la IP es de loopback, privada, enlace local o no enrutable. */
+function privateIp(ip) {
+  if (net.isIPv4(ip)) {
+    const [a, b] = ip.split('.').map(Number);
+    return a === 0 || a === 10 || a === 127 || (a === 169 && b === 254) || (a === 172 && b >= 16 && b <= 31)
+      || (a === 192 && b === 168) || (a === 100 && b >= 64 && b <= 127) || a >= 224;
+  }
+  const v = ip.toLowerCase();
+  if (v.startsWith('::ffff:')) return privateIp(v.slice(7));
+  return v === '::' || v === '::1' || v.startsWith('fc') || v.startsWith('fd') || v.startsWith('fe8') || v.startsWith('fe9')
+    || v.startsWith('fea') || v.startsWith('feb') || v.startsWith('ff');
+}
+
+async function assertPublic(u) {
+  if (!['http:', 'https:'].includes(u.protocol)) throw new Error('solo http/https');
+  const host = u.hostname.replace(/^\[|\]$/g, '');
+  const addrs = net.isIP(host) ? [{ address: host }] : await dns.lookup(host, { all: true });
+  if (!addrs.length || addrs.some((a) => privateIp(a.address))) throw new Error(`destino no permitido (red local o privada): ${u.hostname}`);
+}
+
+async function webfetch(url) {
+  let u;
+  try { u = new URL(url); } catch { throw new Error('URL inválida'); }
+  let res;
+  for (let hop = 0; hop < 5; hop++) {
+    await assertPublic(u);
+    res = await fetch(u, { headers: { 'User-Agent': 'JeanCode' }, redirect: 'manual', signal: AbortSignal.timeout(20000) });
+    const loc = res.status >= 300 && res.status < 400 ? res.headers.get('location') : null;
+    if (!loc) break;
+    u = new URL(loc, u);
+    if (hop === 4) throw new Error('demasiadas redirecciones');
+  }
+  const type = res.headers.get('content-type') || '';
+  let text = await res.text();
+  if (type.includes('html')) {
+    text = text.replace(/<(script|style|noscript)[\s\S]*?<\/\1>/gi, ' ').replace(/<br\s*\/?>|<\/(p|div|h\d|li|tr)>/gi, '\n')
+      .replace(/<[^>]+>/g, ' ').replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>')
+      .replace(/[ \t]+/g, ' ').replace(/\n\s*\n+/g, '\n\n');
+  }
+  return `${res.status} ${u.href}\n\n${text.trim().slice(0, 40000)}`;
+}
+
+/* ---------------- memoria del proyecto y comandos propios ---------------- */
+const MEMORY_FILES = ['AGENTS.md', 'JEANCODE.md', 'CLAUDE.md'];
+async function projectMemory(root) {
+  const parts = [];
+  for (const name of MEMORY_FILES) {
+    const t = await peek(root, name);
+    if (t) parts.push(`--- ${name} ---\n${t.slice(0, 16000)}`);
+  }
+  return parts.join('\n\n');
+}
+async function commands(root) {
+  const dir = await inside(root, '.jeancode/commands').catch(() => null);
+  if (!dir) return [];
+  const out = [];
+  for (const e of await fs.readdir(dir, { withFileTypes: true }).catch(() => [])) {
+    if (!e.isFile() || !e.name.endsWith('.md')) continue;
+    const body = await fs.readFile(path.join(dir, e.name), 'utf8');
+    const desc = (body.match(/^description:\s*(.+)$/m) || [])[1] || body.split('\n').find((l) => l.trim() && !l.startsWith('---')) || '';
+    out.push({ name: e.name.slice(0, -3), description: desc.trim().slice(0, 120), body: body.replace(/^---[\s\S]*?---\s*/, '') });
+  }
+  return out;
+}
+
+module.exports = {
+  inside, list, read, write: writeTracked, edit: editTracked, search, run, systemInfo, osShort,
+  undo, peek, glob, webfetch, projectMemory, commands,
+};

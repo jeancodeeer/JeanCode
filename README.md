@@ -14,7 +14,7 @@
 </div>
 
 ```
-N° 001 — JEANCODE                                                    REF. V0.1
+N° 001 — JEANCODE                                                    REF. V0.2
 A graphical client for the Jean models. Chat, generate whole projects, run an agent.
 No server, no account, no tracking: bring your own Jean-API-Generator.
 ```
@@ -56,12 +56,24 @@ The repository contains **no URLs and no keys**: every user brings their own. In
 |---|---|
 | **Workspace sandbox** | Every file path is resolved inside the folder you pick; `..` and symlinks that escape it are rejected. |
 | **Permission modes** | `ASK EVERYTHING` (default) · `EDIT WITHOUT ASKING` (commands still ask) · `READ ONLY`. |
-| **Tools** | `list_dir` · `read_file` · `search` · `write_file` · `edit_file` · `run_command` · `system_info` · `spawn_subagent` · `load_skill` |
+| **Tools** | `list_dir` · `glob` · `read_file` · `search` · `webfetch` · `write_file` · `edit_file` · `run_command` · `system_info` · `todo_write` · `spawn_subagent` · `load_skill` |
 | **Subagents** | Several `spawn_subagent` calls in one turn run in parallel, each with its own context; their reports come back to the main agent. Read-only unless the agent asks for write access. |
 | **Skills** | Folders with a `SKILL.md` (`name` + `description` frontmatter). Install from a local folder, a git repository or a raw `SKILL.md` URL. The agent sees the list and loads the one it needs. See [`skills/`](skills/). |
+| **BUILD / PLAN agents** | Like OpenCode: `BUILD` implements, `PLAN` only investigates and proposes. Press `Tab` to switch. |
+| **Project memory** | `AGENTS.md`, `JEANCODE.md` or `CLAUDE.md` in the workspace are loaded into every session. `/init` writes one for you. |
+| **Diff before approval** | Every file change shows a line diff (`+` / `−`) in the confirmation dialog. `/undo` restores the last file the agent touched. |
+| **Task list** | For multi-step work the agent keeps a visible checklist (`todo_write`), like Claude Code. |
+| **`@` mentions** | Type `@` to pick a file from the workspace; its content is attached to your message. |
+| **Project commands** | Every `.jeancode/commands/<name>.md` becomes `/<name>` (`$ARGUMENTS` = what you type after it). |
 | **Model-agnostic tools** | Tool calls use a plain-text protocol, so they work even when the server has no native function calling. |
 
-Installers are built by GitHub Actions for **Windows (.exe)**, **macOS (.dmg, Intel + Apple Silicon)** and **Linux (.AppImage)** and attached to each [release](https://github.com/jeancodeeer/JeanCode/releases). The macOS build is not signed: open it the first time with right-click → Open.
+Installers are built by GitHub Actions for **Windows (.exe)**, **macOS (.dmg, Intel + Apple Silicon)** and **Linux (.AppImage)**, together with the **web version as a .zip** for self-hosting, and attached to each [release](https://github.com/jeancodeeer/JeanCode/releases). The macOS build is not signed: open it the first time with right-click → Open.
+
+<br>
+
+### Commands and shortcuts (web + desktop)
+
+`/new` · `/clear` · `/compact` (summarise to free context) · `/model <id>` · `/export` (Markdown) · `/help` · `/zip` (CODE) · `/init` · `/plan` · `/build` · `/undo` · `/review` (AGENT). A context meter in the top bar estimates how much of the 131072-token window is used. `Esc` stops a reply, `Ctrl+K` starts a new conversation, `Ctrl+1/2/3` switches mode.
 
 <br>
 

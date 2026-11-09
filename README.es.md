@@ -13,7 +13,7 @@
 </div>
 
 ```
-N° 001 — JEANCODE                                                    REF. V0.1
+N° 001 — JEANCODE                                                    REF. V0.2
 Cliente gráfico de los modelos Jean. Chatea, genera proyectos completos, usa un agente.
 Sin servidor, sin cuenta, sin rastreo: trae tu propia Jean-API-Generator.
 ```
@@ -48,11 +48,23 @@ El repositorio **no contiene URLs ni claves**: cada usuario trae las suyas. En e
 |---|---|
 | **Carpeta aislada** | Toda ruta se resuelve dentro de la carpeta elegida; se rechazan `..` y enlaces que salgan de ella. |
 | **Permisos** | `PREGUNTAR TODO` (por defecto) · `EDITAR SIN PREGUNTAR` (los comandos siguen preguntando) · `SOLO LECTURA`. |
-| **Herramientas** | `list_dir` · `read_file` · `search` · `write_file` · `edit_file` · `run_command` · `system_info` · `spawn_subagent` · `load_skill` |
+| **Herramientas** | `list_dir` · `glob` · `read_file` · `search` · `webfetch` · `write_file` · `edit_file` · `run_command` · `system_info` · `todo_write` · `spawn_subagent` · `load_skill` |
 | **Subagentes** | Varios `spawn_subagent` en un mismo turno corren en paralelo, cada uno con su contexto, y devuelven un informe. Solo lectura salvo que el agente pida escritura. |
+| **Agentes BUILD / PLAN** | Como OpenCode: `BUILD` implementa y `PLAN` solo investiga y propone. `Tab` alterna. |
+| **Memoria del proyecto** | `AGENTS.md`, `JEANCODE.md` o `CLAUDE.md` de la carpeta se cargan en cada sesión. `/init` lo crea. |
+| **Diff antes de aprobar** | Cada cambio de archivo muestra el diff de líneas en la confirmación. `/undo` restaura el último archivo tocado. |
+| **Lista de tareas** | En trabajos de varios pasos el agente mantiene una lista visible (`todo_write`), como Claude Code. |
+| **Menciones `@`** | Escribe `@` para elegir un archivo de la carpeta; su contenido se adjunta al mensaje. |
+| **Comandos del proyecto** | Cada `.jeancode/commands/<nombre>.md` se vuelve `/<nombre>` (`$ARGUMENTS` = lo que escribas después). |
 | **Skills** | Carpetas con `SKILL.md` (`name` + `description`). Se instalan desde una carpeta, un repo git o la URL de un `SKILL.md`. Ver [`skills/`](skills/). |
 
-Los instaladores para **Windows (.exe)**, **macOS (.dmg)** y **Linux (.AppImage)** los compila GitHub Actions en cada [release](https://github.com/jeancodeeer/JeanCode/releases). La versión de macOS no está firmada: ábrela la primera vez con clic derecho → Abrir.
+Los instaladores para **Windows (.exe)**, **macOS (.dmg)** y **Linux (.AppImage)**, junto con la **versión web en .zip**, los compila GitHub Actions en cada [release](https://github.com/jeancodeeer/JeanCode/releases). La versión de macOS no está firmada: ábrela la primera vez con clic derecho → Abrir.
+
+<br>
+
+### Comandos y atajos (web + escritorio)
+
+`/new` · `/clear` · `/compact` (resume para liberar contexto) · `/model <id>` · `/export` (Markdown) · `/help` · `/zip` (CODE) · `/init` · `/plan` · `/build` · `/undo` · `/review` (AGENT). Un medidor en la barra superior estima cuánto de la ventana de 131072 tokens se usa. `Esc` detiene la respuesta, `Ctrl+K` abre una conversación nueva y `Ctrl+1/2/3` cambia de modo.
 
 <br>
 

@@ -80,6 +80,7 @@
     <div class="rail-foot">
       <button class="link" data-panel="download">DESCARGAR APP</button>
       <button class="link" data-panel="info">INFO DEL REPO</button>
+      <button class="link" data-panel="help">COMANDOS Y ATAJOS</button>
       <button class="link" data-panel="settings">AJUSTES</button>
     </div>
   </aside>
@@ -89,6 +90,9 @@
       <button class="btn ghost icon" id="rail-toggle" aria-label="Menú">☰</button>
       <div class="crumb"><span id="crumb-mode">CHAT</span><span class="sep">/</span><span id="crumb-title">NUEVA CONVERSACIÓN</span></div>
       <div class="top-actions">
+        <div class="ctx" id="ctx-meter" title="Contexto usado de 131072 tokens (estimado)">
+          <span class="ctx-bar"><i id="ctx-fill"></i></span><span class="mono" id="ctx-text">0%</span>
+        </div>
         <label class="select">
           <span class="label">MODELO</span>
           <select id="model-select" aria-label="Modelo"></select>
@@ -152,6 +156,10 @@
     <!-- AGENT (solo escritorio) -->
     <section class="view" id="view-agent" hidden>
       <div class="agent-bar">
+        <div class="seg" id="agent-toggle" role="radiogroup" aria-label="Agente">
+          <button data-agent="build" class="active" role="radio" aria-checked="true" title="Implementa cambios (Tab alterna)">BUILD</button>
+          <button data-agent="plan" role="radio" aria-checked="false" title="Solo analiza y propone (Tab alterna)">PLAN</button>
+        </div>
         <button class="btn" id="pick-workspace">CARPETA DE TRABAJO</button>
         <span class="mono muted" id="workspace-path">sin carpeta</span>
         <label class="select">
@@ -163,7 +171,12 @@
           </select>
         </label>
         <button class="btn ghost" data-panel="skills">SKILLS</button>
+        <button class="btn ghost" id="undo-btn" title="Deshace el último archivo que cambió el agente">↶ DESHACER</button>
       </div>
+      <aside class="todos" id="todos" hidden>
+        <span class="label">TAREAS</span>
+        <ul id="todo-list"></ul>
+      </aside>
       <div class="stream" id="agent-stream">
         <div class="empty">
           <h2 class="display sm">AGENTE LOCAL</h2>
@@ -174,7 +187,11 @@
 
     <!-- COMPOSER -->
     <form class="composer" id="composer">
-      <textarea id="input" rows="1" placeholder="Escribe a Jean…  (Enter envía · Shift+Enter nueva línea)" aria-label="Mensaje"></textarea>
+      <ul class="popup" id="popup" role="listbox" hidden></ul>
+      <div class="composer-box">
+        <textarea id="input" rows="1" placeholder="Escribe a Jean…   / comandos" aria-label="Mensaje" aria-autocomplete="list" aria-controls="popup"></textarea>
+        <div class="hint mono" id="hint">ENTER envía · SHIFT+ENTER línea · / comandos · ESC para</div>
+      </div>
       <div class="composer-actions">
         <button type="button" class="btn ghost" id="stop-btn" hidden>■ PARAR</button>
         <button type="submit" class="btn primary" id="send-btn">ENVIAR →</button>
@@ -189,8 +206,10 @@
   <p>La app de escritorio funciona como un agente de código: inspecciona tu carpeta, edita archivos, ejecuta comandos con tu permiso, lanza subagentes e instala skills. Usa la misma API que configuraste aquí.</p>
   <div class="os-grid">
     <a class="os" data-os="win" href="#" target="_blank" rel="noopener"><span class="os-name">WINDOWS</span><span class="os-file mono">.exe</span></a>
-    <a class="os" data-os="mac" href="#" target="_blank" rel="noopener"><span class="os-name">MACOS</span><span class="os-file mono">.dmg</span></a>
+    <a class="os" data-os="mac" href="#" target="_blank" rel="noopener"><span class="os-name">MACOS</span><span class="os-file mono">Apple Silicon · .dmg</span></a>
+    <a class="os" data-os="macx" href="#" target="_blank" rel="noopener"><span class="os-name">MACOS</span><span class="os-file mono">Intel · .dmg</span></a>
     <a class="os" data-os="linux" href="#" target="_blank" rel="noopener"><span class="os-name">LINUX</span><span class="os-file mono">.AppImage</span></a>
+    <a class="os" data-os="web" href="#" target="_blank" rel="noopener"><span class="os-name">WEB</span><span class="os-file mono">.zip para tu propio hosting</span></a>
   </div>
   <p class="fine" id="release-note">Buscando la última versión…</p>
 </dialog>
@@ -286,11 +305,34 @@
 
 <dialog class="panel" id="panel-confirm">
   <div class="panel-head"><h2 class="display sm" id="confirm-title">CONFIRMAR</h2></div>
-  <pre class="confirm-body" id="confirm-body"></pre>
+  <p class="mono fine" id="confirm-path"></p>
+  <div class="confirm-body" id="confirm-body"></div>
   <div class="row gap end">
     <button class="btn ghost" id="confirm-no">RECHAZAR</button>
     <button class="btn primary" id="confirm-yes">PERMITIR</button>
   </div>
+</dialog>
+
+<dialog class="panel wide" id="panel-help">
+  <div class="panel-head"><h2 class="display sm">COMANDOS Y ATAJOS</h2><button class="btn ghost icon" data-close>✕</button></div>
+  <table class="help-table">
+    <thead><tr><th>COMANDO</th><th>QUÉ HACE</th></tr></thead>
+    <tbody id="help-commands"></tbody>
+  </table>
+  <h3 class="label">ATAJOS</h3>
+  <table class="help-table">
+    <tbody>
+      <tr><td><kbd>Enter</kbd> / <kbd>Shift</kbd>+<kbd>Enter</kbd></td><td>enviar / nueva línea</td></tr>
+      <tr><td><kbd>/</kbd></td><td>menú de comandos (flechas + Enter o Tab)</td></tr>
+      <tr><td><kbd>@</kbd></td><td>menciona un archivo de la carpeta de trabajo (AGENT)</td></tr>
+      <tr><td><kbd>Tab</kbd></td><td>alterna BUILD / PLAN en AGENT</td></tr>
+      <tr><td><kbd>Esc</kbd></td><td>detiene la respuesta en curso</td></tr>
+      <tr><td><kbd>Ctrl</kbd>+<kbd>K</kbd></td><td>nueva conversación</td></tr>
+      <tr><td><kbd>Ctrl</kbd>+<kbd>1</kbd> <kbd>2</kbd> <kbd>3</kbd></td><td>CHAT / CODE / AGENT</td></tr>
+    </tbody>
+  </table>
+  <h3 class="label">COMANDOS DEL PROYECTO</h3>
+  <p class="fine">En el escritorio, cada archivo <code>.jeancode/commands/nombre.md</code> de tu carpeta de trabajo se vuelve <code>/nombre</code>. Usa <code>$ARGUMENTS</code> para lo que escribas después del comando. La memoria del proyecto se lee de <code>AGENTS.md</code>, <code>JEANCODE.md</code> o <code>CLAUDE.md</code>.</p>
 </dialog>
 
 <div class="toast" id="toast" role="status" aria-live="polite"></div>

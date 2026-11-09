@@ -1,6 +1,7 @@
 name: desktop
 
-# Compila los instaladores al publicar una etiqueta vX.Y.Z y los sube a la Release.
+# Al publicar una etiqueta vX.Y.Z: compila los instaladores de escritorio, los sube a la
+# Release y agrega la versión web (la misma de GitHub Pages) como .zip.
 on:
   push:
     tags: ['v*']
@@ -41,3 +42,18 @@ jobs:
             desktop/dist/*.dmg
             desktop/dist/*.AppImage
           if-no-files-found: ignore
+
+  web:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: zip web
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          cd web && zip -r "../JeanCode-${VERSION}-web.zip" . -x '*.DS_Store'
+      - name: upload to release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload "$GITHUB_REF_NAME" JeanCode-*-web.zip --clobber

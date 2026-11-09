@@ -26,7 +26,12 @@ contextBridge.exposeInMainWorld('jeancodeDesktop', {
     write: call('fs:write'),
     edit: call('fs:edit'),
     search: call('fs:search'),
+    undo: call('fs:undo'),
+    peek: call('fs:peek'),
+    glob: call('fs:glob'),
   },
+  web: { fetch: call('web:fetch') },
+  project: { memory: call('project:memory'), commands: call('project:commands') },
   shell: { run: call('shell:run') },
   system: { info: call('system:info'), os: call('system:os') },
   skills: {

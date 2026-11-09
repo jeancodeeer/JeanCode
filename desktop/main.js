@@ -112,6 +112,12 @@ ipcMain.handle('fs:write', (_e, root, rel, content) => tools.write(root, rel, co
 ipcMain.handle('fs:edit', (_e, root, rel, a, b) => tools.edit(root, rel, a, b));
 ipcMain.handle('fs:search', (_e, root, pat, rel) => tools.search(root, pat, rel));
 ipcMain.handle('shell:run', (_e, root, cmd, timeout) => tools.run(root, cmd, timeout));
+ipcMain.handle('fs:undo', (_e, root) => tools.undo(root));
+ipcMain.handle('fs:peek', (_e, root, rel) => tools.peek(root, rel));
+ipcMain.handle('fs:glob', (_e, root, pat, limit) => tools.glob(root, pat, limit));
+ipcMain.handle('web:fetch', (_e, url) => tools.webfetch(url));
+ipcMain.handle('project:memory', (_e, root) => tools.projectMemory(root));
+ipcMain.handle('project:commands', (_e, root) => tools.commands(root));
 ipcMain.handle('system:info', () => tools.systemInfo());
 ipcMain.handle('system:os', () => tools.osShort());
 
