@@ -114,18 +114,44 @@ async function refreshModels() {
   const sel = $('#model-select');
   const status = $('#api-status');
   state.models = [];
-  const results = await Promise.allSettled(eps.map(async (ep) => (await listModels(ep)).map((id) => ({ id, ep }))));
+  let results = await Promise.allSettled(eps.map(async (ep) => (await listModels(ep)).map((id) => ({ id, ep }))));
+  // En modo Fénix, Jean-API-Generator apaga Grey/Marvel y sirve Fénix solo en :8890.
+  // Si algo dejó de responder, se buscan puertos hermanos nuevos (una vez por recarga).
+  if (results.some((r) => r.status === 'rejected') && !refreshModels.searched) {
+    refreshModels.searched = true;
+    const before = getEndpoints().length;
+    for (const ep of eps) await discoverSiblings(ep.url, ep.key);
+    if (getEndpoints().length > before) return refreshModels();
+  }
   results.forEach((r) => { if (r.status === 'fulfilled') state.models.push(...r.value); });
   const failed = results.filter((r) => r.status === 'rejected');
   status.className = 'status ' + (state.models.length ? 'ok' : 'bad');
   status.title = failed.length ? failed.map((f) => f.reason.message).join('\n') : 'API conectada';
   sel.innerHTML = state.models.length
-    ? state.models.map((m, i) => `<option value="${i}">${esc(m.id.toUpperCase())}</option>`).join('')
+    ? state.models.map((m, i) => `<option value="${i}">${esc(modelLabel(m.id))}</option>`).join('')
     : '<option>SIN CONEXIÓN</option>';
   const idx = state.models.findIndex((m) => m.id === state.model);
   sel.value = String(idx >= 0 ? idx : 0);
   if (failed.length && !state.models.length) toast(failed[0].reason.message);
+  renderFenix();
 }
+/** Etiqueta del selector: nombre + carácter del modelo (ayuda a elegir en CPU). */
+function modelLabel(id) {
+  const name = id.toUpperCase();
+  if (/fenix/i.test(id)) return `${name} · LENTO, EL MÁS CAPAZ`;
+  if (/marvel/i.test(id)) return `${name} · AGENTE`;
+  if (/grey/i.test(id)) return `${name} · RÁPIDO`;
+  return name;
+}
+
+function renderFenix() {
+  const box = $('#fenix-status');
+  if (!box) return;
+  const f = state.models.find((m) => /fenix/i.test(m.id));
+  box.textContent = f ? `Conectado: ${f.id} en ${f.ep.url}` : 'No encontrado. Actívalo en tu Codespace y pulsa Buscar Fénix.';
+  box.classList.toggle('ok', !!f);
+}
+
 function selectModel(id) {
   const i = state.models.findIndex((m) => m.id.toLowerCase() === id.toLowerCase());
   if (i < 0) return false;
@@ -136,7 +162,25 @@ function selectModel(id) {
 }
 $('#model-select').addEventListener('change', (e) => {
   const m = state.models[+e.target.value];
-  if (m) { state.model = m.id; store.set('model', m.id); }
+  if (m) {
+    state.model = m.id; store.set('model', m.id);
+    if (/fenix/i.test(m.id) && !store.get('fenixWarned', false)) {
+      store.set('fenixWarned', true);
+      toast('FÉNIX EN CPU RESPONDE LENTO: ÚSALO PARA TAREAS DIFÍCILES');
+    }
+  }
+});
+$('#fenix-find')?.addEventListener('click', async () => {
+  const btn = $('#fenix-find');
+  btn.disabled = true;
+  btn.textContent = 'Buscando…';
+  for (const ep of getEndpoints()) await discoverSiblings(ep.url, ep.key);
+  refreshModels.searched = false;
+  await refreshModels();
+  btn.disabled = false;
+  btn.textContent = 'Buscar Fénix';
+  renderSettings();
+  toast(state.models.some((m) => /fenix/i.test(m.id)) ? 'FÉNIX CONECTADO' : 'FÉNIX NO RESPONDE EN :8890');
 });
 const currentModel = () => state.models[+$('#model-select').value] || state.models[0] || null;
 
@@ -744,6 +788,7 @@ function renderSettings() {
     return `<li><span class="ep-url">${esc(ep.url)}</span><span class="ep-meta">${esc(n || 'sin respuesta')}</span><button class="btn ghost sm" data-ep-del="${ep.id}">QUITAR</button></li>`;
   }).join('') || '<li>Sin endpoints.</li>';
   $('#sys-chat').value = store.get('sysChat', DEFAULT_SYS);
+  renderFenix();
 }
 $('#endpoint-list').addEventListener('click', async (e) => {
   const b = e.target.closest('[data-ep-del]');

@@ -313,6 +313,12 @@
     <input id="ep-key" type="password" required placeholder="API key" spellcheck="false">
     <button class="btn" type="submit">AGREGAR</button>
   </form>
+  <h3 class="label">FÉNIX</h3>
+  <div class="fenix-box">
+    <p class="fine">Fénix es el modelo más capaz (27B). En un Codespace de 16 GB corre <strong>solo</strong>, en el puerto 8890: activa el modo Fénix en tu Jean-API-Generator con <code>.\jean-api.ps1 fenix-mode</code> (vuelve con <code>standard-mode</code>) y pulsa Buscar Fénix. Responde más lento que Grey y Marvel.</p>
+    <p class="mono fenix-status" id="fenix-status">—</p>
+    <button class="btn" type="button" id="fenix-find">Buscar Fénix</button>
+  </div>
   <h3 class="label">INSTRUCCIONES DEL SISTEMA (CHAT)</h3>
   <textarea id="sys-chat" rows="3" spellcheck="false"></textarea>
   <div class="row gap">
