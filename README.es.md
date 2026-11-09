@@ -4,8 +4,8 @@
 
 <br>
 
-[![ABRIR](https://img.shields.io/badge/ABRIR-JEANCODE_WEB-000000?style=for-the-badge&labelColor=ffffff)](https://jeancodeeer.github.io/jeancode/)
-[![DESCARGAR](https://img.shields.io/badge/DESCARGAR-WIN_%7C_MAC_%7C_LINUX-ffffff?style=for-the-badge&labelColor=000000)](https://github.com/jeancodeeer/jeancode/releases/latest)
+[![ABRIR](https://img.shields.io/badge/ABRIR-JEANCODE_WEB-000000?style=for-the-badge&labelColor=ffffff)](https://jeancodeeer.github.io/JeanCode/)
+[![DESCARGAR](https://img.shields.io/badge/DESCARGAR-WIN_%7C_MAC_%7C_LINUX-ffffff?style=for-the-badge&labelColor=000000)](https://github.com/jeancodeeer/JeanCode/releases/latest)
 [![API](https://img.shields.io/badge/TRAE_TU-JEAN--API--GENERATOR-ffffff?style=for-the-badge&labelColor=000000)](https://github.com/jeancodeeer/Jean-API-Generator)
 
 [`ENGLISH`](README.md) · **`ESPAÑOL`**
@@ -35,7 +35,7 @@ Sin servidor, sin cuenta, sin rastreo: trae tu propia Jean-API-Generator.
 ## 02 — CÓMO SE CONECTA
 
 1. Crea tu API con **[Jean-API-Generator](https://github.com/jeancodeeer/Jean-API-Generator)** (Codespace gratuito).
-2. Abre **[JeanCode](https://jeancodeeer.github.io/jeancode/)**. Si este equipo no tiene una API registrada, aparece un splash que pide tu **URL base** (terminada en `/v1`) y tu **API key**. También puede generarte una clave aleatoria segura para usarla como `JEAN_API_KEY`.
+2. Abre **[JeanCode](https://jeancodeeer.github.io/JeanCode/)**. Si este equipo no tiene una API registrada, aparece un splash que pide tu **URL base** (terminada en `/v1`) y tu **API key**. También puede generarte una clave aleatoria segura para usarla como `JEAN_API_KEY`.
 3. Agrega los dos puertos (Grey `:8888`, Marvel `:8889`) en **AJUSTES** para ver todos los modelos.
 
 El repositorio **no contiene URLs ni claves**: cada usuario trae las suyas. En el navegador quedan en el almacenamiento local; en el escritorio la clave se cifra con el llavero del sistema (`safeStorage`).
@@ -52,7 +52,7 @@ El repositorio **no contiene URLs ni claves**: cada usuario trae las suyas. En e
 | **Subagentes** | Varios `spawn_subagent` en un mismo turno corren en paralelo, cada uno con su contexto, y devuelven un informe. Solo lectura salvo que el agente pida escritura. |
 | **Skills** | Carpetas con `SKILL.md` (`name` + `description`). Se instalan desde una carpeta, un repo git o la URL de un `SKILL.md`. Ver [`skills/`](skills/). |
 
-Los instaladores para **Windows (.exe)**, **macOS (.dmg)** y **Linux (.AppImage)** los compila GitHub Actions en cada [release](https://github.com/jeancodeeer/jeancode/releases). La versión de macOS no está firmada: ábrela la primera vez con clic derecho → Abrir.
+Los instaladores para **Windows (.exe)**, **macOS (.dmg)** y **Linux (.AppImage)** los compila GitHub Actions en cada [release](https://github.com/jeancodeeer/JeanCode/releases). La versión de macOS no está firmada: ábrela la primera vez con clic derecho → Abrir.
 
 <br>
 

@@ -1,7 +1,7 @@
 // Configuración sin URLs privadas ni claves. El dueño del repo se deduce de la URL de
 // GitHub Pages (<owner>.github.io/<repo>/); los valores fijos son solo un respaldo.
 const FALLBACK_OWNER = 'jeancodeeer';
-const FALLBACK_REPO = 'jeancode';
+const FALLBACK_REPO = 'JeanCode';
 
 function detectRepo() {
   const host = location.hostname;

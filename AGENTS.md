@@ -1,4 +1,4 @@
-# AGENTS.md — guía para IAs sobre `jeancode`
+# AGENTS.md — guía para IAs sobre `JeanCode`
 
 Cliente gráfico de los modelos Jean. La API vive en otro repo (`Jean-API-Generator`); este solo es el cliente.
 

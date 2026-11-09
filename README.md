@@ -4,8 +4,8 @@
 
 <br>
 
-[![OPEN](https://img.shields.io/badge/OPEN-JEANCODE_WEB-000000?style=for-the-badge&labelColor=ffffff)](https://jeancodeeer.github.io/jeancode/)
-[![DOWNLOAD](https://img.shields.io/badge/DOWNLOAD-WIN_%7C_MAC_%7C_LINUX-ffffff?style=for-the-badge&labelColor=000000)](https://github.com/jeancodeeer/jeancode/releases/latest)
+[![OPEN](https://img.shields.io/badge/OPEN-JEANCODE_WEB-000000?style=for-the-badge&labelColor=ffffff)](https://jeancodeeer.github.io/JeanCode/)
+[![DOWNLOAD](https://img.shields.io/badge/DOWNLOAD-WIN_%7C_MAC_%7C_LINUX-ffffff?style=for-the-badge&labelColor=000000)](https://github.com/jeancodeeer/JeanCode/releases/latest)
 [![API](https://img.shields.io/badge/BRING_YOUR-JEAN--API--GENERATOR-ffffff?style=for-the-badge&labelColor=000000)](https://github.com/jeancodeeer/Jean-API-Generator)
 [![MODELS](https://img.shields.io/badge/MODELS-HUGGING_FACE-ffffff?style=for-the-badge&labelColor=000000)](https://huggingface.co/JeanCoder/jean-models)
 
@@ -43,7 +43,7 @@ No server, no account, no tracking: bring your own Jean-API-Generator.
 ```
 
 1. Create your API from **[Jean-API-Generator](https://github.com/jeancodeeer/Jean-API-Generator)** (free GitHub Codespace).
-2. Open **[JeanCode](https://jeancodeeer.github.io/jeancode/)**. If this device has no API registered, a splash screen asks for your **base URL** (ending in `/v1`) and your **API key**. It can also generate a strong random key for you to use as `JEAN_API_KEY`.
+2. Open **[JeanCode](https://jeancodeeer.github.io/JeanCode/)**. If this device has no API registered, a splash screen asks for your **base URL** (ending in `/v1`) and your **API key**. It can also generate a strong random key for you to use as `JEAN_API_KEY`.
 3. Add both ports (Grey `:8888`, Marvel `:8889`) under **SETTINGS** to see every model in the selector.
 
 The repository contains **no URLs and no keys**: every user brings their own. In the browser they stay in local storage; in the desktop app the key is encrypted with the OS keychain (`safeStorage`).
@@ -61,14 +61,14 @@ The repository contains **no URLs and no keys**: every user brings their own. In
 | **Skills** | Folders with a `SKILL.md` (`name` + `description` frontmatter). Install from a local folder, a git repository or a raw `SKILL.md` URL. The agent sees the list and loads the one it needs. See [`skills/`](skills/). |
 | **Model-agnostic tools** | Tool calls use a plain-text protocol, so they work even when the server has no native function calling. |
 
-Installers are built by GitHub Actions for **Windows (.exe)**, **macOS (.dmg, Intel + Apple Silicon)** and **Linux (.AppImage)** and attached to each [release](https://github.com/jeancodeeer/jeancode/releases). The macOS build is not signed: open it the first time with right-click → Open.
+Installers are built by GitHub Actions for **Windows (.exe)**, **macOS (.dmg, Intel + Apple Silicon)** and **Linux (.AppImage)** and attached to each [release](https://github.com/jeancodeeer/JeanCode/releases). The macOS build is not signed: open it the first time with right-click → Open.
 
 <br>
 
 ## 04 — REPOSITORY
 
 ```
-jeancode/
+JeanCode/
 ├── web/                     # the web client (GitHub Pages) — plain HTML/CSS/ES modules, no build step
 │   ├── index.html
 │   ├── css/jeancode.css     # neubrutalism · black & white · IBM Plex
