@@ -1,0 +1,81 @@
+{
+  "name": "jeancode-desktop",
+  "productName": "JeanCode",
+  "version": "0.1.0",
+  "description": "JeanCode — agente de programación de escritorio para los modelos Jean (trae tu propia jean-api).",
+  "main": "main.js",
+  "author": "JeanCoder",
+  "license": "UNLICENSED",
+  "private": true,
+  "scripts": {
+    "copy-web": "node scripts/copy-web.mjs",
+    "start": "npm run copy-web && electron .",
+    "check": "node --check main.js && node --check preload.js && node --check lib/tools.js && node --check lib/skills.js",
+    "dist": "npm run copy-web && electron-builder"
+  },
+  "devDependencies": {
+    "electron": "33.2.1",
+    "electron-builder": "25.1.8"
+  },
+  "build": {
+    "appId": "io.github.jeancoder.jeancode",
+    "productName": "JeanCode",
+    "artifactName": "JeanCode-${version}-${os}-${arch}.${ext}",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "lib/**",
+      "app/**",
+      "package.json"
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
+    },
+    "mac": {
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "x64",
+            "arm64"
+          ]
+        }
+      ],
+      "category": "public.app-category.developer-tools"
+    },
+    "linux": {
+      "target": [
+        {
+          "target": "AppImage",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "category": "Development"
+    },
+    "publish": [
+      {
+        "provider": "github",
+        "releaseType": "release"
+      }
+    ]
+  },
+  "allowScripts": {
+    "electron@33.2.1": true
+  }
+}

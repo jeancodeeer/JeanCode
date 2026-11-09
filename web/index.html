@@ -1,0 +1,300 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>JeanCode</title>
+<meta name="description" content="JeanCode — cliente gráfico para los modelos Jean: chat, generador de código descargable y agente de escritorio. Conecta tu propia API jean-api.">
+<meta property="og:title" content="JeanCode">
+<meta property="og:description" content="Chat, código y agente de escritorio para los modelos Jean. Trae tu propia API.">
+<meta name="theme-color" content="#000000">
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;700&family=IBM+Plex+Sans+Condensed:wght@500;700&family=IBM+Plex+Sans:wght@400;500;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/jeancode.css">
+</head>
+<body>
+
+<!-- SPLASH: se muestra si este navegador no tiene una API registrada -->
+<div id="splash" class="splash" hidden>
+  <div class="splash-card">
+    <div class="tag-row"><span>N&deg; 001 — JEANCODER</span><span>REF. JEANCODE / CLIENT</span></div>
+    <h1 class="display">JEANCODE</h1>
+    <p class="lede">Este equipo todavía no tiene una API Jean registrada. Pega la URL y la clave de <strong>tu</strong> <code>jean-api</code> para entrar.</p>
+
+    <form id="splash-form" class="stack" autocomplete="off">
+      <label class="field">
+        <span class="label">URL BASE DE TU API</span>
+        <input id="splash-url" type="url" required placeholder="https://tu-codespace-8888.app.github.dev/v1" spellcheck="false">
+      </label>
+      <label class="field">
+        <span class="label">API KEY</span>
+        <div class="input-row">
+          <input id="splash-key" type="password" required placeholder="tu JEAN_API_KEY" spellcheck="false">
+          <button type="button" class="btn ghost" id="splash-show" aria-label="Mostrar u ocultar la clave">VER</button>
+        </div>
+      </label>
+      <label class="check"><input id="splash-remember" type="checkbox" checked> Recordar en este equipo</label>
+      <div id="splash-msg" class="msg" role="status" aria-live="polite"></div>
+      <button class="btn primary big" type="submit" id="splash-go">PROBAR Y ENTRAR →</button>
+    </form>
+
+    <div class="splash-grid">
+      <div class="box">
+        <span class="label">¿NO TIENES API?</span>
+        <p>Créala gratis en tu propio Codespace con el repo de APIs:</p>
+        <a class="btn" id="api-repo-link" href="https://github.com/jeancodeeer/Jean-API-Generator" target="_blank" rel="noopener">JEAN-API ↗</a>
+      </div>
+      <div class="box">
+        <span class="label">GENERAR UNA CLAVE</span>
+        <p>Úsala como secreto <code>JEAN_API_KEY</code> al crear tu Codespace.</p>
+        <div class="input-row">
+          <input id="gen-key" type="text" readonly placeholder="pulsa GENERAR" spellcheck="false">
+          <button type="button" class="btn" id="gen-btn">GENERAR</button>
+        </div>
+      </div>
+    </div>
+    <p class="fine">La URL y la clave se guardan solo en este navegador. JeanCode no tiene servidor propio ni ve tus datos.</p>
+  </div>
+</div>
+
+<!-- APP -->
+<div id="app" class="app" hidden>
+  <aside class="rail" id="rail">
+    <div class="brand">
+      <span class="brand-mark">JC</span>
+      <span class="brand-name">JEANCODE</span>
+    </div>
+
+    <nav class="modes" role="tablist" aria-label="Modo">
+      <button class="mode active" data-mode="chat" role="tab" aria-selected="true">CHAT</button>
+      <button class="mode" data-mode="code" role="tab" aria-selected="false">CODE</button>
+      <button class="mode desktop-only" data-mode="agent" role="tab" aria-selected="false" hidden>AGENT</button>
+    </nav>
+
+    <button class="btn primary full" id="new-thread">+ NUEVO</button>
+
+    <div class="threads" id="threads" aria-label="Historial"></div>
+
+    <div class="rail-foot">
+      <button class="link" data-panel="download">DESCARGAR APP</button>
+      <button class="link" data-panel="info">INFO DEL REPO</button>
+      <button class="link" data-panel="settings">AJUSTES</button>
+    </div>
+  </aside>
+
+  <main class="main">
+    <header class="topbar">
+      <button class="btn ghost icon" id="rail-toggle" aria-label="Menú">☰</button>
+      <div class="crumb"><span id="crumb-mode">CHAT</span><span class="sep">/</span><span id="crumb-title">NUEVA CONVERSACIÓN</span></div>
+      <div class="top-actions">
+        <label class="select">
+          <span class="label">MODELO</span>
+          <select id="model-select" aria-label="Modelo"></select>
+        </label>
+        <span class="status" id="api-status" title="Estado de la API">●</span>
+      </div>
+    </header>
+
+    <!-- CHAT -->
+    <section class="view" id="view-chat">
+      <div class="stream" id="chat-stream">
+        <div class="empty" id="chat-empty">
+          <h2 class="display sm">¿QUÉ CONSTRUIMOS?</h2>
+          <div class="chips">
+            <button class="chip" data-prompt="Explícame qué es un mutex con un ejemplo en Python.">EXPLICA UN MUTEX</button>
+            <button class="chip" data-prompt="Revisa este código y dime qué bugs ves:\n\n">REVISA MI CÓDIGO</button>
+            <button class="chip" data-prompt="Escribe una expresión regular que valide emails y explícala.">REGEX DE EMAIL</button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- CODE (estilo Abacus: genera archivos, sin terminal) -->
+    <section class="view" id="view-code" hidden>
+      <div class="code-layout">
+        <div class="code-chat">
+          <div class="stream" id="code-stream">
+            <div class="empty">
+              <h2 class="display sm">DESCRIBE TU PROYECTO</h2>
+              <p class="muted">Jean genera los archivos; los ves, los editas y los descargas en .zip. Nada se ejecuta en tu PC.</p>
+              <div class="chips">
+                <button class="chip" data-prompt="Una landing page en HTML/CSS para una cafetería, en un solo index.html con estilos en styles.css.">LANDING PAGE</button>
+                <button class="chip" data-prompt="Una API REST en Node.js con Express para una lista de tareas, con package.json y README.">API EXPRESS</button>
+                <button class="chip" data-prompt="Un script de Python que renombre fotos por fecha EXIF, con requirements.txt.">SCRIPT PYTHON</button>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="code-files">
+          <div class="files-head">
+            <input id="project-name" class="project-name" value="mi-proyecto" aria-label="Nombre del proyecto" spellcheck="false">
+            <button class="btn" id="dl-zip">DESCARGAR .ZIP</button>
+          </div>
+          <div class="files-body">
+            <ul class="tree" id="file-tree" aria-label="Archivos"></ul>
+            <div class="viewer">
+              <div class="viewer-tabs">
+                <button class="vt active" data-vt="source">CÓDIGO</button>
+                <button class="vt" data-vt="preview">VISTA PREVIA</button>
+                <span class="viewer-path" id="viewer-path">—</span>
+                <button class="btn ghost sm" id="dl-file">↓ ARCHIVO</button>
+              </div>
+              <textarea id="viewer-src" class="viewer-src" spellcheck="false" aria-label="Contenido del archivo"></textarea>
+              <iframe id="viewer-preview" class="viewer-preview" sandbox="allow-scripts" title="Vista previa" hidden></iframe>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- AGENT (solo escritorio) -->
+    <section class="view" id="view-agent" hidden>
+      <div class="agent-bar">
+        <button class="btn" id="pick-workspace">CARPETA DE TRABAJO</button>
+        <span class="mono muted" id="workspace-path">sin carpeta</span>
+        <label class="select">
+          <span class="label">PERMISOS</span>
+          <select id="perm-mode">
+            <option value="ask">PREGUNTAR TODO</option>
+            <option value="auto-edit">EDITAR SIN PREGUNTAR</option>
+            <option value="plan">SOLO LECTURA</option>
+          </select>
+        </label>
+        <button class="btn ghost" data-panel="skills">SKILLS</button>
+      </div>
+      <div class="stream" id="agent-stream">
+        <div class="empty">
+          <h2 class="display sm">AGENTE LOCAL</h2>
+          <p class="muted">Lee y edita archivos de tu carpeta de trabajo, ejecuta comandos con tu permiso y lanza subagentes.</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- COMPOSER -->
+    <form class="composer" id="composer">
+      <textarea id="input" rows="1" placeholder="Escribe a Jean…  (Enter envía · Shift+Enter nueva línea)" aria-label="Mensaje"></textarea>
+      <div class="composer-actions">
+        <button type="button" class="btn ghost" id="stop-btn" hidden>■ PARAR</button>
+        <button type="submit" class="btn primary" id="send-btn">ENVIAR →</button>
+      </div>
+    </form>
+  </main>
+</div>
+
+<!-- PANELES -->
+<dialog class="panel" id="panel-download">
+  <div class="panel-head"><h2 class="display sm">DESCARGAR JEANCODE</h2><button class="btn ghost icon" data-close>✕</button></div>
+  <p>La app de escritorio funciona como un agente de código: inspecciona tu carpeta, edita archivos, ejecuta comandos con tu permiso, lanza subagentes e instala skills. Usa la misma API que configuraste aquí.</p>
+  <div class="os-grid">
+    <a class="os" data-os="win" href="#" target="_blank" rel="noopener"><span class="os-name">WINDOWS</span><span class="os-file mono">.exe</span></a>
+    <a class="os" data-os="mac" href="#" target="_blank" rel="noopener"><span class="os-name">MACOS</span><span class="os-file mono">.dmg</span></a>
+    <a class="os" data-os="linux" href="#" target="_blank" rel="noopener"><span class="os-name">LINUX</span><span class="os-file mono">.AppImage</span></a>
+  </div>
+  <p class="fine" id="release-note">Buscando la última versión…</p>
+</dialog>
+
+<dialog class="panel wide" id="panel-info">
+  <div class="panel-head"><h2 class="display sm">INFO DEL REPO</h2><button class="btn ghost icon" data-close>✕</button></div>
+  <div class="info-tabs" role="tablist">
+    <button class="it active" data-it="about">QUÉ ES</button>
+    <button class="it" data-it="models">MODELOS</button>
+    <button class="it" data-it="api">TU API</button>
+    <button class="it" data-it="desktop">ESCRITORIO</button>
+    <button class="it" data-it="privacy">PRIVACIDAD</button>
+  </div>
+  <div class="info-body">
+    <section data-info="about">
+      <h3>01 — QUÉ ES</h3>
+      <p>JeanCode es el cliente gráfico de los modelos <strong>Jean v0.7</strong> (Grey, Marvel y Fénix). Tiene dos modos en la web y un tercero en el escritorio:</p>
+      <ul>
+        <li><strong>CHAT</strong> — conversación normal con respuestas en streaming y código resaltado.</li>
+        <li><strong>CODE</strong> — describes un proyecto y Jean genera todos sus archivos. Los ves en un árbol, los editas, ves la vista previa de páginas web y descargas todo en .zip. No toca tu PC.</li>
+        <li><strong>AGENT</strong> (escritorio) — un agente estilo Claude Code que trabaja dentro de una carpeta de tu PC.</li>
+      </ul>
+      <p><a href="https://github.com/jeancodeeer/jeancode" target="_blank" rel="noopener" id="repo-link">Código fuente en GitHub ↗</a></p>
+    </section>
+    <section data-info="models" hidden>
+      <h3>02 — MODELOS</h3>
+      <table>
+        <thead><tr><th>MODELO</th><th>ROL</th><th>TAMAÑO</th></tr></thead>
+        <tbody>
+          <tr><td><strong>JEAN GREY</strong></td><td>modelo de código principal</td><td>2.52 GiB</td></tr>
+          <tr><td><strong>JEAN MARVEL</strong></td><td>agente / segunda opinión</td><td>4.36 GiB</td></tr>
+          <tr><td><strong>JEAN FÉNIX</strong></td><td>modelo grande (Qwen3.5-27B + LoRA), necesita ≥ 32 GB</td><td>15.41 GiB</td></tr>
+        </tbody>
+      </table>
+      <p>Pesos públicos en <a href="https://huggingface.co/JeanCoder/jean-models" target="_blank" rel="noopener">huggingface.co/JeanCoder/jean-models ↗</a></p>
+    </section>
+    <section data-info="api" hidden>
+      <h3>03 — TU API</h3>
+      <ol>
+        <li>Crea un Codespace desde <a href="https://github.com/jeancodeeer/Jean-API-Generator" target="_blank" rel="noopener">jean-api ↗</a>.</li>
+        <li>Agrega los secretos <code>JEAN_API_KEY</code> (puedes generarla en el splash) y <code>HF_TOKEN</code>.</li>
+        <li>Inicia el Codespace y deja públicos los puertos 8888 (Grey) y 8889 (Marvel).</li>
+        <li>Pega en JeanCode la URL del puerto terminada en <code>/v1</code> y tu clave. Puedes añadir los dos puertos en AJUSTES.</li>
+      </ol>
+      <p>Si el Codespace está dormido, la API no responde hasta que lo despiertes; al despertar tarda unos minutos en cargar los modelos.</p>
+    </section>
+    <section data-info="desktop" hidden>
+      <h3>04 — ESCRITORIO</h3>
+      <ul>
+        <li>Lee, busca y edita archivos dentro de la carpeta de trabajo que elijas (nunca fuera).</li>
+        <li>Ejecuta comandos de terminal; cada comando pide tu confirmación salvo que cambies el modo de permisos.</li>
+        <li>Lanza subagentes para dividir tareas y combina sus resultados.</li>
+        <li>Instala skills: carpetas con un <code>SKILL.md</code> que le enseñan procedimientos nuevos.</li>
+      </ul>
+    </section>
+    <section data-info="privacy" hidden>
+      <h3>05 — PRIVACIDAD</h3>
+      <p>JeanCode es una página estática: no tiene servidor ni base de datos. Tus mensajes van directo de tu navegador a tu propia API. La URL, la clave y el historial se guardan en el almacenamiento de este navegador; puedes borrarlos en AJUSTES.</p>
+    </section>
+  </div>
+</dialog>
+
+<dialog class="panel wide" id="panel-settings">
+  <div class="panel-head"><h2 class="display sm">AJUSTES</h2><button class="btn ghost icon" data-close>✕</button></div>
+  <h3 class="label">ENDPOINTS</h3>
+  <p class="fine">Grey y Marvel corren en puertos distintos: agrega uno por cada URL. Los modelos de todos aparecen en el selector.</p>
+  <ul class="endpoints" id="endpoint-list"></ul>
+  <form id="endpoint-form" class="input-row wrap">
+    <input id="ep-url" type="url" required placeholder="https://…-8889.app.github.dev/v1" spellcheck="false">
+    <input id="ep-key" type="password" required placeholder="API key" spellcheck="false">
+    <button class="btn" type="submit">AGREGAR</button>
+  </form>
+  <h3 class="label">INSTRUCCIONES DEL SISTEMA (CHAT)</h3>
+  <textarea id="sys-chat" rows="3" spellcheck="false"></textarea>
+  <div class="row gap">
+    <button class="btn" id="export-btn">EXPORTAR HISTORIAL</button>
+    <button class="btn danger" id="wipe-btn">BORRAR TODO DE ESTE EQUIPO</button>
+  </div>
+</dialog>
+
+<dialog class="panel wide" id="panel-skills">
+  <div class="panel-head"><h2 class="display sm">SKILLS</h2><button class="btn ghost icon" data-close>✕</button></div>
+  <p class="fine">Una skill es una carpeta con un <code>SKILL.md</code> (con <code>name</code> y <code>description</code> en el encabezado). El agente ve la lista y carga la que necesite.</p>
+  <ul class="endpoints" id="skill-list"></ul>
+  <div class="row gap wrap">
+    <button class="btn" id="skill-folder">INSTALAR DESDE CARPETA</button>
+    <form id="skill-url-form" class="input-row grow">
+      <input id="skill-url" type="url" placeholder="URL de un repo git o de un SKILL.md" spellcheck="false">
+      <button class="btn" type="submit">INSTALAR</button>
+    </form>
+  </div>
+</dialog>
+
+<dialog class="panel" id="panel-confirm">
+  <div class="panel-head"><h2 class="display sm" id="confirm-title">CONFIRMAR</h2></div>
+  <pre class="confirm-body" id="confirm-body"></pre>
+  <div class="row gap end">
+    <button class="btn ghost" id="confirm-no">RECHAZAR</button>
+    <button class="btn primary" id="confirm-yes">PERMITIR</button>
+  </div>
+</dialog>
+
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+<script type="module" src="js/app.js"></script>
+</body>
+</html>
