@@ -59,12 +59,12 @@
       <p class="note" id="splash-provider-note"></p>
       <label class="field">
         <span class="label">URL base</span>
-        <input id="splash-url" type="url" required placeholder="https://tu-codespace-8888.app.github.dev/v1" spellcheck="false" inputmode="url">
+        <input id="splash-url" type="text" autocomplete="off" placeholder="https://tu-codespace-8899.app.github.dev/v1" spellcheck="false" inputmode="url">
       </label>
       <label class="field">
         <span class="label">Clave</span>
         <span class="input-row">
-          <input id="splash-key" type="password" required placeholder="tu JEAN_API_KEY" spellcheck="false">
+          <input id="splash-key" type="password" placeholder="tu JEAN_API_KEY" spellcheck="false" autocomplete="off">
           <button type="button" class="icon-btn" id="splash-show" aria-label="Mostrar u ocultar la clave"><svg class="i"><use href="#i-eye"/></svg></button>
         </span>
       </label>
@@ -131,8 +131,12 @@
       <div class="crumb"><span id="crumb-mode">CHAT</span><span class="sep">/</span><span id="crumb-title">NUEVA CONVERSACIÓN</span></div>
       <label class="model">
         <span class="status" id="api-status" title="Estado de la API" aria-hidden="true"></span>
-        <select id="model-select" aria-label="Modelo"></select>
+        <select id="model-select" aria-label="Modelo y enrutado"></select>
       </label>
+      <details class="menu route-menu" id="route-menu">
+        <summary aria-label="Ruta: API, modelo, estado y enrutado"><span id="route-badge">AUTO</span></summary>
+        <div class="menu-list route-card" id="route-card"></div>
+      </details>
     </header>
 
     <!-- CHAT -->
@@ -319,8 +323,8 @@
     <ul class="rows" id="endpoint-list"></ul>
     <form id="endpoint-form" class="add-form">
       <select id="ep-provider" aria-label="Proveedor"></select>
-      <input id="ep-url" type="url" required placeholder="URL base" spellcheck="false">
-      <input id="ep-key" type="password" required placeholder="Clave" spellcheck="false">
+      <input id="ep-url" type="text" inputmode="url" autocomplete="off" placeholder="URL base" spellcheck="false">
+      <input id="ep-key" type="password" placeholder="Clave (no hace falta en modelos locales)" spellcheck="false" autocomplete="off">
       <button class="btn" type="submit">Agregar</button>
     </form>
     <p class="msg" id="ep-msg" role="status" aria-live="polite"></p>
@@ -329,8 +333,11 @@
 
   <section data-pane="models" hidden>
     <h3>Elección automática y respaldo</h3>
-    <p class="note">En el selector, <strong>AUTO</strong> elige por modo: chat y code empiezan por el modelo rápido; el agente, por Marvel. Si el modelo elegido no responde, JeanCode puede probar otro antes de que llegue la respuesta. Nunca cambia por errores de clave o de la petición.</p>
+    <p class="note">En el selector eliges, para cada modo (chat, code, agente): <strong>AUTO</strong> (JeanCode elige y explica por qué en la etiqueta junto al selector), un <strong>modelo</strong> concreto, o una <strong>conexión fija</strong> (el mejor modelo de esa conexión, p. ej. solo los locales). AUTO descarta los modelos caídos, los que no aceptan herramientas en el agente y los que no tienen contexto suficiente. Si el modelo no responde, JeanCode puede probar otro antes de que llegue la respuesta; nunca por errores de clave o de la petición.</p>
     <label class="field"><span class="label">Si un modelo no responde</span><select id="fallback-select"></select></label>
+    <div id="chain-box" class="chain" hidden></div>
+    <label class="check"><input type="checkbox" id="allow-paid"> Permitir modelos de pago en AUTO y en el respaldo automático</label>
+    <p class="note">Sin esta casilla, JeanCode nunca pasa solo a un modelo que cobra: solo si tú lo eliges o lo pones en tu cadena.</p>
     <h3>Fénix</h3>
     <p class="note">El modelo más capaz (27B). En un Codespace de 16 GB corre solo, en el puerto 8890: actívalo con <code>.\jean-api.ps1 fenix-mode</code> y búscalo aquí. Responde más lento.</p>
     <div class="row gap"><button class="btn" type="button" id="fenix-find">Buscar Fénix</button><span class="mono fenix-status" id="fenix-status">—</span></div>
@@ -376,6 +383,14 @@
     <pre class="route-log" id="route-log"></pre>
     <div class="row gap"><button class="btn" type="button" id="log-copy">Copiar registro</button></div>
   </section>
+</dialog>
+
+<dialog class="panel wide" id="panel-models">
+  <div class="panel-head"><h2>Modelos · <span id="mp-title"></span></h2><button class="icon-btn" data-close aria-label="Cerrar"><svg class="i"><use href="#i-close"/></svg></button></div>
+  <p class="note">Esta conexión tiene muchos modelos. Fija los que quieras usar: solo esos aparecen en el selector y solo esos puede elegir AUTO o el respaldo. Los datos de contexto, herramientas y precio los informa el proveedor.</p>
+  <input id="mp-search" type="search" placeholder="buscar, p. ej. coder, claude, :free" spellcheck="false" autocomplete="off">
+  <p class="fine" id="mp-count"></p>
+  <ul class="hf-results" id="mp-list"></ul>
 </dialog>
 
 <dialog class="panel wide" id="panel-skills">

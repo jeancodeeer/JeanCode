@@ -10,7 +10,8 @@ import { agentSystem, runAgent, stripToolBlocks, STYLES } from './agent.js';
 import { BUILTIN, PROMPTS, matchCommands, parseCommand, expandCustom, estimateTokens, CONTEXT_LIMIT } from './commands.js';
 import { lineDiff, diffStats } from './diff.js';
 import { PROVIDERS, providerById, providerOf, LOCAL_CANDIDATES, OLLAMA_SUGGESTED } from './providers.js';
-import { AUTO, modelKey, chat as routedChat, probeEndpoint, healthOf, validateEndpoint, pickAuto, visibleModels, resolveSaved, formatLog, routeLog, FALLBACK_POLICIES, fallbackPolicy } from './router.js';
+import { AUTO, modelKey, chat as routedChat, probeEndpoint, healthOf, validateEndpoint, pickAuto, visibleModels, resolveSaved, formatLog, routeLog, FALLBACK_POLICIES, fallbackPolicy, decide, routeFor, setRouteFor, checkEndpoint, exportConfig, KIND_LABEL, formatTrace, fallbackChain, allowPaidAuto, where, latencyOf } from './router.js';
+import { capsOf, describeCaps, billingOf } from './capabilities.js';
 import { SLOTS, controlUrlFrom, hfSearch, hfFiles, control, gb } from './hf.js';
 
 const $ = (s, el = document) => el.querySelector(s);
@@ -110,7 +111,7 @@ function wireProvider(select, urlInput, keyInput, note) {
   const apply = () => {
     const p = providerById(select.value);
     urlInput.value = p.url;
-    urlInput.placeholder = p.id === 'jean' ? 'https://tu-codespace-8888.app.github.dev/v1' : (p.url || 'https://tu-servidor/v1');
+    urlInput.placeholder = p.id === 'jean' ? 'https://tu-codespace-8899.app.github.dev/v1' : (p.url || 'https://tu-servidor/v1');
     keyInput.placeholder = p.keyHint;
     const parts = [];
     if (p.note) parts.push(esc(p.note));
@@ -183,8 +184,13 @@ async function refreshModels() {
     if (getEndpoints().length > before) return refreshModels();
   }
   results.forEach((r) => { if (r.status === 'fulfilled') state.models.push(...r.value); });
-  // todos los modelos sirven de respaldo; en el selector, cada modelo de un Codespace aparece una vez
-  state.visible = visibleModels(state.models);
+  // Catálogos grandes (OpenRouter: cientos de modelos): solo cuentan los que el usuario fijó.
+  // Así AUTO y el respaldo nunca eligen al azar entre cientos de modelos (ni de pago).
+  state.bigCatalog = new Set(eps.filter((ep) => state.models.filter((m) => m.ep.id === ep.id).length > BIG_CATALOG).map((ep) => ep.id));
+  const allowed = (m) => !state.bigCatalog.has(m.ep.id) || pinnedOf(m.ep).includes(m.id);
+  // todos los permitidos sirven de respaldo; en el selector, cada modelo de un Codespace aparece una vez
+  state.routable = state.models.filter(allowed);
+  state.visible = visibleModels(state.routable);
   const failed = results.filter((r) => r.status === 'rejected');
   const unavailable = eps.flatMap((ep) => (healthOf(ep)?.unavailable || []).map((u) => `${u.slot}: ${u.reason}`));
   status.className = 'status ' + (state.visible.length ? (failed.length ? 'warn' : 'ok') : 'bad');
@@ -199,25 +205,144 @@ async function refreshModels() {
       if (!groups.has(name)) groups.set(name, []);
       groups.get(name).push(`<option value="${esc(modelKey(m))}">${esc(modelLabel(m.id))}</option>`);
     }
+    for (const id of state.bigCatalog) {
+      const ep = eps.find((e) => e.id === id);
+      const name = providerOf(ep).name;
+      const total = state.models.filter((m) => m.ep.id === id).length;
+      if (!groups.has(name)) groups.set(name, []);
+      groups.get(name).push(`<option value="pick:${esc(id)}">+ ELEGIR DE ${total} MODELOS…</option>`);
+    }
     const auto = `<option value="${AUTO}">AUTO</option>`;
+    // conexión fija: el mejor modelo, pero solo de esa conexión (p. ej. "solo local")
+    const withModels = eps.filter((ep) => state.visible.some((m) => m.ep.id === ep.id));
+    const pinned = withModels.length > 1
+      ? `<optgroup label="CONEXIÓN FIJA">${withModels.map((ep) => `<option value="ep:${esc(ep.id)}">${esc(`${providerOf(ep).name} · auto`.toUpperCase())}</option>`).join('')}</optgroup>`
+      : '';
     sel.innerHTML = auto + (groups.size === 1
       ? [...groups.values()][0].join('')
-      : [...groups].map(([name, opts]) => `<optgroup label="${esc(name.toUpperCase())}">${opts.join('')}</optgroup>`).join(''));
+      : [...groups].map(([name, opts]) => `<optgroup label="${esc(name.toUpperCase())}">${opts.join('')}</optgroup>`).join('')) + pinned;
   }
-  const saved = resolveSaved(state.model, state.visible);
-  if (saved) state.model = modelKey(saved); // migra lo guardado por versiones anteriores (solo el nombre)
-  sel.value = state.model === AUTO ? AUTO : saved ? modelKey(saved) : (state.visible[0] ? modelKey(state.visible[0]) : '');
-  updateAutoLabel();
+  applyRoute();
   if (failed.length && !state.visible.length) toast(failed[0].reason.message);
   renderFenix();
 }
 
-/** La opción AUTO dice qué modelo elegiría ahora para el modo actual. */
-function updateAutoLabel() {
+/** Lo que necesita la petición que se va a enviar (para descartar modelos que no la aguantan). */
+function needFor() {
+  const t = thread();
+  const msgs = (state.mode === 'agent' ? t?.agentMessages : t?.messages) || [];
+  return { tokens: estimateTokens(msgs) + 1500, tools: state.mode === 'agent' };
+}
+
+/** Decisión del enrutador para el modo actual (con motivos). */
+function currentDecision() {
+  return decide(routeFor(state.mode), { models: state.visible || [], mode: state.mode, endpoints: getEndpoints(), need: needFor() });
+}
+
+/** Refleja en el selector el enrutado guardado para este modo y actualiza AUTO y la tarjeta de ruta. */
+function applyRoute() {
+  const sel = $('#model-select');
+  const r = routeFor(state.mode);
+  const visible = state.visible || [];
+  let value = AUTO;
+  if (r.routing === 'endpoint' && $(`#model-select option[value="ep:${CSS.escape(r.target)}"]`)) value = `ep:${r.target}`;
+  else if (r.routing === 'model') {
+    const m = resolveSaved(r.target, visible);
+    if (m) { value = modelKey(m); if (r.target !== value) setRouteFor(state.mode, { routing: 'model', target: value }); }
+  }
+  if ([...sel.options].some((o) => o.value === value)) sel.value = value;
   const opt = $(`#model-select option[value="${AUTO}"]`);
-  if (!opt) return;
-  const pick = pickAuto(state.visible || [], state.mode, getEndpoints());
-  opt.textContent = pick ? `AUTO · ${pick.id.toUpperCase()}` : 'AUTO';
+  if (opt) {
+    const pick = decide({ routing: AUTO }, { models: visible, mode: state.mode, endpoints: getEndpoints(), need: needFor() }).model;
+    opt.textContent = pick ? `AUTO · ${pick.id.toUpperCase()}` : 'AUTO';
+  }
+  renderRouteCard();
+}
+
+/** Descartes agrupados por motivo: "3 modelos · es de pago y …" en vez de una lista interminable. */
+function groupSkips(skipped) {
+  const by = new Map();
+  for (const s of skipped) { if (!by.has(s.why)) by.set(s.why, []); by.get(s.why).push(s.model); }
+  return [...by].slice(0, 4).map(([why, ms]) => `${ms.length === 1 ? esc(ms[0]) : `${ms.length} modelos (${esc(ms.slice(0, 2).join(', '))}${ms.length > 2 ? '…' : ''})`}: ${esc(why)}`).join('<br>');
+}
+
+/* ------------------------------------------- catálogos grandes: modelos fijados por conexión */
+const BIG_CATALOG = 30;
+const pinnedOf = (ep) => (Array.isArray(store.get(`pinned:${ep.id}`, [])) ? store.get(`pinned:${ep.id}`, []) : []);
+
+/** Buscador de modelos de un catálogo grande, con lo que el registro sabe de cada uno. */
+function openModelPicker(epId) {
+  const ep = getEndpoints().find((e) => e.id === epId);
+  if (!ep) return;
+  const d = $('#panel-models');
+  $('#mp-title').textContent = providerOf(ep).name.toUpperCase();
+  $('#mp-search').value = '';
+  d.dataset.ep = epId;
+  renderPicker();
+  d.showModal();
+  $('#mp-search').focus();
+}
+function renderPicker() {
+  const d = $('#panel-models');
+  const ep = getEndpoints().find((e) => e.id === d.dataset.ep);
+  if (!ep) return;
+  const q = $('#mp-search').value.trim().toLowerCase();
+  const pinned = pinnedOf(ep);
+  const all = state.models.filter((m) => m.ep.id === ep.id && capsOf(ep, m.id).chat !== false);
+  const list = all.filter((m) => !q || m.id.toLowerCase().includes(q)).slice(0, 80);
+  $('#mp-count').textContent = `${all.length} modelos · ${pinned.length} fijados · mostrando ${list.length}`;
+  $('#mp-list').innerHTML = list.map((m) => {
+    const c = capsOf(ep, m.id);
+    const dc = describeCaps(c);
+    const tags = [c.context ? dc.context.replace(' tokens', '') : '', c.tools ? 'herramientas' : '', c.vision ? 'visión' : '',
+      { free: 'gratis', paid: 'de pago', local: 'local', own: 'propio' }[c.billing] || ''].filter(Boolean).join(' · ');
+    const on = pinned.includes(m.id);
+    return `<li><button type="button" class="${on ? 'active' : ''}" data-pin="${esc(m.id)}"><span>${esc(m.id)}</span><span class="hf-meta">${esc(tags)}${dc.price ? ' · ' + esc(dc.price.split(' por ')[0]) : ''}</span></button></li>`;
+  }).join('') || '<li class="tree-empty">Ningún modelo coincide.</li>';
+}
+$('#mp-search').addEventListener('input', renderPicker);
+$('#mp-list').addEventListener('click', async (e) => {
+  const b = e.target.closest('[data-pin]');
+  if (!b) return;
+  const d = $('#panel-models');
+  const ep = getEndpoints().find((x) => x.id === d.dataset.ep);
+  const pinned = pinnedOf(ep);
+  const id = b.dataset.pin;
+  const next = pinned.includes(id) ? pinned.filter((x) => x !== id) : [...pinned, id];
+  store.set(`pinned:${ep.id}`, next);
+  renderPicker();
+  await refreshModels();
+  if (next.includes(id)) { setRouteFor(state.mode, { routing: 'model', target: `${ep.id}|${id}` }); applyRoute(); toast(`MODELO FIJADO: ${id.toUpperCase()}`); }
+});
+
+/** Tarjeta de ruta: API · MODELO · ESTADO · ENRUTADO, y por qué. */
+function renderRouteCard() {
+  const box = $('#route-card');
+  if (!box) return;
+  const d = currentDecision();
+  const m = d.model;
+  const badge = $('#route-badge');
+  if (badge) badge.textContent = { 'automático': 'AUTO', 'conexión fija': 'CONEXIÓN', 'modelo elegido': 'FIJO' }[d.routing] || 'AUTO';
+  if (!m) {
+    box.innerHTML = `<p class="note">${esc(d.reasons.join(' · ') || 'Sin conexión. Agrega una API en Ajustes.')}</p>`;
+    return;
+  }
+  const h = healthOf(m.ep);
+  const caps = describeCaps(capsOf(m.ep, m.id));
+  const lat = latencyOf(m);
+  const tr = state.lastTrace;
+  const row = (k, v) => `<dt>${k}</dt><dd>${v}</dd>`;
+  box.innerHTML = `<dl class="route-dl">${[
+    row('API', `${esc(providerOf(m.ep).name)} <span class="mono">${esc(where(m.ep))}</span>`),
+    row('MODELO', `<span class="mono">${esc(m.id)}</span>`),
+    row('ESTADO', h ? (h.ok ? `conectada${h.ms != null ? ` · ${h.ms} ms` : ''}${lat != null ? ` · primer token ~${lat} ms` : ''}` : esc(KIND_LABEL[h.kind] || 'error')) : 'sin comprobar'),
+    row('ENRUTADO', `${esc(d.routing)} · ${esc(d.reasons.join(' · '))}`),
+    row('PUEDE', esc(caps.can.join(', ') || 'chat')),
+    row('CONTEXTO', esc(caps.context)),
+    row('COSTE', esc(caps.billing) + (caps.price ? `<br><span class="fine">${esc(caps.price)}</span>` : '')),
+    d.skipped.length ? row('DESCARTES', groupSkips(d.skipped)) : '',
+    row('RESPALDO', esc(FALLBACK_POLICIES[fallbackPolicy()])),
+  ].join('')}</dl>${tr ? `<details class="trace"><summary>ÚLTIMA PETICIÓN</summary><pre>${esc(formatTrace(tr))}</pre></details>` : ''}`;
 }
 
 /** Etiqueta del selector: nombre + carácter del modelo (ayuda a elegir en CPU). */
@@ -239,19 +364,22 @@ function renderFenix() {
 
 function selectModel(id) {
   const want = String(id).toLowerCase();
-  if (want === AUTO) { $('#model-select').value = AUTO; state.model = AUTO; store.set('model', AUTO); updateAutoLabel(); return true; }
+  if (want === AUTO) { setRouteFor(state.mode, { routing: AUTO }); applyRoute(); return true; }
   const m = (state.visible || []).find((x) => x.id.toLowerCase() === want);
   if (!m) return false;
-  $('#model-select').value = modelKey(m);
-  state.model = modelKey(m);
-  store.set('model', state.model);
+  setRouteFor(state.mode, { routing: 'model', target: modelKey(m) });
+  applyRoute();
   return true;
 }
 $('#model-select').addEventListener('change', (e) => {
-  if (e.target.value === AUTO) { state.model = AUTO; store.set('model', AUTO); updateAutoLabel(); return; }
-  const m = (state.visible || []).find((x) => modelKey(x) === e.target.value);
+  const v = e.target.value;
+  if (v === AUTO) { setRouteFor(state.mode, { routing: AUTO }); applyRoute(); return; }
+  if (v.startsWith('ep:')) { setRouteFor(state.mode, { routing: 'endpoint', target: v.slice(3) }); applyRoute(); return; }
+  if (v.startsWith('pick:')) { applyRoute(); openModelPicker(v.slice(5)); return; }
+  const m = (state.visible || []).find((x) => modelKey(x) === v);
   if (m) {
-    state.model = modelKey(m); store.set('model', state.model);
+    setRouteFor(state.mode, { routing: 'model', target: modelKey(m) });
+    renderRouteCard();
     if (/fenix/i.test(m.id) && !store.get('fenixWarned', false)) {
       store.set('fenixWarned', true);
       toast('FÉNIX EN CPU RESPONDE LENTO: ÚSALO PARA TAREAS DIFÍCILES');
@@ -270,22 +398,47 @@ $('#fenix-find')?.addEventListener('click', async () => {
   renderSettings();
   toast(state.models.some((m) => /fenix/i.test(m.id)) ? 'FÉNIX CONECTADO' : 'FÉNIX NO RESPONDE EN :8890');
 });
-const currentModel = () => {
-  const v = $('#model-select').value;
-  const visible = state.visible || [];
-  if (v === AUTO) return pickAuto(visible, state.mode, getEndpoints());
-  return visible.find((m) => modelKey(m) === v) || visible[0] || null;
-};
+const currentModel = () => currentDecision().model;
 
-/** Contexto del enrutador para cada envío: catálogo completo (respaldo) y aviso cuando cambia de backend. */
+/** Contexto del enrutador para cada envío: catálogo completo (respaldo), decisión y aviso al cambiar de backend. */
 function routeCtx(onSwitch) {
   return {
-    models: state.models, mode: state.mode, endpoints: getEndpoints(),
+    models: state.routable || state.models, mode: state.mode, endpoints: getEndpoints(), decision: state.decision, need: needFor(),
     onRoute: ({ from, to, error }) => {
-      toast(`${from.id.toUpperCase()} NO RESPONDE → ${to.id.toUpperCase()}`);
+      toast(`${from.id.toUpperCase()} ${(KIND_LABEL[error.kind] || 'NO RESPONDE').toUpperCase()} → ${to.id.toUpperCase()}`);
       onSwitch?.(to, from, error);
     },
+    onTrace: (tr) => { state.lastTrace = tr; renderRouteCard(); },
   };
+}
+
+/** Error humano: qué pasó y qué hacer. El detalle técnico queda en la traza. */
+const KIND_HINT = {
+  auth: 'Revisa la clave en Ajustes → Conexiones.',
+  forbidden: 'La clave no tiene permiso para este modelo.',
+  model: 'Elige otro modelo o pulsa PROBAR en la conexión.',
+  rate: 'Espera un poco o configura un respaldo en Ajustes → Modelos.',
+  timeout: 'El servidor tardó demasiado. Si es un modelo en CPU con mucho contexto, prueba /compact.',
+  network: 'Comprueba que el servidor esté encendido y la URL sea correcta.',
+  down: 'Suele ser temporal. Un respaldo en Ajustes → Modelos lo evita.',
+  format: 'La URL no es de una API OpenAI-compatible: revisa que sea la base (…/v1).',
+};
+function showError(err) {
+  const kind = err.kind && KIND_LABEL[err.kind] ? KIND_LABEL[err.kind].toUpperCase() + ' · ' : '';
+  const row = addMessage('error', `${kind}${err.message || String(err)}${KIND_HINT[err.kind] ? `\n${KIND_HINT[err.kind]}` : ''}`);
+  if (err.trace) attachTrace(row, err.trace);
+  return row;
+}
+
+/** "Ruta" de una respuesta: REQUEST → ROUTER → PROVIDER → MODEL → RESPONSE, sin secretos. */
+function attachTrace(row, tr) {
+  if (!row || !tr || $('.trace', row)) return;
+  const last = tr.attempts[tr.attempts.length - 1];
+  const d = document.createElement('details');
+  d.className = 'trace';
+  d.innerHTML = `<summary>RUTA · ${esc(last?.provider || '')} · ${esc(last?.model || '')}${last?.ms != null ? ` · ${last.ms} ms` : ''}${tr.attempts.length > 1 ? ` · ${tr.attempts.length - 1} respaldo` : ''}</summary><pre></pre>`;
+  $('pre', d).textContent = formatTrace(tr);
+  row.appendChild(d);
 }
 
 /* ---------------------------------------------------------------- hilos */
@@ -315,7 +468,7 @@ $('#new-thread').addEventListener('click', () => { state.current = null; openThr
 function setMode(mode) {
   if (mode === 'agent' && !desktop) return;
   state.mode = mode;
-  updateAutoLabel();
+  applyRoute();
   $$('.mode').forEach((b) => {
     const on = b.dataset.mode === mode;
     b.classList.toggle('active', on);
@@ -578,8 +731,10 @@ $('#composer').addEventListener('submit', async (e) => {
 });
 
 async function send(text) {
-  const m = currentModel();
-  if (!m) { toast('SIN API CONECTADA — REVISA AJUSTES'); return; }
+  const decision = currentDecision();
+  const m = decision.model;
+  if (!m) { toast(decision.reasons[0] ? decision.reasons[0].toUpperCase() : 'SIN API CONECTADA — REVISA AJUSTES'); return; }
+  state.decision = decision;
   if (state.mode === 'agent' && !state.workspace) { toast('ELIGE UNA CARPETA DE TRABAJO'); return; }
 
   const t = thread() || newThread();
@@ -607,7 +762,7 @@ async function send(text) {
     if (state.mode === 'agent') await sendAgent(t, m, text, turn);
     else await sendChat(t, m);
   } catch (err) {
-    if (err.name !== 'AbortError') addMessage('error', err.message || String(err));
+    if (err.name !== 'AbortError') showError(err);
     else addMessage('system', 'Detenido.');
   } finally {
     state.abort = null;
@@ -702,6 +857,7 @@ async function sendChat(t, m) {
   let usage = null;
   const base = { ...t.files };
   let filesRaf = null;
+  let traceRow = null;
   const paint = () => {
     updateMessage(row, text, reasoning, true);
     if (state.mode === 'code' && !filesRaf) {
@@ -709,17 +865,19 @@ async function sendChat(t, m) {
     }
   };
   try {
-    await routedChat(m, {
+    const r = await routedChat(m, {
       signal: state.abort.signal, think: state.think,
       messages: [{ role: 'system', content: sys }, ...history],
       onDelta: (d) => { text += d; paint(); },
       onReasoning: (d) => { reasoning += d; paint(); },
       onUsage: (u) => { usage = u; },
     }, routeCtx((to) => { $('.who', row).textContent = `JEAN · ${to.id.toUpperCase()}`; }));
+    traceRow = r.trace;
   } finally {
     if (filesRaf) cancelAnimationFrame(filesRaf);
     updateMessage(row, text, reasoning, false);
     if (!text && !reasoning) row.remove(); // falló antes de responder: solo queda el mensaje de error
+    else if (traceRow) attachTrace(row, traceRow);
     if (usage) { setUsage(row, usage); addUsage(t, usage); }
     if (text) t.messages.push({ role: 'assistant', content: text, reasoning, usage: usage || undefined });
     if (state.mode === 'code') applyFiles(t, base, text, true);
@@ -924,6 +1082,7 @@ async function sendAgent(t, m, text, turn) {
       if (ev.type === 'assistant-delta' && row) updateMessage(row, ev.text, ev.reasoning, true);
       if (ev.type === 'assistant-end' && row) {
         updateMessage(row, ev.text, ev.reasoning, false);
+        if (state.lastTrace) attachTrace(row, state.lastTrace);
         if (ev.nested) $('.who', row).textContent = 'SUBAGENTE';
         if (!stripToolBlocks(ev.text) && !ev.reasoning) row.remove();
       }
@@ -1078,7 +1237,16 @@ function initHf() {
   if (!ep) $('#hf-control-note').textContent = 'Primero conecta tu Jean-API-Generator (splash o AJUSTES): el control usa su misma clave.';
   if (ep && $('#hf-control').value) refreshSlots();
 }
-$('#hf-token').addEventListener('change', (e) => store.set('hfToken', e.target.value.trim()));
+$('#hf-token').addEventListener('change', (e) => {
+  const token = e.target.value.trim();
+  if (desktop?.config) {
+    // escritorio: cifrado con el llavero del sistema; nunca en claro en el almacenamiento local
+    store.set('hfToken', token, false);
+    desktop.config.save({ secrets: { hfToken: token } });
+  } else {
+    store.set('hfToken', token);
+  }
+});
 $('#hf-control').addEventListener('change', (e) => store.set('hfControl', e.target.value.trim().replace(/\/+$/, '')));
 
 const ctl = (path, body) => {
@@ -1240,9 +1408,11 @@ function renderSettings() {
     const what = h?.ok ? (ids.length > 3 ? `${ids.length} modelos` : ids.join(', ') || 'sin modelos') : (h?.error || 'sin respuesta');
     const meta = [h?.router ? 'router' : '', what, h?.ok && h.ms != null ? `${h.ms} ms` : ''].filter(Boolean).join(' · ');
     const down = (h?.unavailable || []).map((u) => `<span class="ep-down">${esc(u.slot)}: ${esc(u.reason)}</span>`).join('');
-    return `<li><span class="status ${h ? (h.ok ? 'ok' : 'bad') : ''}" aria-hidden="true"></span><span class="ep-prov">${esc(providerOf(ep).name)}</span><span class="ep-url">${esc(ep.url)}</span><span class="ep-meta">${esc(meta)}</span><button class="btn ghost sm" data-ep-test="${ep.id}">PROBAR</button><button class="btn ghost sm" data-ep-del="${ep.id}">QUITAR</button>${down}</li>`;
+    const bill = { local: 'local', own: 'propio', free: 'gratis', paid: 'de pago' }[billingOf(ep)] || '';
+    return `<li><span class="status ${h ? (h.ok ? 'ok' : 'bad') : ''}" aria-hidden="true"></span><span class="ep-prov">${esc(providerOf(ep).name)}</span><span class="ep-url">${esc(ep.url)}</span><span class="ep-meta">${esc([bill, meta].filter(Boolean).join(' · '))}</span><button class="btn ghost sm" data-ep-test="${ep.id}">PROBAR</button><button class="btn ghost sm" data-ep-config="${ep.id}">CONFIG</button><button class="btn ghost sm" data-ep-del="${ep.id}">QUITAR</button>${down}<div class="ep-report" data-ep-report="${ep.id}" hidden></div></li>`;
   }).join('') || '<li>Sin endpoints.</li>';
   $('#fallback-select').value = fallbackPolicy();
+  renderChain();
   renderRouteLog();
   $('#sys-chat').value = store.get('sysChat', DEFAULT_SYS);
   $('#style-select').value = store.get('style', 'normal');
@@ -1357,17 +1527,67 @@ $('#endpoint-form').addEventListener('submit', async (e) => {
   } catch (err) { msg.className = 'msg err'; msg.textContent = diagnose(err, v.provider); toast('NO SE PUDO CONECTAR'); }
 });
 $('#endpoint-list').addEventListener('click', async (e) => {
+  const cfgBtn = e.target.closest('[data-ep-config]');
+  if (cfgBtn) {
+    const ep = getEndpoints().find((x) => x.id === cfgBtn.dataset.epConfig);
+    const box = $(`[data-ep-report="${CSS.escape(cfgBtn.dataset.epConfig)}"]`);
+    if (!ep || !box) return;
+    const model = state.visible.find((m) => m.ep.id === ep.id)?.id;
+    const c = exportConfig(ep, model);
+    box.hidden = !box.hidden || box.dataset.view !== 'config';
+    box.dataset.view = 'config';
+    box.innerHTML = `<p class="fine">Para usar esta API en otras herramientas. La clave va en la variable de entorno <code>${esc(c.env)}</code>, nunca en el archivo.</p><pre></pre><pre></pre>`;
+    const [a, b] = box.querySelectorAll('pre');
+    a.textContent = c.curl; b.textContent = c.opencode;
+    return;
+  }
   const b = e.target.closest('[data-ep-test]');
   if (!b) return;
   const ep = getEndpoints().find((x) => x.id === b.dataset.epTest);
   if (!ep) return;
+  const paid = billingOf(ep) === 'paid';
+  // prueba completa con 1 token de chat; en un proveedor de pago se pregunta antes (gasta ~1 token)
+  const withChat = !paid || await confirmDialog({ title: 'PROBAR CHAT', command: `${providerOf(ep).name} cobra por uso: la prueba de chat gasta ~1 token. Sin ella solo se comprueban la clave y la lista de modelos.` });
   b.disabled = true;
-  try { const r = await probeEndpoint(ep); toast(`OK · ${r.ids.length} MODELOS · ${healthOf(ep).ms} MS`); } catch (err) { toast(diagnose(err, providerOf(ep).id)); }
+  const box = $(`[data-ep-report="${CSS.escape(ep.id)}"]`);
+  const report = await checkEndpoint(ep, { chat: !!withChat });
+  if (box) {
+    box.hidden = false;
+    box.dataset.view = 'test';
+    box.innerHTML = `<ul class="checks">${report.steps.map((st) => `<li class="${st.ok ? 'ok' : 'bad'}"><span>${st.ok ? '✓' : '✗'}</span>${esc(st.name)}<span class="fine">${esc(st.detail)}</span></li>`).join('')}</ul>`;
+  }
+  toast(report.kind === 'ok' ? 'CONEXIÓN OK' : (KIND_LABEL[report.kind] || 'ERROR').toUpperCase());
   b.disabled = false;
-  await refreshModels(); renderSettings();
+  await refreshModels();
+  renderSettings();
+  if (box) { const nb = $(`[data-ep-report="${CSS.escape(ep.id)}"]`); if (nb) { nb.hidden = false; nb.innerHTML = box.innerHTML; } }
 });
+
+/** Cadena de respaldo: hasta tres modelos en orden (p. ej. otro proveedor y luego uno local). */
+function renderChain() {
+  const box = $('#chain-box');
+  if (!box) return;
+  const chain = fallbackChain();
+  const opts = (sel) => `<option value="">—</option>${(state.visible || []).map((m) => {
+    const k = modelKey(m);
+    const bill = { local: 'local', own: 'propio', free: 'gratis', paid: 'de pago' }[billingOf(m.ep, m.id)] || '?';
+    return `<option value="${esc(k)}"${k === sel ? ' selected' : ''}>${esc(`${m.id} · ${providerOf(m.ep).name} · ${bill}`)}</option>`;
+  }).join('')}`;
+  box.hidden = fallbackPolicy() !== 'chain';
+  box.innerHTML = ['Respaldo 1', 'Respaldo 2', 'Respaldo 3'].map((label, i) => `<label class="field"><span class="label">${label}</span><select data-chain="${i}">${opts(chain[i] || '')}</select></label>`).join('');
+  $('#allow-paid').checked = allowPaidAuto();
+}
+$('#chain-box').addEventListener('change', (e) => {
+  const sel = e.target.closest('[data-chain]');
+  if (!sel) return;
+  const chain = fallbackChain().slice(0, 3);
+  chain[+sel.dataset.chain] = sel.value;
+  store.set('fallbackChain', chain.filter(Boolean));
+  renderRouteCard();
+});
+$('#allow-paid').addEventListener('change', (e) => { store.set('allowPaidAuto', e.target.checked); applyRoute(); });
 $('#fallback-select').innerHTML = Object.entries(FALLBACK_POLICIES).map(([k, v]) => `<option value="${k}">${esc(v)}</option>`).join('');
-$('#fallback-select').addEventListener('change', (e) => { store.set('fallback', e.target.value); toast('RESPALDO: ' + e.target.selectedOptions[0].textContent.toUpperCase()); });
+$('#fallback-select').addEventListener('change', (e) => { store.set('fallback', e.target.value); renderChain(); renderRouteCard(); toast('RESPALDO: ' + e.target.selectedOptions[0].textContent.toUpperCase()); });
 function renderRouteLog() {
   const box = $('#route-log');
   if (box) box.textContent = routeLog().length ? formatLog().split('\n').slice(-60).reverse().join('\n') : 'Todavía no hay peticiones registradas.';
@@ -1436,7 +1656,13 @@ if ('serviceWorker' in navigator && location.protocol.startsWith('http') && !des
   if (desktop?.config) {
     const saved = await desktop.config.load();
     if (saved?.endpoints?.length) saveEndpoints(saved.endpoints);
+    // secretos cifrados por el escritorio: solo en memoria de esta sesión
+    if (saved?.secrets?.hfToken) store.set('hfToken', saved.secrets.hfToken, false);
+    try { localStorage.removeItem('jeancode.hfToken'); } catch { /* versiones anteriores lo dejaban en claro */ }
   }
   if (getEndpoints().length) await enterApp();
   else showSplash();
 })();
+
+// la tarjeta de ruta se recalcula al abrirla (la conversación pudo crecer y cambiar lo que cabe)
+$('#route-menu').addEventListener('toggle', (e) => { if (e.target.open) renderRouteCard(); });

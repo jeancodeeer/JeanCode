@@ -174,3 +174,89 @@ test('hf: el panel de Hugging Face encuentra el control también desde el router
   assert.equal(H.controlUrlFrom('https://c-8888.app.github.dev/v1'), 'https://c-8899.app.github.dev');
   assert.equal(H.controlUrlFrom('http://localhost:8899/v1'), 'http://localhost:8899');
 });
+
+/* ------------------------------------------------------------ fase 3: capacidades, decisión, coste */
+const C = await import('../web/js/capabilities.js');
+const P = await import('../web/js/providers.js');
+
+test('capacidades: lo informado por el proveedor manda; lo desconocido queda null', () => {
+  const or = ep('or1', 'https://openrouter.ai/api/v1', 'openrouter');
+  P.adapterOf(or).models({ data: [
+    { id: 'x/vision-model', context_length: 200000, architecture: { input_modalities: ['text', 'image'], output_modalities: ['text'] }, supported_parameters: ['tools', 'response_format'], pricing: { prompt: '0.000001', completion: '0.000002' } },
+    { id: 'x/free-model:free', context_length: 8192, pricing: { prompt: '0', completion: '0' }, supported_parameters: ['temperature'] },
+  ] }, or);
+  const v = C.capsOf(or, 'x/vision-model');
+  assert.equal(v.vision, true); assert.equal(v.tools, true); assert.equal(v.structured, true); assert.equal(v.context, 200000);
+  assert.equal(C.billingOf(or, 'x/vision-model'), 'paid');
+  assert.equal(C.billingOf(or, 'x/free-model:free'), 'free');
+  assert.equal(C.capsOf(or, 'x/free-model:free').tools, false);
+  const custom = ep('c1', 'https://mi-servidor.example/v1', 'custom');
+  assert.equal(C.capsOf(custom, 'algo-raro').tools, null);           // no se inventa
+  assert.equal(C.capsOf(custom, 'text-embedding-3-small').chat, false); // se oculta del selector
+  assert.equal(C.billingOf(ep('l', 'http://localhost:11434/v1', 'ollama')), 'local');
+  assert.equal(C.billingOf(ep('j', 'https://c-8899.app.github.dev/v1')), 'own');
+});
+
+test('capacidades: el contexto real del router de Jean y lo aprendido en uso', () => {
+  const j = ep('jr', 'https://c-8899.app.github.dev/v1');
+  P.adapterOf(j).models({ data: [{ id: 'jean-fenix', jean: { port: 8890, context_length: 8192 } }] }, j);
+  assert.equal(C.capsOf(j, 'jean-fenix').context, 8192);
+  const port = ep('jp', 'https://c-8888.app.github.dev/v1');
+  P.adapterOf(port).models({ data: [{ id: 'jean-marvel' }] }, port);     // puerto suelto sin /props: no se supone
+  assert.equal(C.capsOf(port, 'jean-marvel').context, null);              // (en vivo Marvel tiene 32768, no 131072)
+  const oll = ep('ol', 'http://localhost:11434/v1', 'ollama');
+  P.adapterOf(oll).models({ data: [{ id: 'jean-grey:v0.7-basic' }] }, oll);
+  assert.equal(C.capsOf(oll, 'jean-grey:v0.7-basic').context, null);     // Ollama usa su propio num_ctx: desconocido
+  assert.equal(C.capsOf(oll, 'jean-grey:v0.7-basic').tools, true);
+  C.learnCap(j, 'jean-fenix', { tools: false });
+  assert.match(C.unfitReason(C.capsOf(j, 'jean-fenix'), { tools: true }), /herramientas/);
+  assert.match(C.unfitReason(C.capsOf(j, 'jean-fenix'), { tokens: 50000 }), /contexto/);
+});
+
+test('router: decisión explicable, conexión fija y descartes', () => {
+  const j = ep('jd', 'https://d-8899.app.github.dev/v1'), l = ep('ld', 'http://localhost:11434/v1', 'ollama'), o = ep('od', 'https://api.openai.com/v1', 'openai');
+  P.adapterOf(j).models({ data: [{ id: 'jean-grey' }, { id: 'jean-marvel' }, { id: 'jean-fenix', jean: { context_length: 4096 } }] }, j);
+  const models = [{ id: 'jean-grey', ep: j }, { id: 'jean-marvel', ep: j }, { id: 'jean-fenix', ep: j }, { id: 'qwen2.5-coder:7b', ep: l }, { id: 'gpt-4o', ep: o }];
+  const eps = [j, l, o];
+  const auto = R.decide({ routing: 'auto' }, { models, mode: 'chat', endpoints: eps, need: { tokens: 20000 } });
+  assert.equal(auto.model.id, 'jean-grey');
+  assert.ok(auto.skipped.some((s) => s.model === 'jean-fenix' && /contexto/.test(s.why)));
+  assert.ok(auto.skipped.some((s) => s.model === 'gpt-4o' && /pago/.test(s.why)));   // sin permiso, AUTO no usa pago
+  const pinned = R.decide({ routing: 'endpoint', target: 'ld' }, { models, mode: 'chat', endpoints: eps });
+  assert.equal(pinned.model.id, 'qwen2.5-coder:7b');
+  assert.equal(pinned.routing, 'conexión fija');
+  const fixed = R.decide({ routing: 'model', target: 'od|gpt-4o' }, { models, mode: 'chat', endpoints: eps });
+  assert.equal(fixed.model.id, 'gpt-4o');                                               // elegido por el usuario: se respeta
+});
+
+test('router: el respaldo nunca pasa solo a un modelo de pago', () => {
+  const j = ep('jf', 'https://f-8899.app.github.dev/v1'), l = ep('lf', 'http://localhost:1234/v1', 'lmstudio'), o = ep('of', 'https://api.groq.com/openai/v1', 'groq');
+  const models = [{ id: 'jean-grey', ep: j }, { id: 'llama-3-local', ep: l }, { id: 'llama-3.3-70b', ep: o }];
+  const free = R.candidates(models[0], models, 'chat', [j, l, o], 'free');
+  assert.deepEqual(free.map((m) => m.ep.id), ['lf']);
+  globalThis.localStorage?.setItem?.('jeancode.fallbackChain', JSON.stringify(['of|llama-3.3-70b', 'lf|llama-3-local']));
+});
+
+test('api: tipos de error y formatos incompatibles', () => {
+  assert.equal(A.kindOf(401), 'auth');
+  assert.equal(A.kindOf(429), 'rate');
+  assert.equal(A.kindOf(503), 'down');
+  assert.equal(A.kindOf(0), 'network');
+  assert.equal(A.kindOf(404, 'The model `gpt-9` does not exist'), 'model');
+  assert.equal(A.kindOf(400, 'model "x" not found'), 'model');
+  assert.equal(A.kindOf(400, 'invalid temperature'), 'request');
+  assert.equal(R.validateEndpoint({ url: 'https://x.openai.azure.com/openai/deployments/gpt/chat/completions?api-version=1', key: 'k', provider: 'custom' }).ok, false);
+  const g = R.validateEndpoint({ url: 'https://generativelanguage.googleapis.com/v1beta', key: 'AIzaX', provider: 'gemini' });
+  assert.equal(g.url, 'https://generativelanguage.googleapis.com/v1beta/openai');
+  assert.equal(R.validateEndpoint({ url: 'http://localhost:11434', key: '', provider: 'ollama' }).url, 'http://localhost:11434/v1');
+  assert.equal(R.validateEndpoint({ url: 'https://api.anthropic.com', key: 'sk-ant-x', provider: 'anthropic' }).url, 'https://api.anthropic.com/v1');
+});
+
+test('seguridad: exportar configuración y trazas sin claves ni nombre de Codespace', () => {
+  const e = { id: 'x', url: 'https://mi-codespace-8899.app.github.dev/v1', key: 'jean_SECRETO123456789', provider: 'jean' };
+  const c = R.exportConfig(e, 'jean-grey');
+  assert.doesNotMatch(c.curl + c.opencode, /SECRETO/);
+  assert.match(c.curl, /\$JEAN_API_KEY/);
+  assert.match(c.opencode, /\{env:JEAN_API_KEY\}/);
+  assert.equal(R.where(e), '…-8899.app.github.dev/v1');
+});

@@ -345,6 +345,26 @@ pre code { background: none; border: 0; padding: 0; font-size: inherit; }
 .rows li .ep-meta { font-size: 12px; color: var(--ash); }
 .rows li .status { position: static; flex: none; }
 .rows li .ep-down { flex: 1 1 100%; font: 12px/1.4 var(--mono); color: var(--ash); }
+/* ruta: tarjeta junto al selector, traza por respuesta y pruebas de conexión */
+.route-menu > summary { min-height: 36px; padding: 0 var(--s2); border: 1px solid var(--line-2); font: 600 11px/1 var(--mono); letter-spacing: .12em; color: var(--smoke); }
+.route-menu[open] > summary { color: var(--bg); background: var(--ink); border-color: var(--ink); }
+.route-card { right: 0; left: auto; width: min(420px, calc(100vw - 24px)); padding: var(--s3) var(--s4); max-height: 70vh; overflow: auto; }
+.route-dl { display: grid; grid-template-columns: 92px minmax(0, 1fr); gap: 6px var(--s3); margin: 0; font-size: 13px; }
+.route-dl dt { font: 500 11px/1.6 var(--mono); letter-spacing: .12em; color: var(--ash); }
+.route-dl dd { margin: 0; color: var(--ink); overflow-wrap: anywhere; }
+.route-dl .mono { font-size: 12px; color: var(--smoke); }
+.trace { margin-top: var(--s2); }
+.trace > summary { cursor: pointer; font: 500 11px/1.8 var(--mono); letter-spacing: .1em; color: var(--ash); list-style: none; }
+.trace > summary:hover { color: var(--ink); }
+.trace pre { margin: var(--s2) 0 0; padding: var(--s3); background: var(--bg); border: 1px solid var(--line); font: 12px/1.55 var(--mono); color: var(--smoke); white-space: pre-wrap; overflow-wrap: anywhere; }
+.ep-report { flex: 1 1 100%; }
+.ep-report pre { margin: var(--s2) 0 0; padding: var(--s3); background: var(--bg); border: 1px solid var(--line); font: 12px/1.5 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; color: var(--smoke); }
+.checks { list-style: none; margin: var(--s2) 0 0; padding: 0; display: grid; gap: 4px; font-size: 13px; }
+.checks li { display: flex; flex-wrap: wrap; gap: 0 var(--s2); align-items: baseline; color: var(--ink); min-height: 0; padding: 0; border: 0; }
+.checks li.ok > span:first-child { color: var(--ok); }
+.checks li.bad > span:first-child { color: var(--bad); }
+.checks .fine { flex: 1 1 100%; padding-left: 18px; }
+.chain { display: grid; gap: var(--s2); margin-bottom: var(--s3); }
 .route-log { margin: 0 0 var(--s3); padding: var(--s3); max-height: 260px; overflow: auto; background: var(--bg); border: 1px solid var(--line); font: 12px/1.55 var(--mono); color: var(--smoke); white-space: pre-wrap; overflow-wrap: anywhere; }
 .fenix-status { font-size: 12px; color: var(--ash); }
 .fenix-status.ok { color: var(--ok); }

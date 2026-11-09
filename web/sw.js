@@ -5,7 +5,7 @@ const SHELL = [
   './', 'index.html', 'favicon.svg', 'manifest.webmanifest',
   'css/fonts.css', 'css/jeancode.css',
   'js/app.js', 'js/api.js', 'js/agent.js', 'js/code.js', 'js/commands.js', 'js/config.js', 'js/diff.js',
-  'js/hf.js', 'js/md.js', 'js/providers.js', 'js/router.js', 'js/store.js', 'js/version.js', 'js/zip.js',
+  'js/hf.js', 'js/md.js', 'js/capabilities.js', 'js/providers.js', 'js/router.js', 'js/store.js', 'js/version.js', 'js/zip.js',
   'fonts/IBMPlexMono-400.woff2', 'fonts/IBMPlexMono-500.woff2', 'fonts/IBMPlexMono-700.woff2',
   'fonts/IBMPlexSans-400.woff2', 'fonts/IBMPlexSans-500.woff2', 'fonts/IBMPlexSans-700.woff2',
   'fonts/IBMPlexSansCondensed-500.woff2', 'fonts/IBMPlexSansCondensed-700.woff2',

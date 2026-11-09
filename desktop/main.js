@@ -31,30 +31,41 @@ function createWindow() {
 }
 
 /* ---------------- configuración (claves cifradas con el llavero del sistema) ---------------- */
+const decrypt = (b64) => safeStorage.decryptString(Buffer.from(b64, 'base64'));
+const encrypt = (text) => safeStorage.encryptString(String(text)).toString('base64');
+// Secretos que no son de un endpoint (p. ej. el token de Hugging Face). Solo nombres conocidos.
+const SECRET_NAMES = new Set(['hfToken']);
+
+async function readConfig() {
+  try { return JSON.parse(await fs.readFile(CONFIG_FILE(), 'utf8')); } catch { return {}; }
+}
+
 ipcMain.handle('config:load', async () => {
-  try {
-    const raw = JSON.parse(await fs.readFile(CONFIG_FILE(), 'utf8'));
-    raw.endpoints = (raw.endpoints || []).map((ep) => {
-      if (ep.keyEnc && safeStorage.isEncryptionAvailable()) {
-        return { ...ep, key: safeStorage.decryptString(Buffer.from(ep.keyEnc, 'base64')), keyEnc: undefined };
-      }
-      return ep;
-    });
-    return raw;
-  } catch {
-    return { endpoints: [] };
+  const raw = await readConfig();
+  const enc = safeStorage.isEncryptionAvailable();
+  const endpoints = (raw.endpoints || []).map((ep) => (ep.keyEnc && enc ? { id: ep.id, url: ep.url, provider: ep.provider, key: decrypt(ep.keyEnc) } : ep));
+  const secrets = {};
+  for (const [name, v] of Object.entries(raw.secretsEnc || {})) {
+    if (SECRET_NAMES.has(name) && enc) { try { secrets[name] = decrypt(v); } catch { /* otro usuario/equipo */ } }
   }
+  return { endpoints, secrets };
 });
+
 ipcMain.handle('config:save', async (_e, cfg) => {
   const enc = safeStorage.isEncryptionAvailable();
-  const out = {
-    endpoints: (cfg.endpoints || []).map((ep) => (enc
-      ? { id: ep.id, url: ep.url, provider: ep.provider, keyEnc: safeStorage.encryptString(ep.key).toString('base64') }
-      : ep)),
-  };
+  const prev = await readConfig();
+  const out = { endpoints: prev.endpoints || [], secretsEnc: prev.secretsEnc || {} };
+  if (Array.isArray(cfg.endpoints)) {
+    // sin llavero del sistema las claves NO se escriben en disco (habría que pedirlas otra vez)
+    out.endpoints = cfg.endpoints.map((ep) => ({ id: ep.id, url: ep.url, provider: ep.provider, ...(enc ? { keyEnc: encrypt(ep.key) } : {}) }));
+  }
+  for (const [name, v] of Object.entries(cfg.secrets || {})) {
+    if (!SECRET_NAMES.has(name)) continue;
+    if (v && enc) out.secretsEnc[name] = encrypt(v); else delete out.secretsEnc[name];
+  }
   await fs.mkdir(path.dirname(CONFIG_FILE()), { recursive: true });
-  await fs.writeFile(CONFIG_FILE(), JSON.stringify(out, null, 2), 'utf8');
-  return true;
+  await fs.writeFile(CONFIG_FILE(), JSON.stringify(out, null, 2), { encoding: 'utf8', mode: 0o600 });
+  return { encrypted: enc };
 });
 
 /* ---------------- red (sin CORS: las peticiones salen del proceso principal) ---------------- */
@@ -79,8 +90,13 @@ ipcMain.on('stream:start', async (e, id, req) => {
   if (!okUrl(req.url)) { wc.send('stream:error', id, { message: 'URL inválida' }); return; }
   const ctrl = new AbortController();
   streams.set(id, ctrl);
+  // espera máxima hasta que el servidor responde; después el streaming puede durar lo que haga falta
+  let timedOut = false;
+  const firstByte = Math.min(Math.max(Number(req.timeout) || 120000, 5000), 3600000);
+  const timer = setTimeout(() => { timedOut = true; ctrl.abort(); }, firstByte);
   try {
     const res = await fetch(req.url, { method: 'POST', headers: req.headers, body: req.body, signal: ctrl.signal });
+    clearTimeout(timer);
     if (!res.ok) { wc.send('stream:error', id, { status: res.status, body: await res.text().catch(() => '') }); return; }
     const dec = new TextDecoder();
     let buf = '';
@@ -93,13 +109,17 @@ ipcMain.on('stream:start', async (e, id, req) => {
         if (!line.startsWith('data:')) continue;
         const payload = line.slice(5).trim();
         if (payload === '[DONE]') continue;
+        if (wc.isDestroyed()) { ctrl.abort(); break; }
         try { wc.send('stream:event', id, JSON.parse(payload)); } catch { /* parcial */ }
       }
     }
-    wc.send('stream:done', id);
+    if (!wc.isDestroyed()) wc.send('stream:done', id);
   } catch (err) {
-    if (err.name !== 'AbortError') wc.send('stream:error', id, { message: err.message });
+    if (wc.isDestroyed()) return; // la ventana se cerró a mitad del streaming
+    if (timedOut) wc.send('stream:error', id, { timeout: true, message: 'sin respuesta a tiempo' });
+    else if (err.name !== 'AbortError') wc.send('stream:error', id, { message: err.message });
   } finally {
+    clearTimeout(timer);
     streams.delete(id);
   }
 });

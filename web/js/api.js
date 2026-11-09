@@ -2,7 +2,8 @@
 // (Jean-API-Generator / llama-server) u otro de providers.js (OpenAI, OpenRouter, Groq…).
 // En el escritorio las peticiones pasan por el proceso principal (sin CORS) vía window.jeancodeDesktop.
 import { store } from './store.js';
-import { supportsThinkToggle, wantsStreamUsage, providerOf } from './providers.js';
+import { supportsThinkToggle, wantsStreamUsage, providerOf, adapterOf } from './providers.js';
+import { learnCap, reportCaps } from './capabilities.js';
 
 const bridge = () => (typeof window !== 'undefined' ? window.jeancodeDesktop : null);
 
@@ -36,21 +37,64 @@ export function addEndpoint(url, key, provider = 'jean') {
   return ep;
 }
 
+/**
+ * Error de una API, con su tipo (kind) para que el router y la interfaz decidan sin leer el texto:
+ *   network  no se pudo conectar        timeout  sin respuesta a tiempo     auth   clave rechazada (401)
+ *   forbidden acceso denegado (403)      model    el modelo no existe        rate   límite de uso (429)
+ *   down     proveedor caído o cargando (5xx/503)   format  respuesta que no es OpenAI-compatible
+ *   request  la petición no se aceptó (400/422)     aborted  el usuario lo detuvo
+ */
 export class ApiError extends Error {
-  constructor(message, status, detail = '') { super(message); this.status = status; this.detail = detail; }
+  constructor(message, status, detail = '', kind = null) {
+    super(message);
+    this.status = status;
+    this.detail = detail;
+    this.kind = kind || kindOf(status, detail);
+  }
 }
 
-const headersFor = (ep) => ({ Authorization: `Bearer ${ep.key}`, 'Content-Type': 'application/json' });
+const MODEL_MISSING = /model[^.]*(not found|does not exist|not exist|no existe|unknown|invalid model|not available)|no such model|unknown model/i;
+// Gemini y xAI responden 400 (no 401) a una clave inválida: se reconoce por el mensaje
+const BAD_KEY = /api[ _-]?key (not valid|is invalid|invalid)|(invalid|valid) api[ _-]?key|incorrect api key|api_key_invalid|unauthenticated/i;
+
+export function kindOf(status, detail = '') {
+  if (status === 0) return 'network';
+  if (status === 401 || ((status === 400 || status === 403) && BAD_KEY.test(detail))) return 'auth';
+  if (status === 403) return 'forbidden';
+  if (status === 429) return 'rate';
+  if (status === 408 || status === 504) return 'timeout';
+  if ((status === 404 || status === 400 || status === 422) && MODEL_MISSING.test(detail)) return 'model';
+  if (status === 404) return 'notfound';
+  if (status >= 500) return 'down';
+  if (status >= 400) return 'request';
+  return 'unknown';
+}
+
+/** Cabeceras: la clave (Bearer) y lo que pida el adaptador del proveedor. La clave solo sale de aquí. */
+const headersFor = (ep) => ({ ...adapterOf(ep).headers(ep), Authorization: `Bearer ${ep.key}`, 'Content-Type': 'application/json' });
+
+/** Respuesta que no es JSON: casi siempre una página web o una API con otro formato. */
+function notApi(ep, body) {
+  const html = /<html|<!doctype/i.test(String(body || '').slice(0, 500));
+  return new ApiError(html
+    ? `La URL de ${providerOf(ep).name} devolvió una página web, no una API. Revisa que termine en /v1 (la URL base de la API).`
+    : `La respuesta de ${providerOf(ep).name} no tiene formato OpenAI-compatible.`, -1, '', 'format');
+}
+
+/** Algunos proveedores repiten parte de la clave en el error ("Incorrect API key provided: sk-…"). */
+const maskKeys = (t) => t.replace(/Bearer\s+\S+/gi, 'Bearer ***')
+  .replace(/\b(sk-(?:ant-|or-|proj-)?|hf_|gsk_|xai-|fw_|csk-|jean_|AIza)[A-Za-z0-9_*.-]{4,}/g, '$1***');
 
 /** Mensaje del servidor ({error:{message}}, {error:"..."}, {message}) sin volcar HTML ni cuerpos enormes. */
 export function serverMessage(body) {
   const raw = String(body || '');
   try {
-    const j = JSON.parse(raw);
+    let j = JSON.parse(raw);
+    if (Array.isArray(j)) j = j[0] || {}; // Gemini envuelve el error en una lista
     const m = typeof j.error === 'string' ? j.error : (j.error?.message || j.message || j.detail);
-    if (m) return String(m).slice(0, 300);
+    if (m) return maskKeys(String(m)).slice(0, 300);
   } catch { /* no es JSON */ }
-  return /<html|<!doctype/i.test(raw) ? '' : raw.slice(0, 200);
+  return /<html|<!doctype/i.test(raw) ? '' : maskKeys(raw).slice(0, 200);
 }
 
 /** Error claro según el proveedor (antes todo hablaba de JEAN_API_KEY, aunque fuera OpenAI). */
@@ -59,7 +103,7 @@ export function explain(status, body, ep) {
   const jean = p.id === 'jean';
   const detail = serverMessage(body);
   const tail = detail ? ` Detalle: ${detail}` : '';
-  if (status === 401) return `${p.name} rechazó la clave (401). ${jean ? 'Revisa tu JEAN_API_KEY.' : `Revisa la clave (${p.keyHint}).`}`;
+  if (status === 401 || kindOf(status, detail) === 'auth') return `${p.name} rechazó la clave (${status}). ${jean ? 'Revisa tu JEAN_API_KEY.' : `Revisa la clave (${p.keyHint}).`}`;
   if (status === 403) return jean ? 'Acceso denegado (403). ¿El puerto del Codespace está como público? (jean-api.ps1 start lo hace)' : `${p.name} denegó el acceso (403): la clave no tiene permiso para ese modelo o recurso.${tail}`;
   if (status === 404) return jean && !detail ? 'No se encontró la ruta (404). La URL debe terminar en /v1.' : `No encontrado (404): la URL o el modelo no existen en ${p.name}.${tail}`;
   if (status === 429) return `${p.name} limitó las peticiones (429): espera un poco o usa otro modelo.${tail}`;
@@ -82,9 +126,9 @@ async function request(ep, path, init = {}) {
   const timeout = init.timeout ?? ep.timeout ?? 60000;
   if (b?.http) {
     const r = await b.http({ url: ep.url + path, method: init.method || 'GET', headers: headersFor(ep), body: init.body, timeout });
-    if (r.error) throw new ApiError(networkHint(ep) + ` (${r.error})`, 0);
+    if (r.error) throw new ApiError(networkHint(ep) + ` (${r.error})`, 0, '', /a tiempo/.test(r.error) ? 'timeout' : 'network');
     if (r.status >= 400) throw new ApiError(explain(r.status, r.body, ep), r.status, serverMessage(r.body));
-    return JSON.parse(r.body);
+    try { return JSON.parse(r.body); } catch { throw notApi(ep, r.body); }
   }
   let res;
   try {
@@ -92,17 +136,31 @@ async function request(ep, path, init = {}) {
     res = await fetch(ep.url + path, { ...init, headers: headersFor(ep), signal });
   } catch (e) {
     if (e.name === 'AbortError' && init.signal?.aborted) throw e;
-    throw new ApiError(networkHint(ep) + (e.name === 'TimeoutError' ? ' (sin respuesta a tiempo)' : ''), 0);
+    if (e.name === 'TimeoutError') throw new ApiError(`${providerOf(ep).name} no respondió a tiempo.`, 0, '', 'timeout');
+    throw new ApiError(networkHint(ep), 0);
   }
   if (!res.ok) { const body = await res.text().catch(() => ''); throw new ApiError(explain(res.status, body, ep), res.status, serverMessage(body)); }
-  return res.json();
+  const text = await res.text();
+  try { return JSON.parse(text); } catch { throw notApi(ep, text); }
 }
 
 /** Modelos de un endpoint y, si es el router de Jean-API-Generator, qué puertos no están disponibles y por qué. */
 export async function listModelsDetailed(ep) {
   const data = await request(ep, '/models', { timeout: ep.timeout ?? MODELS_TIMEOUT });
+  if (!data || typeof data !== 'object' || !(Array.isArray(data.data) || Array.isArray(data.models))) {
+    throw new ApiError(`${providerOf(ep).name} respondió, pero /models no trae una lista de modelos: no parece una API OpenAI-compatible.`, -1, '', 'format');
+  }
+  const ids = adapterOf(ep).models(data, ep);
+  // llama-server (un puerto de Jean o uno local) informa en /props el contexto CONFIGURADO real
+  // En segundo plano: la lista de modelos no espera (un servidor sin /props costaría segundos en cada recarga).
+  if (!data.jean?.router && (providerOf(ep).id === 'jean' || /llama/i.test(data.data?.[0]?.owned_by || ''))) {
+    request({ ...ep, url: ep.url.replace(/\/v1$/, '') }, '/props', { timeout: 5000 }).then((props) => {
+      const n = props?.default_generation_settings?.n_ctx || props?.n_ctx;
+      if (n) for (const id of ids) reportCaps(ep, id, { context: Number(n) });
+    }).catch(() => { /* servidor sin /props: el contexto queda desconocido */ });
+  }
   return {
-    ids: (data.data || data.models || []).map((m) => m.id || m.name).filter(Boolean),
+    ids,
     router: !!data.jean?.router,
     unavailable: Array.isArray(data.jean?.unavailable) ? data.jean.unavailable : [],
   };
@@ -151,6 +209,7 @@ export async function chatStream(opts) {
     } catch (e) {
       // 400 que nombra un parámetro opcional: se quita y se repite (solo si aún no salió texto)
       const why = `${e.detail || ''} ${e.message || ''}`;
+      if (e.status === 400 && opts.tools?.length && /tool|function/i.test(why)) learnCap(ep, model, { tools: false });
       const drop = e.status === 400 && !streamed && tries < DROPPABLE.length
         && DROPPABLE.find((d) => d.re.test(why) && !dropped.get(key)?.has(d.key));
       if (!drop) throw e;
@@ -161,8 +220,11 @@ export async function chatStream(opts) {
   }
 }
 
+/** Espera máxima hasta que el servidor responde (cabeceras). En CPU (Jean, local) leer un contexto largo tarda. */
+export const firstByteTimeout = (ep) => (providerOf(ep).id === 'jean' || providerOf(ep).local || /localhost|127\.0\.0\.1/.test(ep.url) ? 900000 : 120000);
+
 async function chatOnce({ ep, model, messages, signal, onDelta, onReasoning, onToolCalls, onUsage, temperature, think, tools }, skip = new Set()) {
-  const payload = { model, messages, stream: true, temperature: temperature ?? 0.2 };
+  let payload = { model, messages, stream: true, temperature: temperature ?? 0.2 };
   // Modelos Qwen/Jean: sin la fase de razonamiento responden varias veces más rápido en CPU.
   // Solo llama-server entiende este parámetro; OpenAI y otros lo rechazarían.
   if (typeof think === 'boolean' && supportsThinkToggle(ep)) payload.chat_template_kwargs = { enable_thinking: think };
@@ -170,7 +232,9 @@ async function chatOnce({ ep, model, messages, signal, onDelta, onReasoning, onT
   if (tools?.length) payload.tools = tools;
   if (wantsStreamUsage(ep)) payload.stream_options = { include_usage: true };
   for (const k of skip) delete payload[k];
+  payload = adapterOf(ep).request(payload, ep);
   const body = JSON.stringify(payload);
+  let chunks = 0; // trozos con formato OpenAI recibidos (0 al final = respuesta inválida)
   const b = bridge();
   let full = '';
   let usage = null;
@@ -183,7 +247,12 @@ async function chatOnce({ ep, model, messages, signal, onDelta, onReasoning, onT
       usage = { prompt: (json.timings.prompt_n || 0) + (json.timings.cache_n || 0), completion: json.timings.predicted_n || 0,
         tps: json.timings.predicted_per_second };
     }
-    if (json.error) throw new ApiError(typeof json.error === 'string' ? json.error : (json.error.message || 'error del proveedor'), json.error.code === 503 ? 503 : 0);
+    if (json.error) {
+      const msg = typeof json.error === 'string' ? json.error : (json.error.message || 'error del proveedor');
+      const code = Number(json.error.code) || 0;
+      throw new ApiError(msg, code >= 400 ? code : 0, msg, code >= 400 ? null : 'down');
+    }
+    if (json.choices || json.usage || json.timings) chunks++;
     const d = json.choices?.[0]?.delta || json.choices?.[0]?.message || {};
     // tolerante: cada proveedor nombra distinto el razonamiento
     const think = d.reasoning_content ?? d.reasoning ?? d.thinking;
@@ -198,6 +267,7 @@ async function chatOnce({ ep, model, messages, signal, onDelta, onReasoning, onT
     }
   };
   const finish = () => {
+    if (!chunks) throw new ApiError(`${providerOf(ep).name} terminó sin enviar una respuesta con formato OpenAI (streaming).`, -1, '', 'format');
     if (calls.length) onToolCalls?.(calls.filter(Boolean));
     if (usage) onUsage?.(usage);
     return full;
@@ -206,13 +276,14 @@ async function chatOnce({ ep, model, messages, signal, onDelta, onReasoning, onT
   if (b?.stream) {
     await new Promise((resolve, reject) => {
       const id = b.stream(
-        { url: ep.url + '/chat/completions', headers: headersFor(ep), body },
+        { url: ep.url + '/chat/completions', headers: headersFor(ep), body, timeout: firstByteTimeout(ep) },
         {
           onEvent: (json) => { try { handleChunk(json); } catch (e) { b.abort(id); reject(e); } },
           onDone: resolve,
           onError: (err) => reject(err.status
             ? new ApiError(explain(err.status, err.body, ep), err.status, serverMessage(err.body))
-            : new ApiError(networkHint(ep) + (err.message ? ` (${err.message})` : ''), 0)),
+            : err.timeout ? new ApiError(`${providerOf(ep).name} no empezó a responder a tiempo.`, 0, '', 'timeout')
+              : new ApiError(networkHint(ep) + (err.message ? ` (${err.message})` : ''), 0)),
         },
       );
       signal?.addEventListener('abort', () => { b.abort(id); reject(new DOMException('aborted', 'AbortError')); });
@@ -221,15 +292,23 @@ async function chatOnce({ ep, model, messages, signal, onDelta, onReasoning, onT
   }
 
   let res;
+  const ctl = new AbortController();
+  const onUserAbort = () => ctl.abort(new DOMException('aborted', 'AbortError'));
+  signal?.addEventListener('abort', onUserAbort);
+  const timer = setTimeout(() => ctl.abort(new DOMException('timeout', 'TimeoutError')), firstByteTimeout(ep));
   try {
     res = await fetch(ep.url + '/chat/completions', {
-      method: 'POST', signal, body, headers: headersFor(ep),
+      method: 'POST', signal: ctl.signal, body, headers: headersFor(ep),
     });
   } catch (e) {
-    if (e.name === 'AbortError') throw e;
+    if (signal?.aborted) throw new DOMException('aborted', 'AbortError');
+    if (ctl.signal.reason?.name === 'TimeoutError') throw new ApiError(`${providerOf(ep).name} no empezó a responder a tiempo.`, 0, '', 'timeout');
     throw new ApiError(networkHint(ep), 0);
+  } finally {
+    clearTimeout(timer);
   }
   if (!res.ok) { const text = await res.text().catch(() => ''); throw new ApiError(explain(res.status, text, ep), res.status, serverMessage(text)); }
+  if (/text\/html/i.test(res.headers.get('content-type') || '')) throw notApi(ep, '<html>');
 
   const reader = res.body.getReader();
   const dec = new TextDecoder();
