@@ -14,7 +14,7 @@
 </div>
 
 ```
-N° 001 — JEANCODE                                                    REF. V0.3
+N° 001 — JEANCODE                                                    REF. V0.4
 A graphical client for the Jean models. Chat, generate whole projects, run an agent.
 No server, no account, no tracking: bring your own Jean-API-Generator.
 ```
@@ -61,6 +61,27 @@ Besides your own Jean-API-Generator, JeanCode connects to the providers OpenCode
 ### Fénix
 
 Fénix (27B) runs alone on port 8890: enable `fenix-mode` in Jean-API-Generator and JeanCode finds it by itself, or use **Find Fénix** in SETTINGS.
+
+<br>
+
+## 03b — WHAT JEANCODE DOES DIFFERENTLY
+
+Built from the most common complaints about Claude Code and OpenCode (user reports, issue trackers and forums):
+
+| PROBLEM ELSEWHERE | JEANCODE |
+|---|---|
+| Claude Code: auto-compaction is opaque and drops instructions | Compaction is never silent: at 85 % it asks first and shows the summary. **Pinned rules** and project memory are sent on every turn, so compaction cannot lose them. |
+| Claude Code: unpredictable cost | Tokens in and out under every answer, session total and real context size in the top bar. |
+| Claude Code: checkpoints miss bash changes | **Back to here** on every message of the agent. In git folders the checkpoint is the whole working tree (a temporary index, no commits), so files changed by commands are restored too. |
+| Claude Code: permission fatigue | **Allow always here** per folder (command prefix; exact command for interpreters and shells, never chained commands), editable in SETTINGS. |
+| Claude Code: plan mode output is hard to act on | After a PLAN run: **Approve and run in BUILD** or edit the plan first. |
+| OpenCode: provider errors (wrong paths, Ollama, OpenRouter) | Provider presets with the right base URL, `/v1` auto-fix and plain-language diagnostics (CORS, sleeping server, bad key). |
+| OpenCode: setup friction | **Use this PC's models**: one click finds Ollama, LM Studio, llama.cpp, vLLM, Jan or a local Jean server; install Ollama models from SETTINGS. |
+| OpenCode: UI loaded from a CDN at runtime | Fonts and UI ship with the app; the web version is an installable PWA that works offline. No requests to Google. |
+| OpenCode: validation errors on non-standard responses | Tolerant parser: `reasoning`, `reasoning_content` or `thinking`, tool calls native, fenced or Qwen `<tool_call>`, provider errors shown as they are. |
+| OpenCode: sluggish UI and memory use | Streaming redraws at most once per frame (it used to re-render the whole answer on every token). |
+
+Also from both tools: project subagents (`.jeancode/agents/*.md`), hooks (`.jeancode/hooks.json`: `post_edit`, `post_turn`, asked for trust first) and answer styles (concise, explanatory, learning).
 
 <br>
 

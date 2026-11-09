@@ -2,7 +2,7 @@
 // (Jean-API-Generator / llama-server) u otro de providers.js (OpenAI, OpenRouter, Groq…).
 // En el escritorio las peticiones pasan por el proceso principal (sin CORS) vía window.jeancodeDesktop.
 import { store } from './store.js';
-import { supportsThinkToggle } from './providers.js';
+import { supportsThinkToggle, wantsStreamUsage } from './providers.js';
 
 const bridge = () => (typeof window !== 'undefined' ? window.jeancodeDesktop : null);
 
@@ -95,21 +95,33 @@ export async function probe(url, key) {
  * Chat en streaming. onDelta(texto), onReasoning(texto). Devuelve el texto completo.
  * El razonamiento de Qwen puede llegar como reasoning_content o dentro de <think>…</think>.
  */
-export async function chatStream({ ep, model, messages, signal, onDelta, onReasoning, onToolCalls, temperature, think, tools }) {
+export async function chatStream({ ep, model, messages, signal, onDelta, onReasoning, onToolCalls, onUsage, temperature, think, tools }) {
   const payload = { model, messages, stream: true, temperature: temperature ?? 0.2 };
   // Modelos Qwen/Jean: sin la fase de razonamiento responden varias veces más rápido en CPU.
   // Solo llama-server entiende este parámetro; OpenAI y otros lo rechazarían.
   if (typeof think === 'boolean' && supportsThinkToggle(ep)) payload.chat_template_kwargs = { enable_thinking: think };
   // Herramientas nativas (function calling de OpenAI): el servidor interpreta la plantilla del modelo.
   if (tools?.length) payload.tools = tools;
+  if (wantsStreamUsage(ep)) payload.stream_options = { include_usage: true };
   const body = JSON.stringify(payload);
   const b = bridge();
   let full = '';
+  let usage = null;
   const calls = []; // acumuladas por índice mientras llegan en streaming
   const handleChunk = (json) => {
-    const d = json.choices?.[0]?.delta || {};
-    if (d.reasoning_content) onReasoning?.(d.reasoning_content);
-    if (d.content) { full += d.content; onDelta?.(d.content); }
+    // consumo: estándar OpenAI (usage) o llama-server (timings), normalmente en el último trozo
+    if (json.usage?.prompt_tokens != null || json.usage?.completion_tokens != null) {
+      usage = { prompt: json.usage.prompt_tokens || 0, completion: json.usage.completion_tokens || 0 };
+    } else if (json.timings?.prompt_n != null) {
+      usage = { prompt: (json.timings.prompt_n || 0) + (json.timings.cache_n || 0), completion: json.timings.predicted_n || 0,
+        tps: json.timings.predicted_per_second };
+    }
+    if (json.error) throw new ApiError(typeof json.error === 'string' ? json.error : (json.error.message || 'error del proveedor'), 0);
+    const d = json.choices?.[0]?.delta || json.choices?.[0]?.message || {};
+    // tolerante: cada proveedor nombra distinto el razonamiento
+    const think = d.reasoning_content ?? d.reasoning ?? d.thinking;
+    if (typeof think === 'string' && think) onReasoning?.(think);
+    if (typeof d.content === 'string' && d.content) { full += d.content; onDelta?.(d.content); }
     for (const tc of d.tool_calls || []) {
       const i = tc.index ?? calls.length;
       calls[i] ||= { id: '', name: '', arguments: '' };
@@ -118,14 +130,18 @@ export async function chatStream({ ep, model, messages, signal, onDelta, onReaso
       if (tc.function?.arguments) calls[i].arguments += tc.function.arguments;
     }
   };
-  const finish = () => { if (calls.length) onToolCalls?.(calls.filter(Boolean)); return full; };
+  const finish = () => {
+    if (calls.length) onToolCalls?.(calls.filter(Boolean));
+    if (usage) onUsage?.(usage);
+    return full;
+  };
 
   if (b?.stream) {
     await new Promise((resolve, reject) => {
       const id = b.stream(
         { url: ep.url + '/chat/completions', headers: { Authorization: `Bearer ${ep.key}`, 'Content-Type': 'application/json' }, body },
         {
-          onEvent: (json) => handleChunk(json),
+          onEvent: (json) => { try { handleChunk(json); } catch (e) { b.abort(id); reject(e); } },
           onDone: resolve,
           onError: (err) => reject(new ApiError(err.status ? explain(err.status, err.body) : NETWORK_HINT, err.status || 0)),
         },
@@ -161,7 +177,9 @@ export async function chatStream({ ep, model, messages, signal, onDelta, onReaso
       if (!line.startsWith('data:')) continue;
       const data = line.slice(5).trim();
       if (data === '[DONE]') return finish();
-      try { handleChunk(JSON.parse(data)); } catch { /* línea parcial */ }
+      let json = null;
+      try { json = JSON.parse(data); } catch { /* línea parcial */ }
+      if (json) handleChunk(json); // los errores del proveedor sí se propagan
     }
   }
   return finish();
@@ -197,6 +215,57 @@ export async function discoverSiblings(baseUrl, key) {
   }));
   for (const f of found.sort((a, b) => a.url.localeCompare(b.url))) addEndpoint(f.url, key, 'jean');
   return found.flatMap((f) => f.models);
+}
+
+/** Prueba en paralelo los servidores locales conocidos (Ollama, LM Studio, llama.cpp…). */
+export async function detectLocal(candidates) {
+  return Promise.all(candidates.map(async (c) => {
+    try {
+      const models = await listModels({ url: c.url, key: 'local', timeout: 2500 });
+      return { ...c, models };
+    } catch (e) {
+      return { ...c, models: null, error: e.message };
+    }
+  }));
+}
+
+/** Descarga un modelo con Ollama (POST /api/pull). onProgress(texto, fracción 0-1). */
+export async function ollamaPull(name, onProgress) {
+  const url = 'http://localhost:11434/api/pull';
+  const b = bridge();
+  if (b?.http) {
+    // escritorio: sin CORS; respuesta única al terminar
+    onProgress?.('descargando… (puede tardar varios minutos)', null);
+    const r = await b.http({ url, method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ model: name, stream: false }) });
+    if (r.error) throw new Error('Ollama no responde en localhost:11434. ¿Está abierto?');
+    const j = JSON.parse(r.body || '{}');
+    if (r.status >= 400 || j.error) throw new Error(j.error || `Ollama respondió ${r.status}`);
+    return;
+  }
+  let res;
+  try {
+    res = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ model: name, stream: true }) });
+  } catch {
+    throw new Error('No se pudo hablar con Ollama desde la web: ábrelo con OLLAMA_ORIGINS=* o usa la app de escritorio.');
+  }
+  if (!res.ok) throw new Error(`Ollama respondió ${res.status}`);
+  const reader = res.body.getReader();
+  const dec = new TextDecoder();
+  let buf = '';
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buf += dec.decode(value, { stream: true });
+    let nl;
+    while ((nl = buf.indexOf('\n')) >= 0) {
+      const line = buf.slice(0, nl).trim();
+      buf = buf.slice(nl + 1);
+      if (!line) continue;
+      const j = JSON.parse(line);
+      if (j.error) throw new Error(j.error);
+      onProgress?.(j.status || '', j.total ? (j.completed || 0) / j.total : null);
+    }
+  }
 }
 
 /** Clave aleatoria segura (256 bits, base64url) para usar como JEAN_API_KEY. */

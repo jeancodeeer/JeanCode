@@ -147,12 +147,98 @@ async function systemInfo() {
 const osShort = () => `${os.type()} ${os.release()} ${os.arch()}`;
 
 /* ---------------- deshacer: copia de cada archivo antes de escribirlo ---------------- */
-const snapshots = []; // { root, rel, existed, content }
+const snapshots = []; // { root, rel, existed, content, turn }
+const currentTurn = new Map(); // root -> id del turno en curso
 async function snapshot(root, rel) {
   const file = await inside(root, rel);
   const content = await fs.readFile(file, 'utf8').catch(() => null);
-  snapshots.push({ root, rel, existed: content !== null, content });
-  if (snapshots.length > 200) snapshots.shift();
+  snapshots.push({ root, rel, existed: content !== null, content, turn: currentTurn.get(root) || null });
+  if (snapshots.length > 500) snapshots.shift();
+}
+
+/* ---------------- checkpoints por turno ----------------
+ * Claude Code no cubre los cambios hechos por comandos de terminal. Aquí, si la carpeta es un
+ * repo git, cada turno guarda un "tree" de TODO el árbol de trabajo (incluidos archivos nuevos no
+ * ignorados) con un índice temporal: no crea commits ni toca el índice del usuario. */
+const checkpoints = []; // { root, turn, tree, at }
+
+function git(root, args, env = {}) {
+  return new Promise((resolve) => {
+    // sin conversión de fin de línea: los checkpoints guardan y restauran los bytes exactos
+    execFile('git', ['-c', 'core.autocrlf=false', '-c', 'core.safecrlf=false', '-C', root, ...args], { windowsHide: true, timeout: 120000, maxBuffer: 32 << 20, env: { ...process.env, ...env } },
+      (err, stdout, stderr) => resolve({ ok: !err, out: String(stdout || '').trim(), err: String(stderr || err?.message || '') }));
+  });
+}
+
+async function treeOfWorktree(root) {
+  const idx = path.join(os.tmpdir(), `jeancode-idx-${process.pid}-${Date.now()}`);
+  try {
+    const env = { GIT_INDEX_FILE: idx };
+    const head = await git(root, ['rev-parse', '--verify', 'HEAD']);
+    if (head.ok) await git(root, ['read-tree', 'HEAD'], env);
+    const add = await git(root, ['add', '-A', '--', '.'], env);
+    if (!add.ok) return null;
+    const tree = await git(root, ['write-tree'], env);
+    return tree.ok ? tree.out : null;
+  } finally {
+    await fs.rm(idx, { force: true });
+  }
+}
+
+/** Marca el inicio de un turno del agente y, si hay git, guarda el checkpoint del árbol. */
+async function beginTurn(root, turn) {
+  const base = await fs.realpath(root);
+  currentTurn.set(root, turn);
+  const inRepo = await git(base, ['rev-parse', '--is-inside-work-tree']);
+  if (!inRepo.ok || inRepo.out !== 'true') return { turn, git: false };
+  const tree = await treeOfWorktree(base);
+  if (tree) {
+    checkpoints.push({ root, turn, tree, at: Date.now() });
+    if (checkpoints.length > 100) checkpoints.shift();
+  }
+  return { turn, git: !!tree };
+}
+
+/** Vuelve al estado anterior al turno indicado: árbol git completo si existe; si no, archivos tocados por el agente. */
+async function rewind(root, turn) {
+  const base = await fs.realpath(root);
+  const cp = checkpoints.find((c) => c.root === root && c.turn === turn);
+  if (cp) {
+    const now = await treeOfWorktree(base);
+    const idx = path.join(os.tmpdir(), `jeancode-rw-${process.pid}-${Date.now()}`);
+    try {
+      const env = { GIT_INDEX_FILE: idx };
+      // archivos que existen ahora y no existían en el checkpoint -> se borran
+      // todo limitado a la carpeta de trabajo ("-- ." relativo a -C base): nada fuera se toca
+      const added = now ? await git(base, ['diff', '--name-only', '--relative', '--diff-filter=A', '-z', cp.tree, now, '--', '.']) : { ok: true, out: '' };
+      await git(base, ['read-tree', cp.tree], env);
+      const co = await git(base, ['checkout', cp.tree, '--', '.'], env);
+      if (!co.ok) throw new Error('git checkout falló: ' + co.err.slice(0, 200));
+      let removed = 0;
+      for (const rel of added.out.split('\0').filter(Boolean)) {
+        await fs.rm(await inside(base, rel), { force: true });
+        removed++;
+      }
+      for (let i = snapshots.length - 1; i >= 0; i--) if (snapshots[i].root === root && snapshots[i].turn >= turn) snapshots.splice(i, 1);
+      for (let i = checkpoints.length - 1; i >= 0; i--) if (checkpoints[i].root === root && checkpoints[i].turn > turn) checkpoints.splice(i, 1);
+      return `restaurado el estado de antes de ese mensaje (git: archivos y comandos incluidos${removed ? `, ${removed} archivo(s) nuevo(s) borrado(s)` : ''})`;
+    } finally {
+      await fs.rm(idx, { force: true });
+    }
+  }
+  // sin git: deshace en orden inverso las escrituras del agente desde ese turno
+  let n = 0;
+  for (let i = snapshots.length - 1; i >= 0; i--) {
+    const s = snapshots[i];
+    if (s.root !== root || !s.turn || s.turn < turn) continue;
+    const file = await inside(root, s.rel);
+    if (s.existed) await fs.writeFile(file, s.content, 'utf8');
+    else await fs.rm(file, { force: true });
+    snapshots.splice(i, 1);
+    n++;
+  }
+  return n ? `restaurados ${n} cambio(s) de archivo hechos por el agente (sin git, los comandos de terminal no se pueden deshacer)`
+    : 'no había cambios del agente desde ese mensaje';
 }
 async function writeTracked(root, rel, content) { await snapshot(root, rel); return write(root, rel, content); }
 async function editTracked(root, rel, a, b) { await snapshot(root, rel); return edit(root, rel, a, b); }
@@ -275,7 +361,42 @@ async function commands(root) {
   return out;
 }
 
+/** Subagentes propios (como .claude/agents): .jeancode/agents/<nombre>.md con frontmatter
+ *  name, description y tools (read | all). El cuerpo es su prompt de sistema. */
+async function agents(root) {
+  const dir = await inside(root, '.jeancode/agents').catch(() => null);
+  if (!dir) return [];
+  const out = [];
+  for (const e of await fs.readdir(dir, { withFileTypes: true }).catch(() => [])) {
+    if (!e.isFile() || !e.name.endsWith('.md')) continue;
+    const text = await fs.readFile(path.join(dir, e.name), 'utf8');
+    const fm = (text.match(/^---\s*\n([\s\S]*?)\n---/) || [])[1] || '';
+    const get = (k) => ((fm.match(new RegExp(`^${k}\\s*:\\s*(.+)$`, 'm')) || [])[1] || '').trim().replace(/^["']|["']$/g, '');
+    out.push({
+      name: get('name') || e.name.slice(0, -3), description: get('description').slice(0, 200),
+      write: /^(all|write|todas)$/i.test(get('tools')), prompt: text.replace(/^---[\s\S]*?---\s*/, '').slice(0, 12000),
+    });
+  }
+  return out;
+}
+
+/** Hooks del proyecto (.jeancode/hooks.json). Se devuelven con su huella para que la interfaz
+ *  pida confianza antes de ejecutarlos (un repo ajeno no debe poder correr comandos solo). */
+async function hooks(root) {
+  const file = await inside(root, '.jeancode/hooks.json').catch(() => null);
+  const text = file ? await fs.readFile(file, 'utf8').catch(() => null) : null;
+  if (!text) return null;
+  let data;
+  try { data = JSON.parse(text); } catch (e) { return { error: 'hooks.json no es JSON válido: ' + e.message }; }
+  const clean = {};
+  for (const ev of ['post_edit', 'post_turn']) {
+    if (Array.isArray(data[ev])) clean[ev] = data[ev].filter((c) => typeof c === 'string').slice(0, 10);
+  }
+  const hash = require('node:crypto').createHash('sha256').update(JSON.stringify(clean)).digest('hex');
+  return { hooks: clean, hash };
+}
+
 module.exports = {
   inside, list, read, write: writeTracked, edit: editTracked, search, run, systemInfo, osShort,
-  undo, peek, glob, webfetch, projectMemory, commands,
+  undo, peek, glob, webfetch, projectMemory, commands, agents, hooks, beginTurn, rewind,
 };

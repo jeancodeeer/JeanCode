@@ -118,6 +118,10 @@ ipcMain.handle('fs:glob', (_e, root, pat, limit) => tools.glob(root, pat, limit)
 ipcMain.handle('web:fetch', (_e, url) => tools.webfetch(url));
 ipcMain.handle('project:memory', (_e, root) => tools.projectMemory(root));
 ipcMain.handle('project:commands', (_e, root) => tools.commands(root));
+ipcMain.handle('project:agents', (_e, root) => tools.agents(root));
+ipcMain.handle('project:hooks', (_e, root) => tools.hooks(root));
+ipcMain.handle('turn:begin', (_e, root, turn) => tools.beginTurn(root, turn));
+ipcMain.handle('turn:rewind', (_e, root, turn) => tools.rewind(root, turn));
 ipcMain.handle('system:info', () => tools.systemInfo());
 ipcMain.handle('system:os', () => tools.osShort());
 

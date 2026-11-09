@@ -9,9 +9,8 @@
 <meta property="og:description" content="Chat, código y agente de escritorio para los modelos Jean. Trae tu propia API.">
 <meta name="theme-color" content="#000000">
 <link rel="icon" href="favicon.svg" type="image/svg+xml">
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;700&family=IBM+Plex+Sans+Condensed:wght@500;700&family=IBM+Plex+Sans:wght@400;500;700&display=swap" rel="stylesheet">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="stylesheet" href="css/fonts.css">
 <link rel="stylesheet" href="css/jeancode.css">
 </head>
 <body>
@@ -70,6 +69,7 @@
       <label class="check"><input id="splash-remember" type="checkbox" checked> Recordar en este equipo</label>
       <div id="splash-msg" class="msg" role="status" aria-live="polite"></div>
       <button class="btn primary big" type="submit" id="splash-go">Conectar</button>
+      <button class="btn" type="button" id="splash-local">Usar modelos de esta PC (Ollama, LM Studio…)</button>
     </form>
 
     <div class="splash-aux">
@@ -327,6 +327,31 @@
     <p class="mono fenix-status" id="fenix-status">—</p>
     <button class="btn" type="button" id="fenix-find">Buscar Fénix</button>
   </div>
+  <h3 class="label">MODELOS LOCALES</h3>
+  <div class="fenix-box">
+    <p class="fine">Detecta servidores de modelos en esta PC: Ollama, LM Studio, llama.cpp, vLLM, Jan o un Jean-API-Generator local. Nada sale de tu equipo.</p>
+    <ul class="endpoints" id="local-list"></ul>
+    <button class="btn" type="button" id="local-detect">Detectar modelos de esta PC</button>
+    <form id="ollama-form" class="input-row wrap">
+      <input id="ollama-model" placeholder="modelo de Ollama, p. ej. qwen2.5-coder:7b" spellcheck="false" list="ollama-suggest">
+      <datalist id="ollama-suggest"></datalist>
+      <button class="btn" type="submit">Instalar con Ollama</button>
+    </form>
+    <p class="mono fine" id="ollama-status"></p>
+  </div>
+  <h3 class="label">ESTILO DE RESPUESTA</h3>
+  <select id="style-select" aria-label="Estilo de respuesta">
+    <option value="normal">Normal</option>
+    <option value="concise">Conciso: lo mínimo</option>
+    <option value="explanatory">Explicativo: el porqué de cada decisión</option>
+    <option value="learning">Aprendizaje: te deja partes para escribir</option>
+  </select>
+  <h3 class="label">REGLAS FIJADAS</h3>
+  <p class="fine">Siempre se envían al modelo, en chat y agente, y <strong>nunca se pierden al compactar</strong> (por ejemplo: «no toques la base de datos sin preguntar»).</p>
+  <textarea id="rules" rows="3" spellcheck="false" placeholder="una regla por línea"></textarea>
+  <h3 class="label">COMANDOS PERMITIDOS (AGENTE)</h3>
+  <p class="fine">Comandos que marcaste «permitir siempre», por carpeta de trabajo. Quítalos cuando quieras.</p>
+  <ul class="endpoints" id="allow-list"></ul>
   <h3 class="label">INSTRUCCIONES DEL SISTEMA (CHAT)</h3>
   <textarea id="sys-chat" rows="3" spellcheck="false"></textarea>
   <div class="row gap">
@@ -354,6 +379,7 @@
   <div class="confirm-body" id="confirm-body"></div>
   <div class="row gap end">
     <button class="btn ghost" id="confirm-no">RECHAZAR</button>
+    <button class="btn" id="confirm-always" hidden>PERMITIR SIEMPRE AQUÍ</button>
     <button class="btn primary" id="confirm-yes">PERMITIR</button>
   </div>
 </dialog>

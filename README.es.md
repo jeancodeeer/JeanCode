@@ -13,7 +13,7 @@
 </div>
 
 ```
-N° 001 — JEANCODE                                                    REF. V0.3
+N° 001 — JEANCODE                                                    REF. V0.4
 Cliente gráfico de los modelos Jean. Chatea, genera proyectos completos, usa un agente.
 Sin servidor, sin cuenta, sin rastreo: trae tu propia Jean-API-Generator.
 ```
@@ -53,6 +53,27 @@ Además de tu Jean-API-Generator, JeanCode se conecta a los proveedores que usa 
 ### Fénix
 
 Fénix (27B) corre solo en el puerto 8890: activa `fenix-mode` en Jean-API-Generator y JeanCode lo encuentra solo, o usa **Buscar Fénix** en AJUSTES.
+
+<br>
+
+## 03b — LO QUE JEANCODE HACE DISTINTO
+
+Hecho a partir de las quejas más comunes sobre Claude Code y OpenCode (reportes de usuarios, issues y foros):
+
+| PROBLEMA EN OTROS | JEANCODE |
+|---|---|
+| Claude Code: la compactación automática es opaca y pierde instrucciones | Nunca compacta a escondidas: al 85 % pregunta y muestra el resumen. Las **reglas fijadas** y la memoria del proyecto viajan en cada turno: compactar no las pierde. |
+| Claude Code: coste impredecible | Tokens de entrada y salida bajo cada respuesta, total de la sesión y contexto real en la barra superior. |
+| Claude Code: los checkpoints no cubren los comandos | **Volver aquí** en cada mensaje del agente. En carpetas git el checkpoint es todo el árbol de trabajo (índice temporal, sin commits): también se restauran archivos cambiados por comandos. |
+| Claude Code: fatiga de permisos | **Permitir siempre aquí** por carpeta (prefijo del comando; comando exacto para intérpretes y shells; nunca comandos encadenados), editable en AJUSTES. |
+| Claude Code: difícil actuar sobre el plan | Tras un PLAN: **Aprobar y ejecutar en BUILD** o editar el plan antes. |
+| OpenCode: errores de proveedor (rutas, Ollama, OpenRouter) | Proveedores con la URL correcta, corrección automática de `/v1` y diagnósticos claros (CORS, servidor dormido, clave mala). |
+| OpenCode: instalación difícil | **Usar modelos de esta PC**: un clic encuentra Ollama, LM Studio, llama.cpp, vLLM, Jan o un Jean local; instala modelos de Ollama desde AJUSTES. |
+| OpenCode: interfaz cargada desde un CDN | Fuentes e interfaz van dentro de la app; la web es una PWA instalable que funciona sin conexión. Sin peticiones a Google. |
+| OpenCode: errores con respuestas no estándar | Lector tolerante: `reasoning`, `reasoning_content` o `thinking`; herramientas nativas, en bloque o `<tool_call>` de Qwen; errores del proveedor mostrados tal cual. |
+| OpenCode: interfaz lenta y mucha memoria | El streaming se redibuja como mucho una vez por fotograma (antes redibujaba toda la respuesta con cada token). |
+
+También, de ambos: subagentes del proyecto (`.jeancode/agents/*.md`), hooks (`.jeancode/hooks.json`: `post_edit`, `post_turn`, con confianza previa) y estilos de respuesta (conciso, explicativo, aprendizaje).
 
 <br>
 

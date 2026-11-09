@@ -28,3 +28,25 @@ export const providerOf = (ep) => providerById(ep?.provider || 'jean');
 
 /** Solo los servidores Jean (llama.cpp) aceptan chat_template_kwargs para encender/apagar el razonamiento. */
 export const supportsThinkToggle = (ep) => providerOf(ep).id === 'jean';
+
+/** Proveedores que devuelven el consumo de tokens en streaming si se pide stream_options.include_usage. */
+const USAGE_IN_STREAM = new Set(['openai', 'openrouter', 'groq', 'together', 'fireworks', 'deepseek', 'cerebras', 'mistral', 'xai', 'huggingface']);
+export const wantsStreamUsage = (ep) => USAGE_IN_STREAM.has(providerOf(ep).id);
+
+/** Servidores locales que JeanCode prueba al pulsar "Detectar modelos de esta PC". */
+export const LOCAL_CANDIDATES = [
+  { provider: 'ollama', label: 'Ollama', url: 'http://localhost:11434/v1' },
+  { provider: 'lmstudio', label: 'LM Studio', url: 'http://localhost:1234/v1' },
+  { provider: 'custom', label: 'llama.cpp (llama-server)', url: 'http://localhost:8080/v1' },
+  { provider: 'custom', label: 'vLLM / text-generation-webui', url: 'http://localhost:8000/v1' },
+  { provider: 'jean', label: 'Jean-API-Generator local', url: 'http://localhost:8888/v1' },
+  { provider: 'custom', label: 'Jan', url: 'http://localhost:1337/v1' },
+];
+
+/** Modelos de código recomendados para instalar con Ollama (nombre exacto de `ollama pull`). */
+export const OLLAMA_SUGGESTED = [
+  { name: 'qwen2.5-coder:7b', note: '4.7 GB · buen equilibrio para código' },
+  { name: 'qwen2.5-coder:1.5b', note: '1 GB · PCs con poca RAM' },
+  { name: 'llama3.2:3b', note: '2 GB · chat general rápido' },
+  { name: 'deepseek-coder-v2:16b', note: '8.9 GB · más capaz, necesita 16 GB de RAM' },
+];
