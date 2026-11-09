@@ -188,6 +188,7 @@ textarea { resize: vertical; }
 .model select { width: auto; max-width: 280px; min-height: 36px; padding-left: 26px; font: 500 12px/1 var(--mono); letter-spacing: .04em; background-color: transparent; }
 .status { position: absolute; left: 11px; width: 7px; height: 7px; background: var(--ash); pointer-events: none; z-index: 1; }
 .status.ok { background: var(--ok); }
+.status.warn { background: linear-gradient(90deg, var(--ok) 50%, var(--bad) 50%); } /* conectado, pero alguna conexión falla */
 .status.bad { background: var(--bad); animation: blink 1.2s steps(2) infinite; }
 @keyframes blink { 50% { opacity: .2; } }
 
@@ -342,6 +343,9 @@ pre code { background: none; border: 0; padding: 0; font-size: inherit; }
 .rows li .ep-prov, .rows li .slot-port { color: var(--ink); font-weight: 600; white-space: nowrap; }
 .rows li .ep-url { flex: 1 1 200px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--mono); font-size: 12px; }
 .rows li .ep-meta { font-size: 12px; color: var(--ash); }
+.rows li .status { position: static; flex: none; }
+.rows li .ep-down { flex: 1 1 100%; font: 12px/1.4 var(--mono); color: var(--ash); }
+.route-log { margin: 0 0 var(--s3); padding: var(--s3); max-height: 260px; overflow: auto; background: var(--bg); border: 1px solid var(--line); font: 12px/1.55 var(--mono); color: var(--smoke); white-space: pre-wrap; overflow-wrap: anywhere; }
 .fenix-status { font-size: 12px; color: var(--ash); }
 .fenix-status.ok { color: var(--ok); }
 .os-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 1px; background: var(--line); border: 1px solid var(--line); margin: var(--s4) 0; }

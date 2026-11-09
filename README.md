@@ -44,7 +44,7 @@ No server, no account, no tracking: bring your own Jean-API-Generator.
 
 1. Create your API from **[Jean-API-Generator](https://github.com/jeancodeeer/Jean-API-Generator)** (free GitHub Codespace).
 2. Open **[JeanCode](https://jeancodeeer.github.io/JeanCode/)**. If this device has no API registered, a splash screen asks for your **base URL** (ending in `/v1`) and your **API key**. It can also generate a strong random key for you to use as `JEAN_API_KEY`.
-3. Add both ports (Grey `:8888`, Marvel `:8889`) under **SETTINGS** to see every model in the selector.
+3. Paste the **router** URL (`https://<codespace>-8899.app.github.dev/v1`): one URL brings every model of your Codespace, including the GGUFs you load from Hugging Face. A model port (`:8888`) works too: JeanCode finds the router by itself.
 
 The repository contains **no URLs and no keys**: every user brings their own. In the browser they stay in local storage; in the desktop app the key is encrypted with the OS keychain (`safeStorage`).
 
@@ -53,6 +53,8 @@ The repository contains **no URLs and no keys**: every user brings their own. In
 ### Other APIs
 
 Besides your own Jean-API-Generator, JeanCode connects to the providers OpenCode is known for, all through their OpenAI-compatible API: **OpenAI, Anthropic, Google Gemini, OpenRouter, Groq, Hugging Face Inference Providers, DeepSeek, Mistral, xAI, Together, Fireworks, Cerebras, Ollama, LM Studio** or any other OpenAI-compatible server. Pick the provider in the splash or in SETTINGS; the URL is filled in and the selector groups models by provider. Some providers block calls from web pages (CORS): the desktop app is not affected.
+
+**Routing.** Every connection is checked before it is used: bad URL, http from an https page, a missing or malformed key, a key pasted in the URL, duplicates, and a URL that belongs to another provider (corrected for you). **AUTO** in the model selector picks per mode: the fast model for chat and code, Marvel for the agent, skipping connections that are down. In SETTINGS → MODELS you choose what happens when a model does not answer: show the error, try the same model through another connection, or try any other model. It switches only before the first token arrives and never on key or request errors. SETTINGS → DATA keeps a connection log without keys.
 
 ### Hugging Face → your Codespace
 

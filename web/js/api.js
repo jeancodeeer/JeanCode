@@ -2,7 +2,7 @@
 // (Jean-API-Generator / llama-server) u otro de providers.js (OpenAI, OpenRouter, Groq…).
 // En el escritorio las peticiones pasan por el proceso principal (sin CORS) vía window.jeancodeDesktop.
 import { store } from './store.js';
-import { supportsThinkToggle, wantsStreamUsage } from './providers.js';
+import { supportsThinkToggle, wantsStreamUsage, providerOf } from './providers.js';
 
 const bridge = () => (typeof window !== 'undefined' ? window.jeancodeDesktop : null);
 
@@ -37,65 +37,131 @@ export function addEndpoint(url, key, provider = 'jean') {
 }
 
 export class ApiError extends Error {
-  constructor(message, status) { super(message); this.status = status; }
+  constructor(message, status, detail = '') { super(message); this.status = status; this.detail = detail; }
 }
 
-function explain(status, body) {
-  if (status === 401) return 'La API rechazó la clave (401). Revisa tu JEAN_API_KEY.';
-  if (status === 403) return 'Acceso denegado (403). ¿El puerto del Codespace está como público?';
-  if (status === 404) return 'No se encontró la ruta (404). La URL debe terminar en /v1.';
-  if (status === 503) return 'El modelo todavía está cargando (503). Espera 2–4 minutos tras despertar el Codespace.';
-  return `La API respondió ${status}. ${String(body || '').slice(0, 200)}`;
+const headersFor = (ep) => ({ Authorization: `Bearer ${ep.key}`, 'Content-Type': 'application/json' });
+
+/** Mensaje del servidor ({error:{message}}, {error:"..."}, {message}) sin volcar HTML ni cuerpos enormes. */
+export function serverMessage(body) {
+  const raw = String(body || '');
+  try {
+    const j = JSON.parse(raw);
+    const m = typeof j.error === 'string' ? j.error : (j.error?.message || j.message || j.detail);
+    if (m) return String(m).slice(0, 300);
+  } catch { /* no es JSON */ }
+  return /<html|<!doctype/i.test(raw) ? '' : raw.slice(0, 200);
 }
 
-const NETWORK_HINT = 'No se pudo conectar. Puede que el Codespace esté dormido, que el puerto no sea público o que la URL esté mal.';
+/** Error claro según el proveedor (antes todo hablaba de JEAN_API_KEY, aunque fuera OpenAI). */
+export function explain(status, body, ep) {
+  const p = providerOf(ep);
+  const jean = p.id === 'jean';
+  const detail = serverMessage(body);
+  const tail = detail ? ` Detalle: ${detail}` : '';
+  if (status === 401) return `${p.name} rechazó la clave (401). ${jean ? 'Revisa tu JEAN_API_KEY.' : `Revisa la clave (${p.keyHint}).`}`;
+  if (status === 403) return jean ? 'Acceso denegado (403). ¿El puerto del Codespace está como público? (jean-api.ps1 start lo hace)' : `${p.name} denegó el acceso (403): la clave no tiene permiso para ese modelo o recurso.${tail}`;
+  if (status === 404) return jean && !detail ? 'No se encontró la ruta (404). La URL debe terminar en /v1.' : `No encontrado (404): la URL o el modelo no existen en ${p.name}.${tail}`;
+  if (status === 429) return `${p.name} limitó las peticiones (429): espera un poco o usa otro modelo.${tail}`;
+  if (status === 503 && jean) return detail ? `Jean no está listo (503): ${detail}` : 'El modelo todavía está cargando (503). Espera 2–4 minutos tras despertar el Codespace.';
+  if (status >= 500) return `${p.name} tuvo un error interno (${status}). Suele ser temporal.${tail}`;
+  return `${p.name} respondió ${status}.${tail}`;
+}
+
+function networkHint(ep) {
+  const p = providerOf(ep);
+  if (p.id === 'jean') return 'No se pudo conectar. Puede que el Codespace esté dormido, que el puerto no sea público o que la URL esté mal.';
+  if (p.local) return `No se pudo conectar con ${p.name}. ¿Está abierto en esta PC?`;
+  return `No se pudo conectar con ${p.name}. Revisa la URL y tu conexión.`;
+}
+
+const MODELS_TIMEOUT = 12000;
 
 async function request(ep, path, init = {}) {
   const b = bridge();
-  const headers = { Authorization: `Bearer ${ep.key}`, 'Content-Type': 'application/json' };
+  const timeout = init.timeout ?? ep.timeout ?? 60000;
   if (b?.http) {
-    const r = await b.http({ url: ep.url + path, method: init.method || 'GET', headers, body: init.body });
-    if (r.error) throw new ApiError(NETWORK_HINT + ` (${r.error})`, 0);
-    if (r.status >= 400) throw new ApiError(explain(r.status, r.body), r.status);
+    const r = await b.http({ url: ep.url + path, method: init.method || 'GET', headers: headersFor(ep), body: init.body, timeout });
+    if (r.error) throw new ApiError(networkHint(ep) + ` (${r.error})`, 0);
+    if (r.status >= 400) throw new ApiError(explain(r.status, r.body, ep), r.status, serverMessage(r.body));
     return JSON.parse(r.body);
   }
   let res;
   try {
-    const signal = init.signal || (ep.timeout ? AbortSignal.timeout(ep.timeout) : undefined);
-    res = await fetch(ep.url + path, { ...init, headers, signal });
+    const signal = init.signal || AbortSignal.timeout(timeout);
+    res = await fetch(ep.url + path, { ...init, headers: headersFor(ep), signal });
   } catch (e) {
-    if (e.name === 'TimeoutError') throw new ApiError(NETWORK_HINT, 0);
-    if (e.name === 'AbortError') throw e;
-    throw new ApiError(NETWORK_HINT, 0);
+    if (e.name === 'AbortError' && init.signal?.aborted) throw e;
+    throw new ApiError(networkHint(ep) + (e.name === 'TimeoutError' ? ' (sin respuesta a tiempo)' : ''), 0);
   }
-  if (!res.ok) throw new ApiError(explain(res.status, await res.text().catch(() => '')), res.status);
+  if (!res.ok) { const body = await res.text().catch(() => ''); throw new ApiError(explain(res.status, body, ep), res.status, serverMessage(body)); }
   return res.json();
 }
 
+/** Modelos de un endpoint y, si es el router de Jean-API-Generator, qué puertos no están disponibles y por qué. */
+export async function listModelsDetailed(ep) {
+  const data = await request(ep, '/models', { timeout: ep.timeout ?? MODELS_TIMEOUT });
+  return {
+    ids: (data.data || data.models || []).map((m) => m.id || m.name).filter(Boolean),
+    router: !!data.jean?.router,
+    unavailable: Array.isArray(data.jean?.unavailable) ? data.jean.unavailable : [],
+  };
+}
+
 export async function listModels(ep) {
-  const data = await request(ep, '/models');
-  return (data.data || data.models || []).map((m) => m.id || m.name).filter(Boolean);
+  return (await listModelsDetailed(ep)).ids;
 }
 
 /** Prueba un endpoint; si falla con 404 y no termina en /v1, reintenta añadiéndolo. */
-export async function probe(url, key) {
-  const ep = { url: normalizeUrl(url), key: String(key).trim() };
+export async function probe(url, key, provider = 'jean') {
+  const ep = { url: normalizeUrl(url), key: String(key).trim(), provider };
   try {
     return { url: ep.url, models: await listModels(ep) };
   } catch (e) {
     if ((e.status === 404 || e.status === 0) && !/\/v1$/.test(ep.url)) {
       const alt = { ...ep, url: ep.url + '/v1' };
-      return { url: alt.url, models: await listModels(alt) };
+      try { return { url: alt.url, models: await listModels(alt) }; } catch { throw e; }
     }
     throw e;
   }
 }
 
+/* Parámetros que algunos proveedores/modelos rechazan con 400 (p. ej. temperatura en modelos de
+   razonamiento de OpenAI). Si el 400 nombra uno, se reintenta sin él y se recuerda en la sesión. */
+const DROPPABLE = [
+  { key: 'temperature', re: /temperature/i },
+  { key: 'stream_options', re: /stream_options|include_usage/i },
+  { key: 'chat_template_kwargs', re: /chat_template_kwargs|enable_thinking/i },
+];
+const dropped = new Map(); // `${ep.id}|${model}` -> Set de parámetros a omitir
+export const droppedParams = (ep, model) => [...(dropped.get(`${ep.id}|${model}`) || [])];
+
 /**
  * Chat en streaming. onDelta(texto), onReasoning(texto). Devuelve el texto completo.
  * El razonamiento de Qwen puede llegar como reasoning_content o dentro de <think>…</think>.
  */
-export async function chatStream({ ep, model, messages, signal, onDelta, onReasoning, onToolCalls, onUsage, temperature, think, tools }) {
+export async function chatStream(opts) {
+  const { ep, model } = opts;
+  const key = `${ep.id}|${model}`;
+  for (let tries = 0; ; tries++) {
+    let streamed = false;
+    const mark = (fn) => fn && ((...a) => { streamed = true; return fn(...a); });
+    try {
+      return await chatOnce({ ...opts, onDelta: mark(opts.onDelta), onReasoning: mark(opts.onReasoning) }, dropped.get(key));
+    } catch (e) {
+      // 400 que nombra un parámetro opcional: se quita y se repite (solo si aún no salió texto)
+      const why = `${e.detail || ''} ${e.message || ''}`;
+      const drop = e.status === 400 && !streamed && tries < DROPPABLE.length
+        && DROPPABLE.find((d) => d.re.test(why) && !dropped.get(key)?.has(d.key));
+      if (!drop) throw e;
+      if (!dropped.has(key)) dropped.set(key, new Set());
+      dropped.get(key).add(drop.key);
+      opts.onAdapt?.(drop.key, e);
+    }
+  }
+}
+
+async function chatOnce({ ep, model, messages, signal, onDelta, onReasoning, onToolCalls, onUsage, temperature, think, tools }, skip = new Set()) {
   const payload = { model, messages, stream: true, temperature: temperature ?? 0.2 };
   // Modelos Qwen/Jean: sin la fase de razonamiento responden varias veces más rápido en CPU.
   // Solo llama-server entiende este parámetro; OpenAI y otros lo rechazarían.
@@ -103,6 +169,7 @@ export async function chatStream({ ep, model, messages, signal, onDelta, onReaso
   // Herramientas nativas (function calling de OpenAI): el servidor interpreta la plantilla del modelo.
   if (tools?.length) payload.tools = tools;
   if (wantsStreamUsage(ep)) payload.stream_options = { include_usage: true };
+  for (const k of skip) delete payload[k];
   const body = JSON.stringify(payload);
   const b = bridge();
   let full = '';
@@ -116,7 +183,7 @@ export async function chatStream({ ep, model, messages, signal, onDelta, onReaso
       usage = { prompt: (json.timings.prompt_n || 0) + (json.timings.cache_n || 0), completion: json.timings.predicted_n || 0,
         tps: json.timings.predicted_per_second };
     }
-    if (json.error) throw new ApiError(typeof json.error === 'string' ? json.error : (json.error.message || 'error del proveedor'), 0);
+    if (json.error) throw new ApiError(typeof json.error === 'string' ? json.error : (json.error.message || 'error del proveedor'), json.error.code === 503 ? 503 : 0);
     const d = json.choices?.[0]?.delta || json.choices?.[0]?.message || {};
     // tolerante: cada proveedor nombra distinto el razonamiento
     const think = d.reasoning_content ?? d.reasoning ?? d.thinking;
@@ -139,11 +206,13 @@ export async function chatStream({ ep, model, messages, signal, onDelta, onReaso
   if (b?.stream) {
     await new Promise((resolve, reject) => {
       const id = b.stream(
-        { url: ep.url + '/chat/completions', headers: { Authorization: `Bearer ${ep.key}`, 'Content-Type': 'application/json' }, body },
+        { url: ep.url + '/chat/completions', headers: headersFor(ep), body },
         {
           onEvent: (json) => { try { handleChunk(json); } catch (e) { b.abort(id); reject(e); } },
           onDone: resolve,
-          onError: (err) => reject(new ApiError(err.status ? explain(err.status, err.body) : NETWORK_HINT, err.status || 0)),
+          onError: (err) => reject(err.status
+            ? new ApiError(explain(err.status, err.body, ep), err.status, serverMessage(err.body))
+            : new ApiError(networkHint(ep) + (err.message ? ` (${err.message})` : ''), 0)),
         },
       );
       signal?.addEventListener('abort', () => { b.abort(id); reject(new DOMException('aborted', 'AbortError')); });
@@ -154,14 +223,13 @@ export async function chatStream({ ep, model, messages, signal, onDelta, onReaso
   let res;
   try {
     res = await fetch(ep.url + '/chat/completions', {
-      method: 'POST', signal, body,
-      headers: { Authorization: `Bearer ${ep.key}`, 'Content-Type': 'application/json' },
+      method: 'POST', signal, body, headers: headersFor(ep),
     });
   } catch (e) {
     if (e.name === 'AbortError') throw e;
-    throw new ApiError(NETWORK_HINT, 0);
+    throw new ApiError(networkHint(ep), 0);
   }
-  if (!res.ok) throw new ApiError(explain(res.status, await res.text().catch(() => '')), res.status);
+  if (!res.ok) { const text = await res.text().catch(() => ''); throw new ApiError(explain(res.status, text, ep), res.status, serverMessage(text)); }
 
   const reader = res.body.getReader();
   const dec = new TextDecoder();
@@ -185,13 +253,15 @@ export async function chatStream({ ep, model, messages, signal, onDelta, onReaso
   return finish();
 }
 
-// Jean-API-Generator sirve un modelo por puerto: Grey :8888, Marvel :8889, Fénix :8890.
-const JEAN_PORTS = ['8888', '8889', '8890'];
+// Jean-API-Generator sirve un modelo por puerto: Grey :8888, Marvel :8889, Fénix :8890, y el router
+// (todos los modelos en una URL) en :8899.
+const JEAN_PORTS = ['8899', '8888', '8889', '8890'];
+export const ROUTER_PORT = '8899';
 
 /** URLs de los otros puertos del mismo servidor (Codespaces "-8888.app.github.dev" o host:8888). */
 export function siblingUrls(url) {
   const out = [];
-  for (const re of [/-(8888|8889|8890)(\.app\.github\.dev)/, /:(8888|8889|8890)(?=\/|$)/]) {
+  for (const re of [/-(8888|8889|8890|8899)(\.app\.github\.dev)/, /:(8888|8889|8890|8899)(?=\/|$)/]) {
     const m = url.match(re);
     if (!m) continue;
     for (const p of JEAN_PORTS) {
@@ -203,18 +273,40 @@ export function siblingUrls(url) {
   return out;
 }
 
-/** Agrega los puertos hermanos que respondan con la misma clave. Devuelve los modelos nuevos. */
+/** true si la URL es el router (:8899) de un Jean-API-Generator. */
+export const isRouterUrl = (url) => new RegExp(`[-:]${ROUTER_PORT}(\\.app\\.github\\.dev)?(?=/|$)`).test(String(url));
+
+/**
+ * Completa la conexión a un Jean-API-Generator. Si el router (:8899) responde, basta con él: una URL,
+ * todos los modelos (incluidos los GGUF de Hugging Face cargados en el Codespace). Si no (Codespace
+ * con una versión anterior), se agregan los puertos de modelo que respondan. Devuelve los modelos nuevos.
+ */
 export async function discoverSiblings(baseUrl, key) {
   const known = new Set(getEndpoints().map((e) => e.url));
-  const found = [];
-  await Promise.all(siblingUrls(normalizeUrl(baseUrl)).filter((u) => !known.has(u)).map(async (u) => {
+  const urls = siblingUrls(normalizeUrl(baseUrl)).filter((u) => !known.has(u));
+  const router = urls.find(isRouterUrl);
+  if (router) {
     try {
-      const models = await listModels({ url: u, key, timeout: 8000 });
+      const r = await listModelsDetailed({ url: router, key, provider: 'jean', timeout: 8000 });
+      if (r.router) { addEndpoint(router, key, 'jean'); return r.ids; }
+    } catch { /* Codespace sin router: se usan los puertos */ }
+  }
+  if (isRouterUrl(baseUrl) || getEndpoints().some((e) => isRouterUrl(e.url) && sameServer(e.url, baseUrl))) return [];
+  const found = [];
+  await Promise.all(urls.filter((u) => !isRouterUrl(u)).map(async (u) => {
+    try {
+      const models = await listModels({ url: u, key, provider: 'jean', timeout: 8000 });
       if (models.length) found.push({ url: u, models });
     } catch { /* ese puerto no tiene modelo: normal */ }
   }));
   for (const f of found.sort((a, b) => a.url.localeCompare(b.url))) addEndpoint(f.url, key, 'jean');
   return found.flatMap((f) => f.models);
+}
+
+/** Dos URLs del mismo Codespace/servidor que solo cambian de puerto. */
+export function sameServer(a, b) {
+  const base = (u) => String(u).replace(/-(8888|8889|8890|8899)(\.app\.github\.dev)/, '-*$2').replace(/:(8888|8889|8890|8899)(?=\/|$)/, ':*');
+  return base(a) === base(b);
 }
 
 /** Prueba en paralelo los servidores locales conocidos (Ollama, LM Studio, llama.cpp…). */
@@ -236,7 +328,7 @@ export async function ollamaPull(name, onProgress) {
   if (b?.http) {
     // escritorio: sin CORS; respuesta única al terminar
     onProgress?.('descargando… (puede tardar varios minutos)', null);
-    const r = await b.http({ url, method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ model: name, stream: false }) });
+    const r = await b.http({ url, method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ model: name, stream: false }), timeout: 3600000 });
     if (r.error) throw new Error('Ollama no responde en localhost:11434. ¿Está abierto?');
     const j = JSON.parse(r.body || '{}');
     if (r.status >= 400 || j.error) throw new Error(j.error || `Ollama respondió ${r.status}`);

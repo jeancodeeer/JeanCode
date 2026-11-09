@@ -315,7 +315,7 @@
   </div>
 
   <section data-pane="conn">
-    <p class="note">Tu Jean-API-Generator y cualquier otra API. Los modelos de todas aparecen agrupados en el selector.</p>
+    <p class="note">Tu Jean-API-Generator y cualquier otra API. Para un Codespace basta la URL del <strong>router</strong> (puerto 8899): trae todos sus modelos, incluidos los que cargues desde Hugging Face.</p>
     <ul class="rows" id="endpoint-list"></ul>
     <form id="endpoint-form" class="add-form">
       <select id="ep-provider" aria-label="Proveedor"></select>
@@ -323,10 +323,14 @@
       <input id="ep-key" type="password" required placeholder="Clave" spellcheck="false">
       <button class="btn" type="submit">Agregar</button>
     </form>
+    <p class="msg" id="ep-msg" role="status" aria-live="polite"></p>
     <p class="note" id="ep-provider-note"></p>
   </section>
 
   <section data-pane="models" hidden>
+    <h3>Elección automática y respaldo</h3>
+    <p class="note">En el selector, <strong>AUTO</strong> elige por modo: chat y code empiezan por el modelo rápido; el agente, por Marvel. Si el modelo elegido no responde, JeanCode puede probar otro antes de que llegue la respuesta. Nunca cambia por errores de clave o de la petición.</p>
+    <label class="field"><span class="label">Si un modelo no responde</span><select id="fallback-select"></select></label>
     <h3>Fénix</h3>
     <p class="note">El modelo más capaz (27B). En un Codespace de 16 GB corre solo, en el puerto 8890: actívalo con <code>.\jean-api.ps1 fenix-mode</code> y búscalo aquí. Responde más lento.</p>
     <div class="row gap"><button class="btn" type="button" id="fenix-find">Buscar Fénix</button><span class="mono fenix-status" id="fenix-status">—</span></div>
@@ -367,6 +371,10 @@
       <button class="btn" id="export-btn">Exportar historial</button>
       <button class="btn danger" id="wipe-btn">Borrar todo de este equipo</button>
     </div>
+    <h3>Registro de conexión</h3>
+    <p class="note">Las últimas peticiones a tus APIs (más nuevas arriba), sin claves ni tokens. Cópialo si necesitas ayuda con un fallo.</p>
+    <pre class="route-log" id="route-log"></pre>
+    <div class="row gap"><button class="btn" type="button" id="log-copy">Copiar registro</button></div>
   </section>
 </dialog>
 

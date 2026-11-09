@@ -11,11 +11,14 @@ export const SLOTS = [
   { port: 8890, label: 'Puerto 8890 (Fénix)' },
 ];
 
-/** URL del servidor de control a partir de un endpoint Jean (-8888.app.github.dev → -8899). */
+/**
+ * URL del servidor de control a partir de un endpoint Jean (-8888.app.github.dev → -8899).
+ * El router de Jean-API-Generator ya vive en :8899: su URL sin /v1 es el control.
+ */
 export function controlUrlFrom(epUrl) {
   const u = normalizeUrl(epUrl).replace(/\/v1$/, '');
-  if (/-(8888|8889|8890)\.app\.github\.dev/.test(u)) return u.replace(/-(8888|8889|8890)(\.app\.github\.dev)/, '-8899$2');
-  if (/:(8888|8889|8890)$/.test(u)) return u.replace(/:(8888|8889|8890)$/, ':8899');
+  if (/-(8888|8889|8890|8899)\.app\.github\.dev/.test(u)) return u.replace(/-(8888|8889|8890|8899)(\.app\.github\.dev)/, '-8899$2');
+  if (/:(8888|8889|8890|8899)$/.test(u)) return u.replace(/:(8888|8889|8890|8899)$/, ':8899');
   return '';
 }
 

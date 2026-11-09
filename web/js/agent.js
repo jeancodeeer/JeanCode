@@ -241,7 +241,8 @@ export async function runAgent(ctx, messages, { sub = false } = {}) {
     let reasoning = '';
     let nativeCalls = [];
     ctx.onEvent({ type: 'assistant-start', sub });
-    const stream = () => chatStream({
+    // ctx.chat = enrutador de la interfaz (respaldo y registro); sin él, llamada directa
+    const stream = () => (ctx.chat || chatStream)({
       ep: ctx.ep, model: ctx.model, messages, signal: ctx.signal, think: ctx.think,
       tools: ctx.native !== false ? TOOL_SCHEMAS : undefined,
       onDelta: (t) => { text += t; ctx.onEvent({ type: 'assistant-delta', text, reasoning, sub }); },

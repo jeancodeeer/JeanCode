@@ -2,7 +2,7 @@
 import { CONFIG, BRAND } from './config.js';
 import { VERSION, isNewer } from './version.js';
 import { store } from './store.js';
-import { getEndpoints, saveEndpoints, addEndpoint, listModels, probe, chatStream, generateKey, discoverSiblings, detectLocal, ollamaPull } from './api.js';
+import { getEndpoints, saveEndpoints, addEndpoint, probe, generateKey, discoverSiblings, detectLocal, ollamaPull } from './api.js';
 import { renderMarkdown, esc } from './md.js';
 import { CODE_SYSTEM, parseFiles, projectContext, buildPreview } from './code.js';
 import { makeZip, downloadBlob } from './zip.js';
@@ -10,6 +10,7 @@ import { agentSystem, runAgent, stripToolBlocks, STYLES } from './agent.js';
 import { BUILTIN, PROMPTS, matchCommands, parseCommand, expandCustom, estimateTokens, CONTEXT_LIMIT } from './commands.js';
 import { lineDiff, diffStats } from './diff.js';
 import { PROVIDERS, providerById, providerOf, LOCAL_CANDIDATES, OLLAMA_SUGGESTED } from './providers.js';
+import { AUTO, modelKey, chat as routedChat, probeEndpoint, healthOf, validateEndpoint, pickAuto, visibleModels, resolveSaved, formatLog, routeLog, FALLBACK_POLICIES, fallbackPolicy } from './router.js';
 import { SLOTS, controlUrlFrom, hfSearch, hfFiles, control, gb } from './hf.js';
 
 const $ = (s, el = document) => el.querySelector(s);
@@ -22,7 +23,8 @@ const state = {
   mode: 'chat',
   threads: store.get('threads', []),
   current: null,
-  models: [],
+  models: [],   // todos los modelos de todas las conexiones (respaldo)
+  visible: [],  // los que se muestran en el selector (sin duplicados de un mismo Codespace)
   model: store.get('model', null),
   abort: null,
   file: null,
@@ -140,15 +142,19 @@ $('#splash-form').addEventListener('submit', async (e) => {
   btn.disabled = true;
   try {
     store.setRemember($('#splash-remember').checked);
-    const provider = $('#splash-provider').value;
-    const r = await probe($('#splash-url').value, $('#splash-key').value);
+    const v = validateEndpoint({ url: $('#splash-url').value, key: $('#splash-key').value, provider: $('#splash-provider').value }, { desktop: !!desktop });
+    if (!v.ok) { msg.className = 'msg err'; msg.textContent = v.errors.join(' '); return; }
+    if (v.provider !== $('#splash-provider').value) $('#splash-provider').value = v.provider;
+    const provider = v.provider;
+    const r = await probe(v.url, v.key, provider);
     saveEndpoints([]);
-    addEndpoint(r.url, $('#splash-key').value, provider);
+    addEndpoint(r.url, v.key, provider);
     let more = [];
     if (provider === 'jean') {
       msg.textContent = 'Conectado. Buscando los demás modelos del servidor…';
-      more = await discoverSiblings(r.url, $('#splash-key').value);
+      more = await discoverSiblings(r.url, v.key);
     }
+    if (v.warnings.length) toast(v.warnings[0]);
     store.set('siblingsChecked', true);
     const all = [...r.models, ...more];
     msg.textContent = `Conectado: ${all.slice(0, 8).join(', ')}${all.length > 8 ? ` y ${all.length - 8} más` : ''}` || 'Conectado';
@@ -167,38 +173,53 @@ async function refreshModels() {
   const sel = $('#model-select');
   const status = $('#api-status');
   state.models = [];
-  let results = await Promise.allSettled(eps.map(async (ep) => (await listModels(ep)).map((id) => ({ id, ep }))));
+  let results = await Promise.allSettled(eps.map(async (ep) => (await probeEndpoint(ep)).ids.map((id) => ({ id, ep }))));
   // En modo Fénix, Jean-API-Generator apaga Grey/Marvel y sirve Fénix solo en :8890.
-  // Si algo dejó de responder, se buscan puertos hermanos nuevos (una vez por recarga).
+  // Si algo dejó de responder, se buscan puertos hermanos nuevos o el router (una vez por recarga).
   if (results.some((r) => r.status === 'rejected') && !refreshModels.searched) {
     refreshModels.searched = true;
     const before = getEndpoints().length;
-    for (const ep of eps) await discoverSiblings(ep.url, ep.key);
+    for (const ep of eps) if (providerOf(ep).id === 'jean') await discoverSiblings(ep.url, ep.key);
     if (getEndpoints().length > before) return refreshModels();
   }
   results.forEach((r) => { if (r.status === 'fulfilled') state.models.push(...r.value); });
+  // todos los modelos sirven de respaldo; en el selector, cada modelo de un Codespace aparece una vez
+  state.visible = visibleModels(state.models);
   const failed = results.filter((r) => r.status === 'rejected');
-  status.className = 'status ' + (state.models.length ? 'ok' : 'bad');
-  status.title = failed.length ? failed.map((f) => f.reason.message).join('\n') : 'API conectada';
-  if (!state.models.length) {
-    sel.innerHTML = '<option>SIN CONEXIÓN</option>';
+  const unavailable = eps.flatMap((ep) => (healthOf(ep)?.unavailable || []).map((u) => `${u.slot}: ${u.reason}`));
+  status.className = 'status ' + (state.visible.length ? (failed.length ? 'warn' : 'ok') : 'bad');
+  status.title = [...failed.map((f) => f.reason.message), ...unavailable].join('\n') || 'API conectada';
+  if (!state.visible.length) {
+    sel.innerHTML = '<option value="">SIN CONEXIÓN</option>';
   } else {
     // agrupados por proveedor; dentro de cada grupo, en el orden que da la API
     const groups = new Map();
-    state.models.forEach((m, i) => {
+    for (const m of state.visible) {
       const name = providerOf(m.ep).name;
       if (!groups.has(name)) groups.set(name, []);
-      groups.get(name).push(`<option value="${i}">${esc(modelLabel(m.id))}</option>`);
-    });
-    sel.innerHTML = groups.size === 1
+      groups.get(name).push(`<option value="${esc(modelKey(m))}">${esc(modelLabel(m.id))}</option>`);
+    }
+    const auto = `<option value="${AUTO}">AUTO</option>`;
+    sel.innerHTML = auto + (groups.size === 1
       ? [...groups.values()][0].join('')
-      : [...groups].map(([name, opts]) => `<optgroup label="${esc(name.toUpperCase())}">${opts.join('')}</optgroup>`).join('');
+      : [...groups].map(([name, opts]) => `<optgroup label="${esc(name.toUpperCase())}">${opts.join('')}</optgroup>`).join(''));
   }
-  const idx = state.models.findIndex((m) => m.id === state.model);
-  sel.value = String(idx >= 0 ? idx : 0);
-  if (failed.length && !state.models.length) toast(failed[0].reason.message);
+  const saved = resolveSaved(state.model, state.visible);
+  if (saved) state.model = modelKey(saved); // migra lo guardado por versiones anteriores (solo el nombre)
+  sel.value = state.model === AUTO ? AUTO : saved ? modelKey(saved) : (state.visible[0] ? modelKey(state.visible[0]) : '');
+  updateAutoLabel();
+  if (failed.length && !state.visible.length) toast(failed[0].reason.message);
   renderFenix();
 }
+
+/** La opción AUTO dice qué modelo elegiría ahora para el modo actual. */
+function updateAutoLabel() {
+  const opt = $(`#model-select option[value="${AUTO}"]`);
+  if (!opt) return;
+  const pick = pickAuto(state.visible || [], state.mode, getEndpoints());
+  opt.textContent = pick ? `AUTO · ${pick.id.toUpperCase()}` : 'AUTO';
+}
+
 /** Etiqueta del selector: nombre + carácter del modelo (ayuda a elegir en CPU). */
 function modelLabel(id) {
   const name = id.toUpperCase();
@@ -217,17 +238,20 @@ function renderFenix() {
 }
 
 function selectModel(id) {
-  const i = state.models.findIndex((m) => m.id.toLowerCase() === id.toLowerCase());
-  if (i < 0) return false;
-  $('#model-select').value = String(i);
-  state.model = state.models[i].id;
+  const want = String(id).toLowerCase();
+  if (want === AUTO) { $('#model-select').value = AUTO; state.model = AUTO; store.set('model', AUTO); updateAutoLabel(); return true; }
+  const m = (state.visible || []).find((x) => x.id.toLowerCase() === want);
+  if (!m) return false;
+  $('#model-select').value = modelKey(m);
+  state.model = modelKey(m);
   store.set('model', state.model);
   return true;
 }
 $('#model-select').addEventListener('change', (e) => {
-  const m = state.models[+e.target.value];
+  if (e.target.value === AUTO) { state.model = AUTO; store.set('model', AUTO); updateAutoLabel(); return; }
+  const m = (state.visible || []).find((x) => modelKey(x) === e.target.value);
   if (m) {
-    state.model = m.id; store.set('model', m.id);
+    state.model = modelKey(m); store.set('model', state.model);
     if (/fenix/i.test(m.id) && !store.get('fenixWarned', false)) {
       store.set('fenixWarned', true);
       toast('FÉNIX EN CPU RESPONDE LENTO: ÚSALO PARA TAREAS DIFÍCILES');
@@ -246,7 +270,23 @@ $('#fenix-find')?.addEventListener('click', async () => {
   renderSettings();
   toast(state.models.some((m) => /fenix/i.test(m.id)) ? 'FÉNIX CONECTADO' : 'FÉNIX NO RESPONDE EN :8890');
 });
-const currentModel = () => state.models[+$('#model-select').value] || state.models[0] || null;
+const currentModel = () => {
+  const v = $('#model-select').value;
+  const visible = state.visible || [];
+  if (v === AUTO) return pickAuto(visible, state.mode, getEndpoints());
+  return visible.find((m) => modelKey(m) === v) || visible[0] || null;
+};
+
+/** Contexto del enrutador para cada envío: catálogo completo (respaldo) y aviso cuando cambia de backend. */
+function routeCtx(onSwitch) {
+  return {
+    models: state.models, mode: state.mode, endpoints: getEndpoints(),
+    onRoute: ({ from, to, error }) => {
+      toast(`${from.id.toUpperCase()} NO RESPONDE → ${to.id.toUpperCase()}`);
+      onSwitch?.(to, from, error);
+    },
+  };
+}
 
 /* ---------------------------------------------------------------- hilos */
 function renderThreads() {
@@ -275,6 +315,7 @@ $('#new-thread').addEventListener('click', () => { state.current = null; openThr
 function setMode(mode) {
   if (mode === 'agent' && !desktop) return;
   state.mode = mode;
+  updateAutoLabel();
   $$('.mode').forEach((b) => {
     const on = b.dataset.mode === mode;
     b.classList.toggle('active', on);
@@ -616,10 +657,10 @@ async function compact(t) {
   try {
     const transcript = (t.agentMessages || t.messages).filter((x) => x.role !== 'system')
       .map((x) => `${x.role.toUpperCase()}: ${x.content}`).join('\n\n').slice(-120000);
-    const summary = await chatStream({
-      ep: m.ep, model: m.id, signal: state.abort.signal, think: false,
+    const { text: summary } = await routedChat(m, {
+      signal: state.abort.signal, think: false,
       messages: [{ role: 'system', content: PROMPTS.compact }, { role: 'user', content: transcript }],
-    });
+    }, routeCtx());
     const content = `RESUMEN DE LA CONVERSACIÓN ANTERIOR (lo que el modelo recordará; edítalo con /clear si algo falta):\n${summary.trim()}`;
     t.messages = [{ role: 'assistant', content }];
     t.agentMessages = null;
@@ -668,16 +709,17 @@ async function sendChat(t, m) {
     }
   };
   try {
-    await chatStream({
-      ep: m.ep, model: m.id, signal: state.abort.signal, think: state.think,
+    await routedChat(m, {
+      signal: state.abort.signal, think: state.think,
       messages: [{ role: 'system', content: sys }, ...history],
       onDelta: (d) => { text += d; paint(); },
       onReasoning: (d) => { reasoning += d; paint(); },
       onUsage: (u) => { usage = u; },
-    });
+    }, routeCtx((to) => { $('.who', row).textContent = `JEAN · ${to.id.toUpperCase()}`; }));
   } finally {
     if (filesRaf) cancelAnimationFrame(filesRaf);
     updateMessage(row, text, reasoning, false);
+    if (!text && !reasoning) row.remove(); // falló antes de responder: solo queda el mensaje de error
     if (usage) { setUsage(row, usage); addUsage(t, usage); }
     if (text) t.messages.push({ role: 'assistant', content: text, reasoning, usage: usage || undefined });
     if (state.mode === 'code') applyFiles(t, base, text, true);
@@ -873,6 +915,8 @@ async function sendAgent(t, m, text, turn) {
   let row = null;
   const ctx = {
     ep: m.ep, model: m.id, desktop, workspace: state.workspace, mode: state.perm, agent: state.agent, sys, think: state.think,
+    // el agente pide cada paso al enrutador; si cambia de backend, los pasos siguientes siguen en el nuevo
+    chat: (o) => routedChat({ id: o.model, ep: o.ep }, o, routeCtx((to) => { ctx.ep = to.ep; ctx.model = to.id; })).then((r) => r.text),
     signal: state.abort.signal, confirm: confirmDialog, isAllowed, allowCommand, runHooks: hookRunner(hooks),
     onEvent: (ev) => {
       if (ev.type === 'usage') { addUsage(t, ev.usage); if (row) setUsage(row, ev.usage); }
@@ -1148,6 +1192,7 @@ $('#hf-load').addEventListener('click', async () => {
     for (const ep of getEndpoints()) if (providerOf(ep).id === 'jean') await discoverSiblings(ep.url, ep.key);
     refreshModels.searched = false;
     await refreshModels();
+    selectModel(j.alias);
     refreshSlots();
     toast(`MODELO CARGADO: ${String(j.alias).toUpperCase()}`);
   } catch (err) {
@@ -1190,11 +1235,15 @@ function renderSettings() {
   const list = $('#endpoint-list');
   const eps = getEndpoints();
   list.innerHTML = eps.map((ep) => {
-    const n = state.models.filter((m) => m.ep.id === ep.id).map((m) => m.id).join(', ');
-    const count = state.models.filter((m) => m.ep.id === ep.id).length;
-    const meta = count > 3 ? `${count} modelos` : (n || 'sin respuesta');
-    return `<li><span class="ep-prov">${esc(providerOf(ep).name)}</span><span class="ep-url">${esc(ep.url)}</span><span class="ep-meta">${esc(meta)}</span><button class="btn ghost sm" data-ep-del="${ep.id}">QUITAR</button></li>`;
+    const h = healthOf(ep);
+    const ids = state.models.filter((m) => m.ep.id === ep.id).map((m) => m.id);
+    const what = h?.ok ? (ids.length > 3 ? `${ids.length} modelos` : ids.join(', ') || 'sin modelos') : (h?.error || 'sin respuesta');
+    const meta = [h?.router ? 'router' : '', what, h?.ok && h.ms != null ? `${h.ms} ms` : ''].filter(Boolean).join(' · ');
+    const down = (h?.unavailable || []).map((u) => `<span class="ep-down">${esc(u.slot)}: ${esc(u.reason)}</span>`).join('');
+    return `<li><span class="status ${h ? (h.ok ? 'ok' : 'bad') : ''}" aria-hidden="true"></span><span class="ep-prov">${esc(providerOf(ep).name)}</span><span class="ep-url">${esc(ep.url)}</span><span class="ep-meta">${esc(meta)}</span><button class="btn ghost sm" data-ep-test="${ep.id}">PROBAR</button><button class="btn ghost sm" data-ep-del="${ep.id}">QUITAR</button>${down}</li>`;
   }).join('') || '<li>Sin endpoints.</li>';
+  $('#fallback-select').value = fallbackPolicy();
+  renderRouteLog();
   $('#sys-chat').value = store.get('sysChat', DEFAULT_SYS);
   $('#style-select').value = store.get('style', 'normal');
   $('#rules').value = store.get('rules', '');
@@ -1290,15 +1339,41 @@ $('#endpoint-list').addEventListener('click', async (e) => {
 });
 $('#endpoint-form').addEventListener('submit', async (e) => {
   e.preventDefault();
+  const msg = $('#ep-msg');
+  msg.className = 'msg';
+  const v = validateEndpoint({ url: $('#ep-url').value, key: $('#ep-key').value, provider: $('#ep-provider').value },
+    { existing: getEndpoints(), desktop: !!desktop });
+  if (!v.ok) { msg.className = 'msg err'; msg.textContent = v.errors.join(' '); return; }
+  if (v.provider !== $('#ep-provider').value) $('#ep-provider').value = v.provider;
+  msg.textContent = [...v.warnings, 'Probando la conexión…'].join(' ');
   try {
-    const provider = $('#ep-provider').value;
-    const r = await probe($('#ep-url').value, $('#ep-key').value);
-    addEndpoint(r.url, $('#ep-key').value, provider);
-    if (provider === 'jean') await discoverSiblings(r.url, $('#ep-key').value);
+    const r = await probe(v.url, v.key, v.provider);
+    addEndpoint(r.url, v.key, v.provider);
+    if (v.provider === 'jean') await discoverSiblings(r.url, v.key);
     $('#ep-url').value = ''; $('#ep-key').value = '';
     await refreshModels(); renderSettings();
+    msg.textContent = v.warnings.join(' ');
     toast('CONEXIÓN AGREGADA');
-  } catch (err) { $('#ep-provider-note').textContent = diagnose(err, $('#ep-provider').value); toast('NO SE PUDO CONECTAR'); }
+  } catch (err) { msg.className = 'msg err'; msg.textContent = diagnose(err, v.provider); toast('NO SE PUDO CONECTAR'); }
+});
+$('#endpoint-list').addEventListener('click', async (e) => {
+  const b = e.target.closest('[data-ep-test]');
+  if (!b) return;
+  const ep = getEndpoints().find((x) => x.id === b.dataset.epTest);
+  if (!ep) return;
+  b.disabled = true;
+  try { const r = await probeEndpoint(ep); toast(`OK · ${r.ids.length} MODELOS · ${healthOf(ep).ms} MS`); } catch (err) { toast(diagnose(err, providerOf(ep).id)); }
+  b.disabled = false;
+  await refreshModels(); renderSettings();
+});
+$('#fallback-select').innerHTML = Object.entries(FALLBACK_POLICIES).map(([k, v]) => `<option value="${k}">${esc(v)}</option>`).join('');
+$('#fallback-select').addEventListener('change', (e) => { store.set('fallback', e.target.value); toast('RESPALDO: ' + e.target.selectedOptions[0].textContent.toUpperCase()); });
+function renderRouteLog() {
+  const box = $('#route-log');
+  if (box) box.textContent = routeLog().length ? formatLog().split('\n').slice(-60).reverse().join('\n') : 'Todavía no hay peticiones registradas.';
+}
+$('#log-copy').addEventListener('click', async () => {
+  try { await navigator.clipboard.writeText(formatLog() || '(vacío)'); toast('REGISTRO COPIADO (SIN CLAVES)'); } catch { toast('NO SE PUDO COPIAR'); }
 });
 $('#sys-chat').addEventListener('change', (e) => store.set('sysChat', e.target.value));
 $('#export-btn').addEventListener('click', () => {

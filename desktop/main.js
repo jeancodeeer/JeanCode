@@ -62,11 +62,15 @@ const okUrl = (u) => { try { return ['https:', 'http:'].includes(new URL(u).prot
 
 ipcMain.handle('http', async (_e, req) => {
   if (!okUrl(req.url)) return { error: 'URL inválida' };
+  const method = String(req.method || 'GET').toUpperCase();
+  if (!['GET', 'POST'].includes(method)) return { error: 'método no permitido' };
+  // sin límite, un servidor colgado dejaba la interfaz esperando para siempre
+  const timeout = Math.min(Math.max(Number(req.timeout) || 60000, 1000), 3600000);
   try {
-    const res = await fetch(req.url, { method: req.method || 'GET', headers: req.headers, body: req.body });
+    const res = await fetch(req.url, { method, headers: req.headers, body: req.body, signal: AbortSignal.timeout(timeout) });
     return { status: res.status, body: await res.text() };
   } catch (e) {
-    return { error: e.message };
+    return { error: e.name === 'TimeoutError' ? 'sin respuesta a tiempo' : e.message };
   }
 });
 
