@@ -13,7 +13,7 @@
 </div>
 
 ```
-N° 001 — JEANCODE                                                    REF. V0.2
+N° 001 — JEANCODE                                                    REF. V0.3
 Cliente gráfico de los modelos Jean. Chatea, genera proyectos completos, usa un agente.
 Sin servidor, sin cuenta, sin rastreo: trae tu propia Jean-API-Generator.
 ```
@@ -39,6 +39,20 @@ Sin servidor, sin cuenta, sin rastreo: trae tu propia Jean-API-Generator.
 3. Agrega los dos puertos (Grey `:8888`, Marvel `:8889`) en **AJUSTES** para ver todos los modelos.
 
 El repositorio **no contiene URLs ni claves**: cada usuario trae las suyas. En el navegador quedan en el almacenamiento local; en el escritorio la clave se cifra con el llavero del sistema (`safeStorage`).
+
+<br>
+
+### Otras APIs
+
+Además de tu Jean-API-Generator, JeanCode se conecta a los proveedores que usa OpenCode, todos por su API compatible con OpenAI: **OpenAI, Anthropic, Google Gemini, OpenRouter, Groq, Hugging Face Inference Providers, DeepSeek, Mistral, xAI, Together, Fireworks, Cerebras, Ollama, LM Studio** o cualquier servidor compatible con OpenAI. Eliges el proveedor en el splash o en AJUSTES; la URL se rellena sola y el selector agrupa los modelos por proveedor. Algunos proveedores bloquean las llamadas desde páginas web (CORS); la app de escritorio no tiene ese límite.
+
+### Hugging Face → tu Codespace
+
+**MODELOS DE HUGGING FACE**, en el menú lateral, busca modelos GGUF en el Hub, muestra cada archivo con su peso y si cabe en la RAM libre de tu Codespace, y lo carga en el puerto 8888, 8889 u 8890 con barra de progreso. Usa el servidor de control de Jean-API-Generator (`:8899`, misma `JEAN_API_KEY`). El token de HF es opcional (solo para modelos privados o restringidos), se queda en tu equipo y solo viaja a tu Codespace para esa descarga. **Restaurar** vuelve al modelo Jean.
+
+### Fénix
+
+Fénix (27B) corre solo en el puerto 8890: activa `fenix-mode` en Jean-API-Generator y JeanCode lo encuentra solo, o usa **Buscar Fénix** en AJUSTES.
 
 <br>
 

@@ -52,6 +52,11 @@
 
     <form id="splash-form" class="stack" autocomplete="off">
       <label class="field">
+        <span class="label">PROVEEDOR</span>
+        <select id="splash-provider" aria-describedby="splash-provider-note"></select>
+      </label>
+      <p class="fine provider-note" id="splash-provider-note"></p>
+      <label class="field">
         <span class="label">URL BASE DE TU API</span>
         <input id="splash-url" type="url" required placeholder="https://tu-codespace-8888.app.github.dev/v1" spellcheck="false">
       </label>
@@ -108,6 +113,7 @@
     <div class="threads" id="threads" aria-label="Historial"></div>
 
     <div class="rail-foot">
+      <button class="link" data-panel="hf">MODELOS DE HUGGING FACE</button>
       <button class="link" data-panel="download">DESCARGAR APP</button>
       <button class="link" data-panel="info">INFO DEL REPO</button>
       <button class="link" data-panel="help">COMANDOS Y ATAJOS</button>
@@ -305,14 +311,16 @@
 
 <dialog class="panel wide" id="panel-settings">
   <div class="panel-head"><h2 class="display sm">AJUSTES</h2><button class="btn ghost icon" data-close>✕</button></div>
-  <h3 class="label">ENDPOINTS</h3>
-  <p class="fine">Grey y Marvel corren en puertos distintos: agrega uno por cada URL. Los modelos de todos aparecen en el selector.</p>
+  <h3 class="label">CONEXIONES</h3>
+  <p class="fine">Tu Jean-API-Generator y cualquier otra API: OpenAI, Anthropic, Gemini, OpenRouter, Groq, Hugging Face, Ollama… Los modelos de todas aparecen agrupados en el selector.</p>
   <ul class="endpoints" id="endpoint-list"></ul>
   <form id="endpoint-form" class="input-row wrap">
-    <input id="ep-url" type="url" required placeholder="https://…-8889.app.github.dev/v1" spellcheck="false">
+    <select id="ep-provider" aria-label="Proveedor"></select>
+    <input id="ep-url" type="url" required placeholder="URL base" spellcheck="false">
     <input id="ep-key" type="password" required placeholder="API key" spellcheck="false">
     <button class="btn" type="submit">AGREGAR</button>
   </form>
+  <p class="fine provider-note" id="ep-provider-note"></p>
   <h3 class="label">FÉNIX</h3>
   <div class="fenix-box">
     <p class="fine">Fénix es el modelo más capaz (27B). En un Codespace de 16 GB corre <strong>solo</strong>, en el puerto 8890: activa el modo Fénix en tu Jean-API-Generator con <code>.\jean-api.ps1 fenix-mode</code> (vuelve con <code>standard-mode</code>) y pulsa Buscar Fénix. Responde más lento que Grey y Marvel.</p>
@@ -347,6 +355,45 @@
   <div class="row gap end">
     <button class="btn ghost" id="confirm-no">RECHAZAR</button>
     <button class="btn primary" id="confirm-yes">PERMITIR</button>
+  </div>
+</dialog>
+
+<dialog class="panel wide" id="panel-hf">
+  <div class="panel-head"><h2 class="display sm">MODELOS DE HUGGING FACE</h2><button class="btn ghost icon" data-close>✕</button></div>
+  <p class="fine">Busca un modelo GGUF en Hugging Face y cárgalo en un puerto de tu Codespace de Jean-API-Generator. El Codespace lo descarga y lo sirve; aparece solo en el selector de modelos.</p>
+
+  <div class="hf-grid">
+    <label class="field">
+      <span class="label">TOKEN DE HUGGING FACE (OPCIONAL)</span>
+      <input id="hf-token" type="password" placeholder="hf_… — solo para modelos privados o restringidos" spellcheck="false" autocomplete="off">
+    </label>
+    <label class="field">
+      <span class="label">CONTROL DE TU CODESPACE</span>
+      <input id="hf-control" type="url" placeholder="https://tu-codespace-8899.app.github.dev" spellcheck="false">
+    </label>
+  </div>
+  <p class="fine" id="hf-control-note">El token se guarda solo en este equipo y viaja únicamente a tu Codespace al descargar.</p>
+
+  <h3 class="label">TU CODESPACE</h3>
+  <ul class="endpoints" id="hf-slots"><li>Pulsa Actualizar para ver qué sirve cada puerto.</li></ul>
+  <div class="row gap"><button class="btn" type="button" id="hf-refresh">Actualizar</button><span class="mono fine" id="hf-res"></span></div>
+
+  <h3 class="label">BUSCAR MODELOS GGUF</h3>
+  <form id="hf-search-form" class="input-row">
+    <input id="hf-query" type="search" placeholder="qwen coder, llama 3.2, phi-4…" spellcheck="false">
+    <button class="btn" type="submit">Buscar</button>
+  </form>
+  <ul class="hf-results" id="hf-results"></ul>
+
+  <div class="hf-pick" id="hf-pick" hidden>
+    <h3 class="label" id="hf-pick-title">ARCHIVOS</h3>
+    <ul class="hf-files" id="hf-files"></ul>
+    <div class="row gap wrap">
+      <label class="select"><span class="label">PUERTO</span><select id="hf-slot"></select></label>
+      <button class="btn primary" type="button" id="hf-load" disabled>Cargar en mi Codespace</button>
+    </div>
+    <div class="hf-progress" id="hf-progress" hidden><i id="hf-bar"></i></div>
+    <p class="mono fine" id="hf-job"></p>
   </div>
 </dialog>
 

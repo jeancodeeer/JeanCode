@@ -49,7 +49,7 @@ ipcMain.handle('config:save', async (_e, cfg) => {
   const enc = safeStorage.isEncryptionAvailable();
   const out = {
     endpoints: (cfg.endpoints || []).map((ep) => (enc
-      ? { id: ep.id, url: ep.url, keyEnc: safeStorage.encryptString(ep.key).toString('base64') }
+      ? { id: ep.id, url: ep.url, provider: ep.provider, keyEnc: safeStorage.encryptString(ep.key).toString('base64') }
       : ep)),
   };
   await fs.mkdir(path.dirname(CONFIG_FILE()), { recursive: true });

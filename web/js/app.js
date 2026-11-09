@@ -8,6 +8,8 @@ import { makeZip, downloadBlob } from './zip.js';
 import { agentSystem, runAgent, stripToolBlocks } from './agent.js';
 import { BUILTIN, PROMPTS, matchCommands, parseCommand, expandCustom, estimateTokens, CONTEXT_LIMIT } from './commands.js';
 import { lineDiff, diffStats } from './diff.js';
+import { PROVIDERS, providerById, providerOf } from './providers.js';
+import { SLOTS, controlUrlFrom, hfSearch, hfFiles, control, gb } from './hf.js';
 
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => [...el.querySelectorAll(s)];
@@ -74,6 +76,26 @@ async function enterApp() {
   openThread(state.threads.find((t) => t.mode === state.mode)?.id || null);
 }
 
+/** Rellena un selector de proveedor y ajusta URL, clave y nota al cambiar. */
+function wireProvider(select, urlInput, keyInput, note) {
+  select.innerHTML = PROVIDERS.map((p) => `<option value="${p.id}">${esc(p.name)}</option>`).join('');
+  const apply = () => {
+    const p = providerById(select.value);
+    urlInput.value = p.url;
+    urlInput.placeholder = p.id === 'jean' ? 'https://tu-codespace-8888.app.github.dev/v1' : (p.url || 'https://tu-servidor/v1');
+    keyInput.placeholder = p.keyHint;
+    const parts = [];
+    if (p.note) parts.push(esc(p.note));
+    if (!p.browser && !desktop) parts.push('Este proveedor suele bloquear llamadas desde la web: si falla, usa la app de escritorio.');
+    if (p.keyUrl) parts.push(`<a href="${p.keyUrl}" target="_blank" rel="noopener">${p.id === 'jean' ? 'Crear mi API' : 'Conseguir la clave'} ↗</a>`);
+    note.innerHTML = parts.join(' ');
+  };
+  select.addEventListener('change', apply);
+  apply();
+}
+wireProvider($('#splash-provider'), $('#splash-url'), $('#splash-key'), $('#splash-provider-note'));
+wireProvider($('#ep-provider'), $('#ep-url'), $('#ep-key'), $('#ep-provider-note'));
+
 $('#splash-show').addEventListener('click', () => {
   const i = $('#splash-key');
   i.type = i.type === 'password' ? 'text' : 'password';
@@ -92,13 +114,18 @@ $('#splash-form').addEventListener('submit', async (e) => {
   btn.disabled = true;
   try {
     store.setRemember($('#splash-remember').checked);
+    const provider = $('#splash-provider').value;
     const r = await probe($('#splash-url').value, $('#splash-key').value);
     saveEndpoints([]);
-    addEndpoint(r.url, $('#splash-key').value);
-    msg.textContent = 'Conectado. Buscando los demás modelos del servidor…';
-    const more = await discoverSiblings(r.url, $('#splash-key').value);
+    addEndpoint(r.url, $('#splash-key').value, provider);
+    let more = [];
+    if (provider === 'jean') {
+      msg.textContent = 'Conectado. Buscando los demás modelos del servidor…';
+      more = await discoverSiblings(r.url, $('#splash-key').value);
+    }
     store.set('siblingsChecked', true);
-    msg.textContent = `Conectado: ${[...r.models, ...more].join(', ') || 'sin modelos listados'}`;
+    const all = [...r.models, ...more];
+    msg.textContent = `Conectado: ${all.slice(0, 8).join(', ')}${all.length > 8 ? ` y ${all.length - 8} más` : ''}` || 'Conectado';
     await enterApp();
   } catch (err) {
     msg.className = 'msg err';
@@ -127,9 +154,20 @@ async function refreshModels() {
   const failed = results.filter((r) => r.status === 'rejected');
   status.className = 'status ' + (state.models.length ? 'ok' : 'bad');
   status.title = failed.length ? failed.map((f) => f.reason.message).join('\n') : 'API conectada';
-  sel.innerHTML = state.models.length
-    ? state.models.map((m, i) => `<option value="${i}">${esc(modelLabel(m.id))}</option>`).join('')
-    : '<option>SIN CONEXIÓN</option>';
+  if (!state.models.length) {
+    sel.innerHTML = '<option>SIN CONEXIÓN</option>';
+  } else {
+    // agrupados por proveedor; dentro de cada grupo, en el orden que da la API
+    const groups = new Map();
+    state.models.forEach((m, i) => {
+      const name = providerOf(m.ep).name;
+      if (!groups.has(name)) groups.set(name, []);
+      groups.get(name).push(`<option value="${i}">${esc(modelLabel(m.id))}</option>`);
+    });
+    sel.innerHTML = groups.size === 1
+      ? [...groups.values()][0].join('')
+      : [...groups].map(([name, opts]) => `<optgroup label="${esc(name.toUpperCase())}">${opts.join('')}</optgroup>`).join('');
+  }
   const idx = state.models.findIndex((m) => m.id === state.model);
   sel.value = String(idx >= 0 ? idx : 0);
   if (failed.length && !state.models.length) toast(failed[0].reason.message);
@@ -738,6 +776,7 @@ function openPanel(name) {
   if (name === 'download') loadReleases();
   if (name === 'skills') renderSkills();
   if (name === 'help') renderHelp();
+  if (name === 'hf') initHf();
   d.showModal();
   $('#rail').classList.remove('open');
 }
@@ -753,6 +792,143 @@ $$('.it').forEach((b) => b.addEventListener('click', () => {
   $$('.it').forEach((x) => x.classList.toggle('active', x === b));
   $$('[data-info]').forEach((s) => { s.hidden = s.dataset.info !== b.dataset.it; });
 }));
+
+/* ---------------------------------------------- Hugging Face → Codespace */
+const hf = { repo: null, file: null, ram: 0, files: [] };
+const jeanEndpoint = () => getEndpoints().find((e) => providerOf(e).id === 'jean');
+
+function initHf() {
+  $('#hf-token').value = store.get('hfToken', '');
+  const ep = jeanEndpoint();
+  if (!$('#hf-control').value) $('#hf-control').value = store.get('hfControl', '') || (ep ? controlUrlFrom(ep.url) : '');
+  $('#hf-slot').innerHTML = SLOTS.map((s) => `<option value="${s.port}">${s.label}</option>`).join('');
+  $('#hf-slot').value = '8890';
+  if (!ep) $('#hf-control-note').textContent = 'Primero conecta tu Jean-API-Generator (splash o AJUSTES): el control usa su misma clave.';
+  if (ep && $('#hf-control').value) refreshSlots();
+}
+$('#hf-token').addEventListener('change', (e) => store.set('hfToken', e.target.value.trim()));
+$('#hf-control').addEventListener('change', (e) => store.set('hfControl', e.target.value.trim().replace(/\/+$/, '')));
+
+const ctl = (path, body) => {
+  const ep = jeanEndpoint();
+  if (!ep) throw new Error('Conecta primero tu Jean-API-Generator.');
+  const base = $('#hf-control').value.trim().replace(/\/+$/, '');
+  if (!base) throw new Error('Falta la URL del control (puerto 8899 de tu Codespace).');
+  return control(base, ep.key, path, body);
+};
+
+async function refreshSlots() {
+  const list = $('#hf-slots');
+  list.innerHTML = '<li>Consultando tu Codespace…</li>';
+  try {
+    const st = await ctl('/status');
+    hf.ram = st.ram_available || 0;
+    $('#hf-res').textContent = `RAM libre ${gb(st.ram_available)} de ${gb(st.ram_total)} · disco libre ${gb(st.disk_free)}`;
+    list.innerHTML = Object.entries(st.slots).map(([port, s]) => {
+      const what = s.custom || s.default;
+      const state = s.busy ? 'cargando…' : s.running ? (s.models.join(', ') || 'iniciando') : 'apagado';
+      const restore = s.custom ? `<button class="btn ghost sm" data-restore="${port}">Restaurar</button>` : '';
+      return `<li><span class="slot-port">:${port}</span><span class="ep-url">${esc(what)}</span><span class="ep-meta">${esc(state)}</span>${restore}</li>`;
+    }).join('');
+    renderHfFiles();
+  } catch (err) {
+    list.innerHTML = `<li>${esc(err.message)}</li>`;
+  }
+}
+$('#hf-refresh').addEventListener('click', refreshSlots);
+$('#hf-slots').addEventListener('click', async (e) => {
+  const b = e.target.closest('[data-restore]');
+  if (!b) return;
+  try {
+    await ctl('/restore', { slot: +b.dataset.restore });
+    toast(`PUERTO ${b.dataset.restore}: VOLVIENDO AL MODELO JEAN`);
+    setTimeout(refreshSlots, 1500);
+  } catch (err) { toast(err.message); }
+});
+
+$('#hf-search-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const q = $('#hf-query').value.trim();
+  if (!q) return;
+  const box = $('#hf-results');
+  box.innerHTML = '<li class="fine">Buscando…</li>';
+  try {
+    const items = await hfSearch(q, store.get('hfToken', ''));
+    box.innerHTML = items.length ? items.map((m) => `<li><button type="button" data-repo="${esc(m.id)}">
+      <span>${esc(m.id)}${m.gated ? ' · restringido' : ''}</span><span class="hf-meta">↓ ${m.downloads.toLocaleString()}</span></button></li>`).join('')
+      : '<li class="fine">Sin resultados GGUF.</li>';
+  } catch (err) {
+    box.innerHTML = `<li class="fine">No se pudo buscar: ${esc(err.message)}</li>`;
+  }
+});
+
+$('#hf-results').addEventListener('click', async (e) => {
+  const b = e.target.closest('[data-repo]');
+  if (!b) return;
+  $$('#hf-results button').forEach((x) => x.classList.toggle('active', x === b));
+  hf.repo = b.dataset.repo; hf.file = null;
+  $('#hf-pick').hidden = false;
+  $('#hf-pick-title').textContent = `ARCHIVOS DE ${hf.repo.toUpperCase()}`;
+  $('#hf-files').innerHTML = '<li class="fine">Leyendo archivos…</li>';
+  $('#hf-load').disabled = true;
+  try {
+    hf.files = await hfFiles(hf.repo, store.get('hfToken', ''));
+    renderHfFiles();
+  } catch (err) {
+    $('#hf-files').innerHTML = `<li class="fine">No se pudieron leer: ${esc(err.message)} (¿repo privado o restringido? agrega tu token)</li>`;
+  }
+});
+
+function renderHfFiles() {
+  if (!hf.repo) return;
+  const fits = (size) => !hf.ram || size * 1.1 + 1.5 * 2 ** 30 <= hf.ram;
+  $('#hf-files').innerHTML = hf.files.length ? hf.files.map((f) => {
+    const note = f.split ? 'dividido: no compatible' : fits(f.size) ? 'cabe' : 'no cabe en la RAM libre';
+    return `<li><button type="button" data-file="${esc(f.path)}" class="${f.path === hf.file ? 'active' : ''} ${fits(f.size) && !f.split ? '' : 'nofit'}" ${f.split ? 'disabled' : ''}>
+      <span>${esc(f.path)}</span><span class="hf-meta">${gb(f.size)} · ${note}</span></button></li>`;
+  }).join('') : '<li class="fine">Este repo no tiene archivos .gguf.</li>';
+}
+$('#hf-files').addEventListener('click', (e) => {
+  const b = e.target.closest('[data-file]');
+  if (!b) return;
+  hf.file = b.dataset.file;
+  renderHfFiles();
+  $('#hf-load').disabled = false;
+});
+
+$('#hf-load').addEventListener('click', async () => {
+  if (!hf.repo || !hf.file) return;
+  const btn = $('#hf-load');
+  const job = $('#hf-job');
+  btn.disabled = true;
+  try {
+    const slot = +$('#hf-slot').value;
+    const token = store.get('hfToken', '') || undefined;
+    let j = await ctl('/load', { repo: hf.repo, file: hf.file, slot, hf_token: token });
+    $('#hf-progress').hidden = false;
+    while (!['done', 'error'].includes(j.state)) {
+      const pct = j.size ? Math.round((j.downloaded / j.size) * 100) : 0;
+      $('#hf-bar').style.width = pct + '%';
+      job.textContent = j.state === 'downloading' ? `Descargando ${pct}% de ${gb(j.size)}…`
+        : j.state === 'starting' ? 'Arrancando el modelo…' : 'En cola…';
+      await new Promise((r) => setTimeout(r, 2500));
+      j = await ctl(`/jobs/${j.id}`);
+    }
+    if (j.state === 'error') throw new Error(j.error);
+    $('#hf-bar').style.width = '100%';
+    job.textContent = `Listo: ${j.alias} en el puerto ${slot}.`;
+    for (const ep of getEndpoints()) if (providerOf(ep).id === 'jean') await discoverSiblings(ep.url, ep.key);
+    refreshModels.searched = false;
+    await refreshModels();
+    refreshSlots();
+    toast(`MODELO CARGADO: ${String(j.alias).toUpperCase()}`);
+  } catch (err) {
+    job.textContent = err.message;
+    toast(err.message);
+  } finally {
+    btn.disabled = false;
+  }
+});
 
 function renderHelp() {
   const rows = BUILTIN.filter((c) => desktop || !c.modes.every((m) => m === 'agent'))
@@ -785,7 +961,9 @@ function renderSettings() {
   const eps = getEndpoints();
   list.innerHTML = eps.map((ep) => {
     const n = state.models.filter((m) => m.ep.id === ep.id).map((m) => m.id).join(', ');
-    return `<li><span class="ep-url">${esc(ep.url)}</span><span class="ep-meta">${esc(n || 'sin respuesta')}</span><button class="btn ghost sm" data-ep-del="${ep.id}">QUITAR</button></li>`;
+    const count = state.models.filter((m) => m.ep.id === ep.id).length;
+    const meta = count > 3 ? `${count} modelos` : (n || 'sin respuesta');
+    return `<li><span class="ep-prov">${esc(providerOf(ep).name)}</span><span class="ep-url">${esc(ep.url)}</span><span class="ep-meta">${esc(meta)}</span><button class="btn ghost sm" data-ep-del="${ep.id}">QUITAR</button></li>`;
   }).join('') || '<li>Sin endpoints.</li>';
   $('#sys-chat').value = store.get('sysChat', DEFAULT_SYS);
   renderFenix();
@@ -800,9 +978,10 @@ $('#endpoint-list').addEventListener('click', async (e) => {
 $('#endpoint-form').addEventListener('submit', async (e) => {
   e.preventDefault();
   try {
+    const provider = $('#ep-provider').value;
     const r = await probe($('#ep-url').value, $('#ep-key').value);
-    addEndpoint(r.url, $('#ep-key').value);
-    await discoverSiblings(r.url, $('#ep-key').value);
+    addEndpoint(r.url, $('#ep-key').value, provider);
+    if (provider === 'jean') await discoverSiblings(r.url, $('#ep-key').value);
     $('#ep-url').value = ''; $('#ep-key').value = '';
     await refreshModels(); renderSettings();
     toast('ENDPOINT AGREGADO');

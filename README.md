@@ -14,7 +14,7 @@
 </div>
 
 ```
-N° 001 — JEANCODE                                                    REF. V0.2
+N° 001 — JEANCODE                                                    REF. V0.3
 A graphical client for the Jean models. Chat, generate whole projects, run an agent.
 No server, no account, no tracking: bring your own Jean-API-Generator.
 ```
@@ -47,6 +47,20 @@ No server, no account, no tracking: bring your own Jean-API-Generator.
 3. Add both ports (Grey `:8888`, Marvel `:8889`) under **SETTINGS** to see every model in the selector.
 
 The repository contains **no URLs and no keys**: every user brings their own. In the browser they stay in local storage; in the desktop app the key is encrypted with the OS keychain (`safeStorage`).
+
+<br>
+
+### Other APIs
+
+Besides your own Jean-API-Generator, JeanCode connects to the providers OpenCode is known for, all through their OpenAI-compatible API: **OpenAI, Anthropic, Google Gemini, OpenRouter, Groq, Hugging Face Inference Providers, DeepSeek, Mistral, xAI, Together, Fireworks, Cerebras, Ollama, LM Studio** or any other OpenAI-compatible server. Pick the provider in the splash or in SETTINGS; the URL is filled in and the selector groups models by provider. Some providers block calls from web pages (CORS): the desktop app is not affected.
+
+### Hugging Face → your Codespace
+
+**HUGGING FACE MODELS** in the side menu searches GGUF models on the Hub, shows each file with its size and whether it fits in your Codespace's free RAM, and loads it into port 8888, 8889 or 8890 with a progress bar. It talks to the control server of Jean-API-Generator (`:8899`, same `JEAN_API_KEY`). Your HF token is optional (only for private or gated models), stays on your device and is sent only to your Codespace for that download. **Restore** puts the Jean model back.
+
+### Fénix
+
+Fénix (27B) runs alone on port 8890: enable `fenix-mode` in Jean-API-Generator and JeanCode finds it by itself, or use **Find Fénix** in SETTINGS.
 
 <br>
 

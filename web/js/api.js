@@ -1,6 +1,8 @@
-// Cliente OpenAI-compatible para Jean-API-Generator (llama-server). Cada endpoint = { id, url, key }.
+// Cliente OpenAI-compatible. Cada endpoint = { id, url, key, provider }; provider = 'jean'
+// (Jean-API-Generator / llama-server) u otro de providers.js (OpenAI, OpenRouter, Groq…).
 // En el escritorio las peticiones pasan por el proceso principal (sin CORS) vía window.jeancodeDesktop.
 import { store } from './store.js';
+import { supportsThinkToggle } from './providers.js';
 
 const bridge = () => (typeof window !== 'undefined' ? window.jeancodeDesktop : null);
 
@@ -26,9 +28,9 @@ export function saveEndpoints(list) {
   store.set('endpoints', list);
 }
 
-export function addEndpoint(url, key) {
+export function addEndpoint(url, key, provider = 'jean') {
   const list = getEndpoints();
-  const ep = { id: crypto.randomUUID(), url: normalizeUrl(url), key: String(key).trim() };
+  const ep = { id: crypto.randomUUID(), url: normalizeUrl(url), key: String(key).trim(), provider };
   list.push(ep);
   saveEndpoints(list);
   return ep;
@@ -96,7 +98,8 @@ export async function probe(url, key) {
 export async function chatStream({ ep, model, messages, signal, onDelta, onReasoning, onToolCalls, temperature, think, tools }) {
   const payload = { model, messages, stream: true, temperature: temperature ?? 0.2 };
   // Modelos Qwen/Jean: sin la fase de razonamiento responden varias veces más rápido en CPU.
-  if (typeof think === 'boolean') payload.chat_template_kwargs = { enable_thinking: think };
+  // Solo llama-server entiende este parámetro; OpenAI y otros lo rechazarían.
+  if (typeof think === 'boolean' && supportsThinkToggle(ep)) payload.chat_template_kwargs = { enable_thinking: think };
   // Herramientas nativas (function calling de OpenAI): el servidor interpreta la plantilla del modelo.
   if (tools?.length) payload.tools = tools;
   const body = JSON.stringify(payload);
@@ -192,7 +195,7 @@ export async function discoverSiblings(baseUrl, key) {
       if (models.length) found.push({ url: u, models });
     } catch { /* ese puerto no tiene modelo: normal */ }
   }));
-  for (const f of found.sort((a, b) => a.url.localeCompare(b.url))) addEndpoint(f.url, key);
+  for (const f of found.sort((a, b) => a.url.localeCompare(b.url))) addEndpoint(f.url, key, 'jean');
   return found.flatMap((f) => f.models);
 }
 
