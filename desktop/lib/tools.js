@@ -206,8 +206,16 @@ async function beginTurn(root, turn) {
   // git add / checkout: en ese caso no se usa git para los checkpoints (solo copias de archivos)
   // solo la configuración del propio repo (.git/config, la que trae un repo ajeno); la global del
   // usuario (p. ej. Git LFS) es suya y de confianza. Un include en .git/config también se trata como riesgo.
-  const risky = await git(base, ['config', '--local', '--get-regexp', '^(filter\\..*\\.(clean|smudge|process)|core\\.fsmonitor|include\\..*|includeif\\..*)$']);
-  if (risky.ok && risky.out) return { turn, git: false, reason: 'el repo define filtros o fsmonitor propios' };
+  // Se revisan TODAS las fuentes con --show-scope: cualquier coincidencia que no venga de la
+  // configuración global del usuario (local, worktree, etc.) se trata como riesgo. Si este git no
+  // admite --show-scope, por prudencia tampoco se usa git.
+  const scan = await git(base, ['config', '--show-scope', '--get-regexp',
+    '^(filter\\..*\\.(clean|smudge|process)|core\\.fsmonitor|include\\..*|includeif\\..*|extensions\\.worktreeconfig)$']);
+  if (!scan.ok && scan.err && !/^$/.test(scan.out) && !/exit code 1|returned 1/i.test(scan.err) && /unknown option|usage/i.test(scan.err)) {
+    return { turn, git: false, reason: 'versión de git sin --show-scope' };
+  }
+  const repoScoped = scan.out.split('\n').filter(Boolean).filter((l) => !/^(global|command)\t/.test(l));
+  if (repoScoped.length) return { turn, git: false, reason: 'el repo define filtros, fsmonitor o includes propios' };
   const tree = await treeOfWorktree(base);
   if (tree) {
     checkpoints.push({ root, turn, tree, at: Date.now() });
