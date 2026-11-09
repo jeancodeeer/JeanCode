@@ -187,9 +187,9 @@ async function refreshModels() {
 /** Etiqueta del selector: nombre + carácter del modelo (ayuda a elegir en CPU). */
 function modelLabel(id) {
   const name = id.toUpperCase();
-  if (/fenix/i.test(id)) return `${name} · LENTO, EL MÁS CAPAZ`;
-  if (/marvel/i.test(id)) return `${name} · AGENTE`;
-  if (/grey/i.test(id)) return `${name} · RÁPIDO`;
+  if (/fenix/i.test(id)) return `${name} · lento, el más capaz`;
+  if (/marvel/i.test(id)) return `${name} · agente`;
+  if (/grey/i.test(id)) return `${name} · rápido`;
   return name;
 }
 
@@ -241,7 +241,7 @@ function renderThreads() {
   box.innerHTML = '<div class="t-group">RECIENTES</div>' + list.map((t) => `
     <div class="thread ${t.id === state.current ? 'active' : ''}" data-id="${t.id}" role="button" tabindex="0">
       <span class="t-title">${esc(t.title)}</span>
-      <button class="t-del" data-del="${t.id}" aria-label="Borrar">✕</button>
+      <button class="t-del" data-del="${t.id}" aria-label="Borrar conversación"><svg class="i"><use href="#i-close"/></svg></button>
     </div>`).join('');
 }
 $('#threads').addEventListener('click', (e) => {
@@ -322,7 +322,7 @@ function addRewind(row, turn) {
   b.type = 'button';
   b.dataset.turn = String(turn);
   b.title = 'Volver a antes de este mensaje: archivos y conversación';
-  b.textContent = '↶ VOLVER AQUÍ';
+  b.innerHTML = '<svg class="i"><use href="#i-undo"/></svg>VOLVER AQUÍ';
   $('.who', row).appendChild(b);
 }
 
@@ -412,9 +412,9 @@ function autosize() {
 }
 
 function updateHint() {
-  const base = 'ENTER envía · / comandos · ESC para';
+  const base = '/ comandos · Esc detiene';
   $('#hint').textContent = state.mode === 'agent'
-    ? `${base} · @ archivos · TAB → ${state.agent === 'build' ? 'PLAN' : 'BUILD'}`
+    ? `${base} · @ archivos · Tab → ${state.agent === 'build' ? 'Plan' : 'Build'}`
     : base;
 }
 
@@ -984,10 +984,27 @@ document.addEventListener('click', (e) => {
 });
 $('#rail-toggle').addEventListener('click', () => $('#rail').classList.toggle('open'));
 
-$$('.it').forEach((b) => b.addEventListener('click', () => {
-  $$('.it').forEach((x) => x.classList.toggle('active', x === b));
-  $$('[data-info]').forEach((s) => { s.hidden = s.dataset.info !== b.dataset.it; });
+// pestañas de cada panel: "Sobre" usa data-it/data-info; Ajustes usa data-tab/data-pane
+$$('.tabs').forEach((bar) => bar.addEventListener('click', (e) => {
+  const b = e.target.closest('.it');
+  if (!b) return;
+  const panel = bar.closest('dialog');
+  $$('.it', bar).forEach((x) => x.classList.toggle('active', x === b));
+  if (b.dataset.it) $$('[data-info]', panel).forEach((s) => { s.hidden = s.dataset.info !== b.dataset.it; });
+  if (b.dataset.tab) $$('[data-pane]', panel).forEach((s) => { s.hidden = s.dataset.pane !== b.dataset.tab; });
 }));
+
+// cajón lateral (móvil) y menús desplegables
+const closeRail = () => $('#rail').classList.remove('open');
+$$('[data-rail-close]').forEach((el) => el.addEventListener('click', closeRail));
+document.addEventListener('click', (e) => {
+  $$('details.menu[open]').forEach((m) => {
+    if (!m.contains(e.target) || e.target.closest('.menu-list button')) m.open = false;
+  });
+});
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') { $$('details.menu[open]').forEach((m) => { m.open = false; }); closeRail(); }
+});
 
 /* ---------------------------------------------- Hugging Face → Codespace */
 const hf = { repo: null, file: null, ram: 0, files: [] };

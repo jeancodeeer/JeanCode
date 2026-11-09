@@ -41,7 +41,7 @@ export function parseFiles(text) {
     const p = safePath(m[1]);
     if (p) deletes.push(p);
   }
-  const prose = text.replace(FILE_RE, (_, p) => `\n\`${safePath(p) || p}\` ✓\n`).replace(DEL_RE, (_, p) => `\n\`${p}\` ✕ borrado\n`).trim();
+  const prose = text.replace(FILE_RE, (_, p) => `\n\`${safePath(p) || p}\` · escrito\n`).replace(DEL_RE, (_, p) => `\n\`${p}\` · borrado\n`).trim();
   return { files, deletes, prose, open };
 }
 

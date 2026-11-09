@@ -8,7 +8,7 @@ Cliente gráfico de los modelos Jean. La API vive en otro repo (`Jean-API-Genera
 3. **El escritorio solo expone lo que está en `preload.js`.** Toda herramienta nueva: handler en `main.js`, implementación en `lib/`, entrada en `preload.js` y documentación en `web/js/agent.js` (TOOL_DOCS).
 4. **Rutas siempre con `tools.inside()`**: nada fuera del espacio de trabajo.
 5. **Escrituras y comandos pasan por `confirm`** según el modo de permisos; no los saltes.
-6. Estilo: negro `#000`, blanco `#fff`, IBM Plex (Sans Condensed para títulos, Mono para etiquetas, Sans para texto), bordes de 3 px y sombras sólidas desplazadas.
+6. Estilo: sigue `DESIGN.md` ("taller de noche"): negro `#000`, tinta hueso `#f2f1ec`, líneas de 1 px, cero radios, IBM Plex (Sans Condensed títulos, Mono etiquetas/datos, Sans texto). El bloque invertido con sombra hueca es solo para la acción primaria y lo activo.
 
 ## Comandos
 - Web local: `python -m http.server 8000 --directory web`
