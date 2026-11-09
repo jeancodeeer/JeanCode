@@ -6,7 +6,7 @@
 
 [![ABRIR](https://img.shields.io/badge/ABRIR-JEANCODE_WEB-000000?style=for-the-badge&labelColor=ffffff)](https://jeancodeeer.github.io/jeancode/)
 [![DESCARGAR](https://img.shields.io/badge/DESCARGAR-WIN_%7C_MAC_%7C_LINUX-ffffff?style=for-the-badge&labelColor=000000)](https://github.com/jeancodeeer/jeancode/releases/latest)
-[![API](https://img.shields.io/badge/TRAE_TU-JEAN--API-ffffff?style=for-the-badge&labelColor=000000)](https://github.com/jeancodeeer/Jean-API-Generator)
+[![API](https://img.shields.io/badge/TRAE_TU-JEAN--API--GENERATOR-ffffff?style=for-the-badge&labelColor=000000)](https://github.com/jeancodeeer/Jean-API-Generator)
 
 [`ENGLISH`](README.md) · **`ESPAÑOL`**
 
@@ -15,14 +15,14 @@
 ```
 N° 001 — JEANCODE                                                    REF. V0.1
 Cliente gráfico de los modelos Jean. Chatea, genera proyectos completos, usa un agente.
-Sin servidor, sin cuenta, sin rastreo: trae tu propia jean-api.
+Sin servidor, sin cuenta, sin rastreo: trae tu propia Jean-API-Generator.
 ```
 
 <br>
 
 ## 01 — QUÉ ES
 
-**JeanCode** es la interfaz para programadores y vibecoders que prefieren hacer clic antes que escribir en una terminal. Se conecta a **tu propia** [`jean-api`](https://github.com/jeancodeeer/Jean-API-Generator): los modelos Jean v0.7 servidos como API compatible con OpenAI desde un Codespace de GitHub.
+**JeanCode** es la interfaz para programadores y vibecoders que prefieren hacer clic antes que escribir en una terminal. Se conecta a **tu propia** [`Jean-API-Generator`](https://github.com/jeancodeeer/Jean-API-Generator): los modelos Jean v0.7 servidos como API compatible con OpenAI desde un Codespace de GitHub.
 
 | MODO | DÓNDE | QUÉ HACE |
 |---|---|---|
@@ -34,7 +34,7 @@ Sin servidor, sin cuenta, sin rastreo: trae tu propia jean-api.
 
 ## 02 — CÓMO SE CONECTA
 
-1. Crea tu API con **[jean-api](https://github.com/jeancodeeer/Jean-API-Generator)** (Codespace gratuito).
+1. Crea tu API con **[Jean-API-Generator](https://github.com/jeancodeeer/Jean-API-Generator)** (Codespace gratuito).
 2. Abre **[JeanCode](https://jeancodeeer.github.io/jeancode/)**. Si este equipo no tiene una API registrada, aparece un splash que pide tu **URL base** (terminada en `/v1`) y tu **API key**. También puede generarte una clave aleatoria segura para usarla como `JEAN_API_KEY`.
 3. Agrega los dos puertos (Grey `:8888`, Marvel `:8889`) en **AJUSTES** para ver todos los modelos.
 

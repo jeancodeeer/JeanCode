@@ -1,4 +1,4 @@
-// Cliente OpenAI-compatible para jean-api (llama-server). Cada endpoint = { id, url, key }.
+// Cliente OpenAI-compatible para Jean-API-Generator (llama-server). Cada endpoint = { id, url, key }.
 // En el escritorio las peticiones pasan por el proceso principal (sin CORS) vía window.jeancodeDesktop.
 import { store } from './store.js';
 

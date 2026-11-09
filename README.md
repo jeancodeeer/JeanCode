@@ -6,7 +6,7 @@
 
 [![OPEN](https://img.shields.io/badge/OPEN-JEANCODE_WEB-000000?style=for-the-badge&labelColor=ffffff)](https://jeancodeeer.github.io/jeancode/)
 [![DOWNLOAD](https://img.shields.io/badge/DOWNLOAD-WIN_%7C_MAC_%7C_LINUX-ffffff?style=for-the-badge&labelColor=000000)](https://github.com/jeancodeeer/jeancode/releases/latest)
-[![API](https://img.shields.io/badge/BRING_YOUR-JEAN--API-ffffff?style=for-the-badge&labelColor=000000)](https://github.com/jeancodeeer/Jean-API-Generator)
+[![API](https://img.shields.io/badge/BRING_YOUR-JEAN--API--GENERATOR-ffffff?style=for-the-badge&labelColor=000000)](https://github.com/jeancodeeer/Jean-API-Generator)
 [![MODELS](https://img.shields.io/badge/MODELS-HUGGING_FACE-ffffff?style=for-the-badge&labelColor=000000)](https://huggingface.co/JeanCoder/jean-models)
 
 **`ENGLISH`** · [`ESPAÑOL`](README.es.md)
@@ -16,14 +16,14 @@
 ```
 N° 001 — JEANCODE                                                    REF. V0.1
 A graphical client for the Jean models. Chat, generate whole projects, run an agent.
-No server, no account, no tracking: bring your own jean-api.
+No server, no account, no tracking: bring your own Jean-API-Generator.
 ```
 
 <br>
 
 ## 01 — WHAT IS THIS
 
-**JeanCode** is the interface for developers and vibecoders who would rather click than type into a terminal. It talks to **your own** [`jean-api`](https://github.com/jeancodeeer/Jean-API-Generator) — the Jean v0.7 models (Grey, Marvel, Fénix) served as an OpenAI-compatible API from a GitHub Codespace.
+**JeanCode** is the interface for developers and vibecoders who would rather click than type into a terminal. It talks to **your own** [`Jean-API-Generator`](https://github.com/jeancodeeer/Jean-API-Generator) — the Jean v0.7 models (Grey, Marvel, Fénix) served as an OpenAI-compatible API from a GitHub Codespace.
 
 | MODE | WHERE | WHAT IT DOES |
 |---|---|---|
@@ -37,12 +37,12 @@ No server, no account, no tracking: bring your own jean-api.
 
 ```
 ┌──────────────┐   your URL + your key   ┌──────────────────────────┐
-│  JEANCODE    │ ──────────────────────▶ │  YOUR jean-api CODESPACE │
+│  JEANCODE    │ ──────────────────────▶ │  YOUR JEAN-API-GENERATOR │
 │  web / app   │ ◀────── streaming ───── │  llama-server · Jean v0.7│
 └──────────────┘                          └──────────────────────────┘
 ```
 
-1. Create your API from **[jean-api](https://github.com/jeancodeeer/Jean-API-Generator)** (free GitHub Codespace).
+1. Create your API from **[Jean-API-Generator](https://github.com/jeancodeeer/Jean-API-Generator)** (free GitHub Codespace).
 2. Open **[JeanCode](https://jeancodeeer.github.io/jeancode/)**. If this device has no API registered, a splash screen asks for your **base URL** (ending in `/v1`) and your **API key**. It can also generate a strong random key for you to use as `JEAN_API_KEY`.
 3. Add both ports (Grey `:8888`, Marvel `:8889`) under **SETTINGS** to see every model in the selector.
 
