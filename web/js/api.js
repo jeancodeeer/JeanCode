@@ -59,8 +59,10 @@ async function request(ep, path, init = {}) {
   }
   let res;
   try {
-    res = await fetch(ep.url + path, { ...init, headers, signal: init.signal });
+    const signal = init.signal || (ep.timeout ? AbortSignal.timeout(ep.timeout) : undefined);
+    res = await fetch(ep.url + path, { ...init, headers, signal });
   } catch (e) {
+    if (e.name === 'TimeoutError') throw new ApiError(NETWORK_HINT, 0);
     if (e.name === 'AbortError') throw e;
     throw new ApiError(NETWORK_HINT, 0);
   }
@@ -160,6 +162,38 @@ export async function chatStream({ ep, model, messages, signal, onDelta, onReaso
     }
   }
   return finish();
+}
+
+// Jean-API-Generator sirve un modelo por puerto: Grey :8888, Marvel :8889, Fénix :8890.
+const JEAN_PORTS = ['8888', '8889', '8890'];
+
+/** URLs de los otros puertos del mismo servidor (Codespaces "-8888.app.github.dev" o host:8888). */
+export function siblingUrls(url) {
+  const out = [];
+  for (const re of [/-(8888|8889|8890)(\.app\.github\.dev)/, /:(8888|8889|8890)(?=\/|$)/]) {
+    const m = url.match(re);
+    if (!m) continue;
+    for (const p of JEAN_PORTS) {
+      if (p === m[1]) continue;
+      out.push(url.replace(re, re.source.startsWith('-') ? `-${p}$2` : `:${p}`));
+    }
+    break;
+  }
+  return out;
+}
+
+/** Agrega los puertos hermanos que respondan con la misma clave. Devuelve los modelos nuevos. */
+export async function discoverSiblings(baseUrl, key) {
+  const known = new Set(getEndpoints().map((e) => e.url));
+  const found = [];
+  await Promise.all(siblingUrls(normalizeUrl(baseUrl)).filter((u) => !known.has(u)).map(async (u) => {
+    try {
+      const models = await listModels({ url: u, key, timeout: 8000 });
+      if (models.length) found.push({ url: u, models });
+    } catch { /* ese puerto no tiene modelo: normal */ }
+  }));
+  for (const f of found.sort((a, b) => a.url.localeCompare(b.url))) addEndpoint(f.url, key);
+  return found.flatMap((f) => f.models);
 }
 
 /** Clave aleatoria segura (256 bits, base64url) para usar como JEAN_API_KEY. */

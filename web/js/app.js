@@ -1,7 +1,7 @@
 // JeanCode — interfaz. Modos: chat · code (archivos descargables) · agent (solo escritorio).
 import { CONFIG, BRAND } from './config.js';
 import { store } from './store.js';
-import { getEndpoints, saveEndpoints, addEndpoint, listModels, probe, chatStream, generateKey } from './api.js';
+import { getEndpoints, saveEndpoints, addEndpoint, listModels, probe, chatStream, generateKey, discoverSiblings } from './api.js';
 import { renderMarkdown, esc } from './md.js';
 import { CODE_SYSTEM, parseFiles, projectContext, buildPreview } from './code.js';
 import { makeZip, downloadBlob } from './zip.js';
@@ -64,6 +64,11 @@ async function enterApp() {
   $('#app').hidden = false;
   $('#repo-link').href = CONFIG.repoUrl;
   if (desktop) $$('.desktop-only').forEach((el) => { el.hidden = false; });
+  if (!store.get('siblingsChecked', false)) {
+    // conexiones anteriores a v0.2.1 solo guardaban un puerto: se buscan los otros modelos una vez
+    for (const ep of getEndpoints()) await discoverSiblings(ep.url, ep.key);
+    store.set('siblingsChecked', true);
+  }
   await refreshModels();
   renderThreads();
   openThread(state.threads.find((t) => t.mode === state.mode)?.id || null);
@@ -90,7 +95,10 @@ $('#splash-form').addEventListener('submit', async (e) => {
     const r = await probe($('#splash-url').value, $('#splash-key').value);
     saveEndpoints([]);
     addEndpoint(r.url, $('#splash-key').value);
-    msg.textContent = `Conectado: ${r.models.join(', ') || 'sin modelos listados'}`;
+    msg.textContent = 'Conectado. Buscando los demás modelos del servidor…';
+    const more = await discoverSiblings(r.url, $('#splash-key').value);
+    store.set('siblingsChecked', true);
+    msg.textContent = `Conectado: ${[...r.models, ...more].join(', ') || 'sin modelos listados'}`;
     await enterApp();
   } catch (err) {
     msg.className = 'msg err';
@@ -749,6 +757,7 @@ $('#endpoint-form').addEventListener('submit', async (e) => {
   try {
     const r = await probe($('#ep-url').value, $('#ep-key').value);
     addEndpoint(r.url, $('#ep-key').value);
+    await discoverSiblings(r.url, $('#ep-key').value);
     $('#ep-url').value = ''; $('#ep-key').value = '';
     await refreshModels(); renderSettings();
     toast('ENDPOINT AGREGADO');
