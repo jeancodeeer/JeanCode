@@ -771,11 +771,18 @@ const allowPrefix = (cmd) => {
   const parts = cmd.trim().split(/\s+/);
   return INTERPRETERS.has(parts[0].toLowerCase()) ? cmd.trim() : parts.slice(0, 2).join(' ');
 };
+// Nunca se auto-permite nada que la shell pueda encadenar o expandir: separadores, redirecciones,
+// saltos de línea y otros caracteres de control, y metacaracteres de cmd/PowerShell.
+const UNSAFE_CMD = /[;&|`$<>\r\n\x00-\x1f\x7f(){}\\%^!]/;
 function isAllowed(cmd) {
   const c = cmd.trim();
-  // nunca se auto-permiten comandos encadenados o con redirecciones
-  if (/[;&|`$<>]/.test(c)) return false;
-  return store.get(allowKey(), []).some((p) => c === p || c.startsWith(p + ' '));
+  if (UNSAFE_CMD.test(c)) return false;
+  return store.get(allowKey(), []).some((p) => {
+    if (c === p) return true;
+    if (!c.startsWith(p + ' ')) return false;
+    // tras el prefijo permitido no se aceptan opciones (-x / --x): esas vuelven a preguntar
+    return !c.slice(p.length).trim().split(/\s+/).some((a) => a.startsWith('-'));
+  });
 }
 function allowCommand(cmd) {
   const list = store.get(allowKey(), []);
@@ -941,7 +948,7 @@ function confirmDialog({ title, command, path, before, after, allowAlways = fals
     }
     const done = (v) => { d.close(); resolve(v); };
     const always = $('#confirm-always');
-    const canAlways = allowAlways && command && !/[;&|`$<>]/.test(command);
+    const canAlways = allowAlways && command && !UNSAFE_CMD.test(command.trim());
     always.hidden = !canAlways;
     if (canAlways) always.textContent = `PERMITIR SIEMPRE «${allowPrefix(command)} …» AQUÍ`;
     always.onclick = () => done('always');
