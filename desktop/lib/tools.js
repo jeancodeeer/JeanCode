@@ -162,10 +162,21 @@ async function snapshot(root, rel) {
  * ignorados) con un índice temporal: no crea commits ni toca el índice del usuario. */
 const checkpoints = []; // { root, turn, tree, at }
 
+// Carpeta vacía para core.hooksPath: un repo ajeno no puede colar hooks en nuestras llamadas.
+const NO_HOOKS = path.join(os.tmpdir(), 'jeancode-no-hooks');
+require('node:fs').mkdirSync(NO_HOOKS, { recursive: true });
+
 function git(root, args, env = {}) {
   return new Promise((resolve) => {
-    // sin conversión de fin de línea: los checkpoints guardan y restauran los bytes exactos
-    execFile('git', ['-c', 'core.autocrlf=false', '-c', 'core.safecrlf=false', '-C', root, ...args], { windowsHide: true, timeout: 120000, maxBuffer: 32 << 20, env: { ...process.env, ...env } },
+    // - sin conversión de fin de línea: los checkpoints guardan y restauran los bytes exactos
+    // - endurecido frente a un .git/config malicioso: sin fsmonitor, sin hooks, sin protocolos
+    //   externos y sin la configuración del sistema
+    const hardened = ['-c', 'core.autocrlf=false', '-c', 'core.safecrlf=false', '-c', 'core.fsmonitor=false',
+      '-c', `core.hooksPath=${NO_HOOKS}`, '-c', 'protocol.allow=never', '-c', 'core.untrackedCache=false'];
+    execFile('git', [...hardened, '-C', root, ...args], {
+      windowsHide: true, timeout: 120000, maxBuffer: 32 << 20,
+      env: { ...process.env, GIT_CONFIG_NOSYSTEM: '1', GIT_TERMINAL_PROMPT: '0', ...env },
+    },
       (err, stdout, stderr) => resolve({ ok: !err, out: String(stdout || '').trim(), err: String(stderr || err?.message || '') }));
   });
 }
@@ -191,6 +202,12 @@ async function beginTurn(root, turn) {
   currentTurn.set(root, turn);
   const inRepo = await git(base, ['rev-parse', '--is-inside-work-tree']);
   if (!inRepo.ok || inRepo.out !== 'true') return { turn, git: false };
+  // filtros clean/smudge/process o fsmonitor definidos por el repo ejecutarían programas en
+  // git add / checkout: en ese caso no se usa git para los checkpoints (solo copias de archivos)
+  // solo la configuración del propio repo (.git/config, la que trae un repo ajeno); la global del
+  // usuario (p. ej. Git LFS) es suya y de confianza. Un include en .git/config también se trata como riesgo.
+  const risky = await git(base, ['config', '--local', '--get-regexp', '^(filter\\..*\\.(clean|smudge|process)|core\\.fsmonitor|include\\..*|includeif\\..*)$']);
+  if (risky.ok && risky.out) return { turn, git: false, reason: 'el repo define filtros o fsmonitor propios' };
   const tree = await treeOfWorktree(base);
   if (tree) {
     checkpoints.push({ root, turn, tree, at: Date.now() });

@@ -765,30 +765,22 @@ async function loadProject() {
 
 /* permisos guardados por carpeta: "permitir siempre" guarda el prefijo (dos primeras palabras) */
 const allowKey = () => `allow:${state.workspace}`;
-// Para intérpretes y shells el prefijo permitiría cualquier código: se guarda el comando exacto.
-const INTERPRETERS = new Set(['node', 'python', 'python3', 'py', 'bash', 'sh', 'zsh', 'pwsh', 'powershell', 'cmd', 'npx', 'bunx', 'deno', 'ruby', 'perl', 'php', 'sudo', 'eval']);
-const allowPrefix = (cmd) => {
-  const parts = cmd.trim().split(/\s+/);
-  return INTERPRETERS.has(parts[0].toLowerCase()) ? cmd.trim() : parts.slice(0, 2).join(' ');
-};
+// Se guarda y se compara el COMANDO EXACTO: un prefijo ("npm run", "make") dejaría ejecutar
+// scripts que el propio agente puede escribir antes en package.json o Makefile.
+const allowPrefix = (cmd) => cmd.trim();
 // Nunca se auto-permite nada que la shell pueda encadenar o expandir: separadores, redirecciones,
 // saltos de línea y otros caracteres de control, y metacaracteres de cmd/PowerShell.
 const UNSAFE_CMD = /[;&|`$<>\r\n\x00-\x1f\x7f(){}\\%^!]/;
 function isAllowed(cmd) {
   const c = cmd.trim();
   if (UNSAFE_CMD.test(c)) return false;
-  return store.get(allowKey(), []).some((p) => {
-    if (c === p) return true;
-    if (!c.startsWith(p + ' ')) return false;
-    // tras el prefijo permitido no se aceptan opciones (-x / --x): esas vuelven a preguntar
-    return !c.slice(p.length).trim().split(/\s+/).some((a) => a.startsWith('-'));
-  });
+  return store.get(allowKey(), []).includes(c);
 }
 function allowCommand(cmd) {
   const list = store.get(allowKey(), []);
   const p = allowPrefix(cmd);
   if (!list.includes(p)) store.set(allowKey(), [...list, p]);
-  toast(`PERMITIDO SIEMPRE AQUÍ: ${p} …`);
+  toast(`PERMITIDO SIEMPRE AQUÍ: ${p.slice(0, 60)}`);
 }
 
 /* hooks del proyecto: se piden confianza la primera vez y cada vez que cambian */
@@ -950,7 +942,7 @@ function confirmDialog({ title, command, path, before, after, allowAlways = fals
     const always = $('#confirm-always');
     const canAlways = allowAlways && command && !UNSAFE_CMD.test(command.trim());
     always.hidden = !canAlways;
-    if (canAlways) always.textContent = `PERMITIR SIEMPRE «${allowPrefix(command)} …» AQUÍ`;
+    if (canAlways) always.textContent = 'PERMITIR SIEMPRE ESTE COMANDO AQUÍ';
     always.onclick = () => done('always');
     $('#confirm-yes').onclick = () => done(true);
     $('#confirm-no').onclick = () => done(false);
@@ -1183,7 +1175,7 @@ function renderAllowList() {
   for (const k of keys.filter((x) => x.startsWith('jeancode.allow:'))) {
     const ws = k.slice('jeancode.allow:'.length);
     for (const p of store.get(`allow:${ws}`, [])) {
-      rows.push(`<li><span class="ep-url">${esc(p)} …</span><span class="ep-meta">${esc(ws)}</span><button class="btn ghost sm" data-allow-ws="${esc(ws)}" data-allow-p="${esc(p)}">QUITAR</button></li>`);
+      rows.push(`<li><span class="ep-url mono">${esc(p)}</span><span class="ep-meta">${esc(ws)}</span><button class="btn ghost sm" data-allow-ws="${esc(ws)}" data-allow-p="${esc(p)}">QUITAR</button></li>`);
     }
   }
   $('#allow-list').innerHTML = rows.join('') || '<li>Ninguno. En el agente, «Permitir siempre aquí» guarda el comando para esa carpeta.</li>';

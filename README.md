@@ -72,8 +72,8 @@ Built from the most common complaints about Claude Code and OpenCode (user repor
 |---|---|
 | Claude Code: auto-compaction is opaque and drops instructions | Compaction is never silent: at 85 % it asks first and shows the summary. **Pinned rules** and project memory are sent on every turn, so compaction cannot lose them. |
 | Claude Code: unpredictable cost | Tokens in and out under every answer, session total and real context size in the top bar. |
-| Claude Code: checkpoints miss bash changes | **Back to here** on every message of the agent. In git folders the checkpoint is the whole working tree (a temporary index, no commits), so files changed by commands are restored too. |
-| Claude Code: permission fatigue | **Allow always here** per folder (command prefix; exact command for interpreters and shells, never chained commands), editable in SETTINGS. |
+| Claude Code: checkpoints miss bash changes | **Back to here** on every message of the agent. In git folders the checkpoint is the whole working tree (a temporary index, no commits), so files changed by commands are restored too. Git runs hardened (no hooks, no fsmonitor, no system config) and repos that define their own filters fall back to file snapshots. |
+| Claude Code: permission fatigue | **Allow always here** per folder for that exact command (never for commands with chaining, redirections or shell metacharacters), editable in SETTINGS. |
 | Claude Code: plan mode output is hard to act on | After a PLAN run: **Approve and run in BUILD** or edit the plan first. |
 | OpenCode: provider errors (wrong paths, Ollama, OpenRouter) | Provider presets with the right base URL, `/v1` auto-fix and plain-language diagnostics (CORS, sleeping server, bad key). |
 | OpenCode: setup friction | **Use this PC's models**: one click finds Ollama, LM Studio, llama.cpp, vLLM, Jan or a local Jean server; install Ollama models from SETTINGS. |

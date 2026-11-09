@@ -64,8 +64,8 @@ Hecho a partir de las quejas más comunes sobre Claude Code y OpenCode (reportes
 |---|---|
 | Claude Code: la compactación automática es opaca y pierde instrucciones | Nunca compacta a escondidas: al 85 % pregunta y muestra el resumen. Las **reglas fijadas** y la memoria del proyecto viajan en cada turno: compactar no las pierde. |
 | Claude Code: coste impredecible | Tokens de entrada y salida bajo cada respuesta, total de la sesión y contexto real en la barra superior. |
-| Claude Code: los checkpoints no cubren los comandos | **Volver aquí** en cada mensaje del agente. En carpetas git el checkpoint es todo el árbol de trabajo (índice temporal, sin commits): también se restauran archivos cambiados por comandos. |
-| Claude Code: fatiga de permisos | **Permitir siempre aquí** por carpeta (prefijo del comando; comando exacto para intérpretes y shells; nunca comandos encadenados), editable en AJUSTES. |
+| Claude Code: los checkpoints no cubren los comandos | **Volver aquí** en cada mensaje del agente. En carpetas git el checkpoint es todo el árbol de trabajo (índice temporal, sin commits): también se restauran archivos cambiados por comandos. Git corre endurecido (sin hooks, sin fsmonitor, sin configuración del sistema) y los repos con filtros propios pasan a copias de archivos. |
+| Claude Code: fatiga de permisos | **Permitir siempre aquí** por carpeta para ese comando exacto (nunca con encadenamientos, redirecciones ni metacaracteres de shell), editable en AJUSTES. |
 | Claude Code: difícil actuar sobre el plan | Tras un PLAN: **Aprobar y ejecutar en BUILD** o editar el plan antes. |
 | OpenCode: errores de proveedor (rutas, Ollama, OpenRouter) | Proveedores con la URL correcta, corrección automática de `/v1` y diagnósticos claros (CORS, servidor dormido, clave mala). |
 | OpenCode: instalación difícil | **Usar modelos de esta PC**: un clic encuentra Ollama, LM Studio, llama.cpp, vLLM, Jan o un Jean local; instala modelos de Ollama desde AJUSTES. |
