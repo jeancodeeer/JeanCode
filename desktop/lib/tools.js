@@ -209,17 +209,17 @@ async function glob(root, pattern = '**/*', limit = 500) {
 const dns = require('node:dns').promises;
 const net = require('node:net');
 
+// Redes no públicas. BlockList compara también las IPv6 mapeadas (::ffff:a.b.c.d) con las reglas IPv4;
+// NAT64 y 6to4, que incrustan IPv4, se rechazan enteras.
+const BLOCKED = new net.BlockList();
+for (const [a, p] of [['0.0.0.0', 8], ['10.0.0.0', 8], ['100.64.0.0', 10], ['127.0.0.0', 8], ['169.254.0.0', 16],
+  ['172.16.0.0', 12], ['192.0.0.0', 24], ['192.168.0.0', 16], ['198.18.0.0', 15], ['224.0.0.0', 3]]) BLOCKED.addSubnet(a, p, 'ipv4');
+for (const [a, p] of [['::', 128], ['::1', 128], ['64:ff9b::', 96], ['2002::', 16],
+  ['fc00::', 7], ['fe80::', 10], ['ff00::', 8]]) BLOCKED.addSubnet(a, p, 'ipv6');
+
 /** true si la IP es de loopback, privada, enlace local o no enrutable. */
 function privateIp(ip) {
-  if (net.isIPv4(ip)) {
-    const [a, b] = ip.split('.').map(Number);
-    return a === 0 || a === 10 || a === 127 || (a === 169 && b === 254) || (a === 172 && b >= 16 && b <= 31)
-      || (a === 192 && b === 168) || (a === 100 && b >= 64 && b <= 127) || a >= 224;
-  }
-  const v = ip.toLowerCase();
-  if (v.startsWith('::ffff:')) return privateIp(v.slice(7));
-  return v === '::' || v === '::1' || v.startsWith('fc') || v.startsWith('fd') || v.startsWith('fe8') || v.startsWith('fe9')
-    || v.startsWith('fea') || v.startsWith('feb') || v.startsWith('ff');
+  return BLOCKED.check(ip, net.isIPv6(ip) ? 'ipv6' : 'ipv4');
 }
 
 async function assertPublic(u) {
