@@ -162,7 +162,7 @@ No backend, no database, no analytics. Messages go straight from your device to 
 
 ## 10 — LICENSE
 
-No license file has been published yet, so by default all rights are reserved.
+[GNU AGPL-3.0](LICENSE). Free to use, study, modify and share. If you distribute a modified version, or run one as a network service, you must publish its source under the same license.
 
 <div align="center">
 

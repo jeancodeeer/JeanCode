@@ -162,7 +162,7 @@ Sin backend, sin base de datos, sin analítica. Los mensajes van directo de tu e
 
 ## 10 — LICENCIA
 
-Todavía no se ha publicado un archivo de licencia, así que por defecto todos los derechos están reservados.
+[GNU AGPL-3.0](LICENSE). Puedes usarlo, estudiarlo, modificarlo y compartirlo. Si distribuyes una versión modificada, o la ofreces como servicio en red, debes publicar su código con la misma licencia.
 
 <div align="center">
 

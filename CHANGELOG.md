@@ -2,7 +2,7 @@
 
 JeanCode 1.0 reúne en una sola versión todo lo que se publicó por partes entre la 0.1 y la 0.4. Las releases antiguas se retiraron de GitHub para que solo quede una descarga oficial. Su código sigue completo en las etiquetas de git (`v0.1.0` … `v0.4.2`), así que cualquier build anterior se puede reconstruir con `git checkout vX.Y.Z && cd desktop && npm ci && npm run dist`.
 
-## Próxima versión (en `main`, ya en la web)
+## 1.1.0 — 10 de noviembre de 2026
 
 **Más proveedores y un agente que se revisa solo**
 - **16 proveedores nuevos**, con URLs comprobadas en vivo:

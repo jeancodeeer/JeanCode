@@ -1,6 +1,6 @@
 // JeanCode offline: primero la red (las actualizaciones llegan siempre), la caché solo como respaldo
 // sin conexión. Solo archivos propios: las llamadas a APIs de modelos nunca pasan por aquí.
-const CACHE = 'jeancode-1.0.0'; // la fija scripts/version.mjs
+const CACHE = 'jeancode-1.1.0'; // la fija scripts/version.mjs
 const SHELL = [
   './', 'index.html', 'favicon.svg', 'manifest.webmanifest',
   'css/fonts.css', 'css/jeancode.css',
