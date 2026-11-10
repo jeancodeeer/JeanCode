@@ -8,7 +8,8 @@ Cliente gráfico de los modelos Jean. La API vive en otro repo (`Jean-API-Genera
 3. **El escritorio solo expone lo que está en `preload.js`.** Toda herramienta nueva: handler en `main.js`, implementación en `lib/`, entrada en `preload.js` y documentación en `web/js/agent.js` (TOOL_DOCS).
 4. **Rutas siempre con `tools.inside()`**: nada fuera del espacio de trabajo.
 5. **Escrituras y comandos pasan por `confirm`** según el modo de permisos; no los saltes.
-6. Estilo: sigue `DESIGN.md` ("taller de noche"): negro `#000`, tinta hueso `#f2f1ec`, líneas de 1 px, cero radios, IBM Plex (Sans Condensed títulos, Mono etiquetas/datos, Sans texto). El bloque invertido con sombra hueca es solo para la acción primaria y lo activo.
+6. **Control del equipo** (`docs/computer-control.md`): toda acción nueva va al catálogo de `web/js/computer.js` (esquema + riesgo + texto del permiso) y se ejecuta en `desktop/lib/computer/control.js`. Nunca saltes `permit()`; el riesgo alto pregunta siempre; nada se ejecuta sobre la ventana de JeanCode (se comprueba el dueño real de la ventana); todo lo observado pasa por `redact()`; el registro nunca guarda texto tecleado. Pruebas reales: `node --test --test-concurrency=1 tests/computer/control.test.mjs` (Windows).
+7. Estilo: sigue `DESIGN.md` ("taller de noche"): negro `#000`, tinta hueso `#f2f1ec`, líneas de 1 px, cero radios, IBM Plex (Sans Condensed títulos, Mono etiquetas/datos, Sans texto). El bloque invertido con sombra hueca es solo para la acción primaria y lo activo.
 
 ## Comandos
 - Web local: `python -m http.server 8000 --directory web`

@@ -2,14 +2,17 @@
 // Protocolo de herramientas por texto (```tool {json}```), así funciona aunque el servidor
 // no tenga function calling nativo.
 import { chatStream } from './api.js';
+import { COMPUTER_TOOL_NAMES, COMPUTER_SCHEMAS, DEV_SCHEMAS, DEV_DOCS, computerDocs, riskOf, describeAction, DESTRUCTIVE_COMMAND } from './computer.js';
 
 const TOOL_RE = /```tool\s*\n([\s\S]*?)```/g;
 const MAX_STEPS = 40;
+const COMPUTER_MAX_STEPS = 100; // una tarea de pantalla son muchas acciones pequeñas
 const SUB_MAX_STEPS = 14;
 const MAX_RESULT = 12000;
 
 const READ_TOOLS = ['list_dir', 'read_file', 'search', 'glob', 'webfetch', 'system_info', 'load_skill', 'todo_write'];
-const WRITE_TOOLS = ['write_file', 'edit_file'];
+const WRITE_TOOLS = ['write_file', 'edit_file', 'move_file'];
+const PROC_TOOLS = ['start_process', 'stop_process'];
 
 const TOOL_DOCS = `HERRAMIENTAS. Escribe un bloque por llamada (puedes poner varios en un mensaje):
 \`\`\`tool
@@ -63,27 +66,35 @@ export const STYLES = {
   learning: 'ESTILO: modo aprendizaje; deja pequeñas partes (marcadas con TODO(usuario)) para que el usuario las escriba y explica los conceptos.',
 };
 
-export function agentSystem({ workspace, os, skills, mode, agent = 'build', memory = '', sub, native = true, agents = [], style = 'normal', rules = '' }) {
+/** Herramientas nativas para este agente: las de siempre + procesos/archivos + (si está activado) el control del equipo. */
+export function toolSchemasFor({ computer = null } = {}) {
+  return [...TOOL_SCHEMAS, ...DEV_SCHEMAS, ...(computer ? COMPUTER_SCHEMAS : [])];
+}
+
+export function agentSystem({ workspace, os, skills, mode, agent = 'build', memory = '', sub, native = true, agents = [], style = 'normal', rules = '', computer = null }) {
   const skillList = skills.length ? skills.map((s) => `- ${s.name}: ${s.description}`).join('\n') : '(ninguna instalada)';
   const role = agent === 'plan'
     ? 'Estás en modo PLAN: analiza, investiga y propone un plan numerado. NO modifiques archivos ni ejecutes comandos.'
     : 'Estás en modo BUILD: implementa los cambios, verifícalos y explica el resultado.';
   const perms = mode === 'plan' ? 'SOLO LECTURA' : mode === 'auto-edit' ? 'editar sin preguntar; los comandos piden permiso' : 'cada escritura y comando pide permiso';
-  return `Eres Jean, un agente de programación que trabaja en la PC del usuario${sub ? ' como SUBAGENTE de otro agente' : ''}.
-${role}
+  const screenFirst = computer && !sub
+    ? `\nLA TAREA PUEDE SER DE PANTALLA: si habla de ventanas, aplicaciones, botones, campos o de la pantalla, resuélvela con las acciones de CONTROL DEL EQUIPO (focus_window, inspect_screen, click_element, set_text, type_text, key_press), no buscando archivos. Usa archivos solo si la tarea lo pide.\n`
+    : '';
+  return `Eres Jean, un agente que trabaja en la PC del usuario${sub ? ' como SUBAGENTE de otro agente' : ''}.
+${role}${screenFirst}
 Carpeta de trabajo: ${workspace}
 Sistema: ${os}
 Permisos: ${perms}
 
 Forma de trabajar:
-- Inspecciona antes de cambiar (glob, search, read_file). No inventes rutas ni APIs.
+- En código, inspecciona antes de cambiar (glob, search, read_file). No inventes rutas ni APIs: si un archivo no existe, no insistas.
 - Cambios pequeños y verificables; después ejecuta pruebas o el comando que corresponda.
 - En tareas de 3 pasos o más usa todo_write y actualízalo al avanzar.
 - Si el usuario rechaza una acción, no la repitas: propone otra o pregunta.
 - Respuestas concisas; código en bloques con lenguaje.
 
-${native ? NATIVE_DOCS : TOOL_DOCS}
-
+${native ? NATIVE_DOCS : `${TOOL_DOCS}\n${DEV_DOCS}`}
+${computer && !sub ? `\n${computerDocs({ native, vision: computer.vision, screen: computer.screen })}\n` : ''}
 SKILLS INSTALADAS (usa load_skill cuando una aplique):
 ${skillList}
 
@@ -145,10 +156,38 @@ function toCall(raw) {
   }
 }
 
+const KNOWN_TOOLS = new Set([...READ_TOOLS, 'write_file', 'edit_file', 'run_command', 'spawn_subagent',
+  'start_process', 'process_output', 'stop_process', 'move_file', 'delete_file', ...COMPUTER_TOOL_NAMES]);
+
+/** Objetos JSON sueltos {"name": herramienta, "arguments": {...}} de herramientas CONOCIDAS (sin etiquetas). */
+function bareCalls(text) {
+  const out = [];
+  let rest = text;
+  for (let guard = 0; guard < 8; guard++) {
+    const i = rest.search(/\{\s*"(name|tool)"\s*:/);
+    if (i < 0) break;
+    const json = firstJsonObject(rest.slice(i));
+    if (!json) break;
+    try {
+      const j = parseLoose(json);
+      const tool = j.tool ?? j.name;
+      if (typeof tool === 'string' && KNOWN_TOOLS.has(tool)) {
+        let args = j.args ?? j.arguments ?? j.parameters ?? {};
+        if (typeof args === 'string') { try { args = JSON.parse(args); } catch { args = {}; } }
+        out.push({ tool, args });
+      }
+    } catch { /* no era una llamada */ }
+    rest = rest.slice(i + json.length);
+  }
+  return out;
+}
+
 export function parseToolCalls(text) {
   const calls = [];
   for (const m of text.matchAll(TOOL_RE)) { const c = toCall(m[1]); if (c) calls.push(c); }
   if (!calls.length) for (const m of text.matchAll(QWEN_RE)) { const c = toCall(m[1]); if (c) calls.push(c); }
+  // modelos pequeños escriben a veces la llamada sin etiquetas (o solo con la de cierre)
+  if (!calls.length) calls.push(...bareCalls(text.replace(/<\/?tool_call>/g, ' ')));
   return calls;
 }
 
@@ -165,11 +204,25 @@ const clip = (s) => {
  */
 export async function runAgent(ctx, messages, { sub = false } = {}) {
   const d = ctx.desktop;
-  const limit = sub ? SUB_MAX_STEPS : MAX_STEPS;
+  const limit = sub ? SUB_MAX_STEPS : (ctx.computer ? COMPUTER_MAX_STEPS : MAX_STEPS);
   const readOnly = ctx.mode === 'plan' || ctx.agent === 'plan';
 
   const exec = async ({ tool, args }) => {
     if (tool === '__invalid') return 'ERROR: el bloque tool no es JSON válido: ' + args.raw;
+    if (COMPUTER_TOOL_NAMES.includes(tool)) {
+      if (!ctx.computer || sub) return 'DENEGADO: el control del equipo no está activado para esta tarea (Ajustes → Control del equipo).';
+      if (readOnly && !['screenshot', 'inspect_screen', 'list_windows', 'wait'].includes(tool)) return 'DENEGADO: modo PLAN / solo lectura: solo puedes observar la pantalla.';
+      if (!(await ctx.computer.permit(tool, args, riskOf(tool, args), describeAction(tool, args)))) return 'RECHAZADO por el usuario.';
+      return ctx.computer.act(tool, args);
+    }
+    if (PROC_TOOLS.includes(tool) || tool === 'delete_file') {
+      if (readOnly || (sub && !ctx.subWrite)) return 'DENEGADO: modo de solo lectura.';
+      if (tool === 'start_process' && !(ctx.isAllowed?.(String(args.command)) && !DESTRUCTIVE_COMMAND.test(String(args.command)))) {
+        const ok = await ctx.confirm({ title: DESTRUCTIVE_COMMAND.test(String(args.command)) ? 'PROCESO DESTRUCTIVO' : 'INICIAR PROCESO', command: String(args.command) });
+        if (!ok) return 'RECHAZADO por el usuario.';
+      }
+      if (tool === 'delete_file' && !(await ctx.confirm({ title: 'MOVER A LA PAPELERA', path: String(args.path), command: `Se enviará «${args.path}» a la papelera del sistema (recuperable).` }))) return 'RECHAZADO por el usuario.';
+    }
     const writes = WRITE_TOOLS.includes(tool);
     const runs = tool === 'run_command';
     const fetches = tool === 'webfetch';
@@ -178,11 +231,13 @@ export async function runAgent(ctx, messages, { sub = false } = {}) {
     if (sub && (writes || runs) && !ctx.subWrite) return 'DENEGADO: este subagente es de solo lectura.';
     // webfetch siempre pide permiso con la URL completa: una URL puede llevar datos fuera de la PC.
     // Los comandos que el usuario marcó "permitir siempre" en esta carpeta no vuelven a preguntar.
-    const preAllowed = runs && ctx.isAllowed?.(String(args.command));
+    // un comando destructivo pide confirmación siempre, aunque esté en la lista de permitidos
+    const destructive = runs && DESTRUCTIVE_COMMAND.test(String(args.command));
+    const preAllowed = runs && !destructive && ctx.isAllowed?.(String(args.command));
     if ((runs && !preAllowed) || fetches || (writes && ctx.mode === 'ask')) {
       let ok;
       if (runs) {
-        ok = await ctx.confirm({ title: 'EJECUTAR COMANDO', command: String(args.command), allowAlways: true });
+        ok = await ctx.confirm({ title: destructive ? 'COMANDO DESTRUCTIVO' : 'EJECUTAR COMANDO', command: String(args.command), allowAlways: !destructive });
         if (ok === 'always') { ctx.allowCommand?.(String(args.command)); ok = true; }
       } else if (fetches) ok = await ctx.confirm({ title: 'ABRIR URL', command: String(args.url) });
       else {
@@ -206,6 +261,11 @@ export async function runAgent(ctx, messages, { sub = false } = {}) {
         case 'write_file': { const r = await d.fs.write(ctx.workspace, args.path, String(args.content ?? '')); ctx.onEvent({ type: 'file-changed', path: args.path }); return clip(r + ((await ctx.runHooks?.('post_edit', { path: args.path })) || '')); }
         case 'edit_file': { const r = await d.fs.edit(ctx.workspace, args.path, String(args.old ?? ''), String(args.new ?? '')); ctx.onEvent({ type: 'file-changed', path: args.path }); return clip(r + ((await ctx.runHooks?.('post_edit', { path: args.path })) || '')); }
         case 'run_command': return clip(await d.shell.run(ctx.workspace, String(args.command), Math.min(+args.timeout || 120, 1800)));
+        case 'start_process': return clip(await d.proc.start(ctx.workspace, String(args.command)));
+        case 'process_output': return clip(await d.proc.output(String(args.id), args.tail));
+        case 'stop_process': return clip(await d.proc.stop(String(args.id)));
+        case 'move_file': { const r = await d.fs.move(ctx.workspace, String(args.from), String(args.to)); ctx.onEvent({ type: 'file-changed', path: args.to }); return r; }
+        case 'delete_file': { const r = await d.fs.trash(ctx.workspace, String(args.path)); ctx.onEvent({ type: 'file-changed', path: args.path }); return r; }
         case 'system_info': return clip(await d.system.info());
         case 'load_skill': return clip(await d.skills.read(String(args.name)));
         case 'todo_write': {
@@ -236,7 +296,12 @@ export async function runAgent(ctx, messages, { sub = false } = {}) {
     }
   };
 
+  const recent = []; // firmas de las últimas llamadas, para detectar bucles
+  let loopWarnings = 0;
+  const firstTask = messages.find((m) => m.role === 'user' && typeof m.content === 'string')?.content || '';
   for (let step = 0; step < limit; step++) {
+    if (ctx.signal?.aborted) throw new DOMException('aborted', 'AbortError');
+    pruneImages(messages);
     let text = '';
     let reasoning = '';
     let nativeCalls = [];
@@ -244,7 +309,7 @@ export async function runAgent(ctx, messages, { sub = false } = {}) {
     // ctx.chat = enrutador de la interfaz (respaldo y registro); sin él, llamada directa
     const stream = () => (ctx.chat || chatStream)({
       ep: ctx.ep, model: ctx.model, messages, signal: ctx.signal, think: ctx.think,
-      tools: ctx.native !== false ? TOOL_SCHEMAS : undefined,
+      tools: ctx.native !== false ? toolSchemasFor({ computer: ctx.computer && !sub ? ctx.computer : null }) : undefined,
       onDelta: (t) => { text += t; ctx.onEvent({ type: 'assistant-delta', text, reasoning, sub }); },
       onReasoning: (t) => { reasoning += t; ctx.onEvent({ type: 'assistant-delta', text, reasoning, sub }); },
       onToolCalls: (c) => { nativeCalls = c; },
@@ -288,15 +353,55 @@ export async function runAgent(ctx, messages, { sub = false } = {}) {
       if (results[i] !== undefined) continue;
       ctx.onEvent({ type: 'tool-start', call: calls[i], sub });
       results[i] = await exec(calls[i]);
-      ctx.onEvent({ type: 'tool-end', call: calls[i], result: results[i], sub });
+      ctx.onEvent({ type: 'tool-end', call: calls[i], result: results[i] && typeof results[i] === 'object' ? results[i].text : results[i], sub });
     }
+    // Bucle: la MISMA llamada con el MISMO resultado una y otra vez (un error repetido, o una lectura
+    // idéntica). Repetir un clic con éxito puede ser la tarea (pulsar 3 veces): eso no cuenta.
+    const OBSERVE = new Set([...READ_TOOLS, 'inspect_screen', 'list_windows', 'screenshot']);
+    for (let i = 0; i < calls.length; i++) {
+      const res = typeof results[i] === 'object' && results[i] ? String(results[i].text ?? '') : String(results[i]);
+      const failed = /^(ERROR|DENEGADO)/.test(res);
+      if (!failed && !OBSERVE.has(calls[i].tool)) continue;
+      recent.push(`${calls[i].tool}:${JSON.stringify(calls[i].args)}=>${res.slice(0, 300)}`);
+    }
+    while (recent.length > 12) recent.shift();
+    const last = recent[recent.length - 1];
+    const repeats = last ? recent.filter((x) => x === last).length : 0;
+    const loopy = last && (/=>(ERROR|DENEGADO)/.test(last) ? repeats >= 3 : repeats >= 4);
+    const images = results.filter((r) => r && typeof r === 'object' && r.image).map((r) => r.image);
+    const asText = (r) => (r && typeof r === 'object' ? String(r.text ?? '') : String(r));
     if (nativeCalls.length) {
-      calls.forEach((c, i) => messages.push({ role: 'tool', tool_call_id: c.id, content: String(results[i]) }));
+      calls.forEach((c, i) => messages.push({ role: 'tool', tool_call_id: c.id, content: asText(results[i]) }));
     } else {
-      messages.push({ role: 'user', content: calls.map((c, i) => `RESULTADO ${c.tool}:\n${results[i]}`).join('\n\n') });
+      messages.push({ role: 'user', content: calls.map((c, i) => `RESULTADO ${c.tool}:\n${asText(results[i])}`).join('\n\n') });
+    }
+    if (loopy) {
+      if (loopWarnings >= 2) return `(Detenido: el modelo repitió la misma acción sin avanzar — ${last.split(':')[0]}. Prueba con otro modelo o reformula la tarea.)`;
+      loopWarnings++;
+      recent.length = 0;
+      messages.push({ role: 'user', content: `AVISO: estás repitiendo la misma acción con el mismo resultado sin avanzar (${last.split(':')[0]}). Para y vuelve a la tarea original:\n${String(firstTask).slice(0, 800)}\nSi una ruta o elemento no existe, no insistas: observa de nuevo o elige otro camino.` });
+      ctx.onEvent({ type: 'tool-end', call: { tool: 'aviso', args: {} }, result: 'ERROR: bucle detectado; se avisó al modelo', sub });
+      continue;
+    }
+    if (images.length) {
+      messages.push({ role: 'user', content: [
+        { type: 'text', text: 'Captura de pantalla actual (las coordenadas son las de esta imagen):' },
+        { type: 'image_url', image_url: { url: images[images.length - 1] } },
+      ] });
     }
   }
   return `(Se alcanzó el límite de ${limit} pasos. Escribe "continúa" para seguir.)`;
+}
+
+/** Solo la última captura viaja al modelo: las anteriores se sustituyen por texto (ahorra contexto y no reenvía la pantalla). */
+function pruneImages(messages) {
+  let seen = false;
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const m = messages[i];
+    if (!Array.isArray(m.content) || !m.content.some((p) => p.type === 'image_url')) continue;
+    if (seen) messages[i] = { role: m.role, content: '(captura anterior omitida)' };
+    seen = true;
+  }
 }
 
 export { READ_TOOLS };

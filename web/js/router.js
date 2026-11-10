@@ -18,11 +18,14 @@ export const modelKey = (m) => (m ? `${m.ep.id}|${m.id}` : '');
 const LOG_MAX = 200;
 const log = [];
 
-/** Quita claves y tokens de cualquier texto: Bearer, sk-…, hf_…, jean_…, ?key=… y cadenas largas tipo token. */
+/**
+ * Quita claves y tokens de cualquier texto: Bearer, sk-…, hf_…, ghp_…, nvapi-…, ?key=… y cadenas largas
+ * tipo token. Misma regla que desktop/lib/redact.js (proceso principal): si cambias una, cambia la otra.
+ */
 export function redact(text) {
   return String(text ?? '')
     .replace(/Bearer\s+[^\s"']+/gi, 'Bearer ***')
-    .replace(/\b(sk-(?:ant-|or-|proj-)?|hf_|gsk_|xai-|fw_|csk-|jean_|jeantest_|AIza)[A-Za-z0-9_-]{6,}/g, '$1***')
+    .replace(/\b(sk-(?:ant-|or-|proj-)?|hf_|gsk_|xai-|fw_|csk-|jean_|jeantest_|AIza|ghp_|gho_|ghs_|github_pat_|nvapi-|glpat-|xox[abpr]-)[A-Za-z0-9_-]{6,}/g, '$1***')
     .replace(/([?&](?:key|api_key|token|access_token)=)[^&\s]+/gi, '$1***')
     .replace(/\b[A-Za-z0-9]{32,}\b/g, '***');
 }

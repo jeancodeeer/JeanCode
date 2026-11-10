@@ -4,6 +4,18 @@ JeanCode 1.0 reúne en una sola versión todo lo que se publicó por partes entr
 
 ## Próxima versión (en `main`, ya en la web)
 
+**Control del equipo (escritorio, Windows)** · ver `docs/computer-control.md`
+- **El agente opera la PC de verdad:**
+  - Ve la pantalla o lee los controles de las ventanas con UI Automation; así funciona también con modelos sin visión, como Jean.
+  - Mueve el ratón, hace clic, arrastra, escribe, pulsa atajos, cambia de ventana y abre aplicaciones.
+  - Lo hace en el ciclo observar → decidir → actuar → verificar.
+- **Permisos por riesgo:** bajo (se permite), medio (una vez por tarea) y alto (siempre). Los comandos destructivos preguntan aunque estén permitidos y borrar va a la papelera.
+- **Control visible y parada inmediata:** barra flotante, línea de estado, PAUSAR, DETENER, Esc y `Ctrl+Alt+Q`. Detener corta la acción en curso, la cola y los comandos con todos sus subprocesos.
+- **Protecciones:** no opera la ventana de JeanCode (comprueba el dueño real de la ventana bajo el punto), nunca escribe contraseñas, redacta los secretos visibles y JeanCode queda fuera de las capturas.
+- **Registro de acciones** sin el texto tecleado (Ajustes → Equipo).
+- **Terminal y procesos:** servidores en segundo plano (`start_process`, `process_output`, `stop_process`); mover y renombrar archivos; cancelar o agotar el tiempo de un comando mata todo su árbol (antes quedaban procesos huérfanos).
+- **Pruebas reales** en Windows (`tests/computer/control.test.mjs`) y de permisos del agente (`tests/unit.test.mjs`).
+
 **Capa de APIs inteligente (fase 3)**
 - **Registro de capacidades** (`web/js/capabilities.js`): un solo sitio dice qué sabe hacer cada modelo (chat, código, herramientas, visión, salida estructurada, embeddings, contexto, local o remoto, coste).
   - Primero cuenta lo que informa el endpoint: OpenRouter da contexto, precio y parámetros por modelo; `llama-server` y el router de Jean dan el contexto configurado real.

@@ -260,3 +260,122 @@ test('seguridad: exportar configuración y trazas sin claves ni nombre de Codesp
   assert.match(c.opencode, /\{env:JEAN_API_KEY\}/);
   assert.equal(R.where(e), '…-8899.app.github.dev/v1');
 });
+
+/* ------------------------------------------------------------ control del equipo: riesgos y permisos */
+const PC = await import('../web/js/computer.js');
+const AG = await import('../web/js/agent.js');
+
+test('control: niveles de riesgo y política', () => {
+  assert.equal(PC.riskOf('mouse_click', { x: 1, y: 2 }), 'low');
+  assert.equal(PC.riskOf('open_application', { target: 'notepad.exe' }), 'medium');
+  assert.equal(PC.riskOf('key_press', { keys: ['ctrl', 's'] }), 'medium');
+  assert.equal(PC.riskOf('key_press', { keys: ['win', 'r'] }), 'high');     // puede lanzar programas
+  assert.equal(PC.riskOf('key_press', { keys: ['alt', 'f4'] }), 'high');    // cierra ventanas
+  // teclear en una terminal = ejecutar comandos (la decisión de "terminal" la da el escritorio)
+  assert.equal(PC.riskOf('type_text', { text: 'dir' }, { terminal: true }), 'high');
+  assert.equal(PC.riskOf('key_press', { keys: ['enter'] }, { terminal: true }), 'high');
+  assert.equal(PC.riskOf('type_text', { text: 'hola' }, { terminal: false }), 'low');
+  assert.equal(PC.riskOf('type_text', { text: 'a\nb' }), 'medium');                 // salto de línea = Enter
+  assert.equal(PC.needsTerminalApproval('type_text', { terminal: true }), true);
+  // abrir shells, intérpretes o con argumentos: riesgo alto
+  for (const target of ['powershell', 'cmd.exe', String.raw`C:\Windows\System32\cmd.exe`, 'C:/Windows/System32/WindowsPowerShell/v1.0/powershell.exe', 'mshta.exe', 'python', 'rundll32.exe'])
+    assert.equal(PC.riskOf('open_application', { target }), 'high', target);
+  assert.equal(PC.riskOf('open_application', { target: 'notepad.exe', args: ['x.txt'] }), 'high');
+  assert.equal(PC.riskOf('open_application', { target: 'notepad.exe' }), 'medium');
+  // la aprobación "en esta tarea" es por acción exacta, no por herramienta
+  assert.notEqual(PC.actionKey('open_application', { target: 'notepad.exe' }), PC.actionKey('open_application', { target: 'calc.exe' }));
+  assert.equal(PC.actionKey('key_press', { keys: ['ctrl', 's'], repeat: 1 }), PC.actionKey('key_press', { repeat: 1, keys: ['ctrl', 's'] }));
+  assert.equal(PC.riskOf('herramienta-inventada', {}), 'high');
+  assert.deepEqual(PC.normalizePolicy({ low: 'ask', medium: 'task', high: 'allow' }), { low: 'ask', medium: 'task', high: 'ask' }); // alto nunca se relaja
+  assert.equal(PC.normalizePolicy({ low: 'hack' }).low, 'allow');
+  for (const cmd of ['rm -rf /', 'del /s /q tmp', 'Remove-Item tmp -Recurse -Force', 'git reset --hard', 'shutdown /s', 'reg delete HKLM/Software/x', 'format C:', 'git push origin main --force'])
+    assert.ok(PC.DESTRUCTIVE_COMMAND.test(cmd), cmd);
+  for (const cmd of ['npm test', 'git status', 'node build.js', 'ls -la', 'git push origin main'])
+    assert.ok(!PC.DESTRUCTIVE_COMMAND.test(cmd), cmd);
+  assert.match(PC.describeAction('type_text', { text: 'hola' }), /escribir 4 caracteres/);
+});
+
+/** Agente con un modelo guionizado (solo para probar la lógica de permisos; no es una integración). */
+async function runScripted(calls, ctxExtra = {}) {
+  const steps = [...calls.map((c) => [c]), []];
+  const log = { permits: [], acts: [], confirms: [], ran: [] };
+  const ctx = {
+    ep: { id: 'x', url: 'http://x/v1', key: 'k', provider: 'custom' }, model: 'm', workspace: 'W', mode: 'ask', agent: 'build',
+    sys: {}, native: true, onEvent: () => {},
+    chat: async (o) => { const c = steps.shift() || []; if (c.length) o.onToolCalls(c.map((x, i) => ({ id: `c${i}`, name: x.tool, arguments: JSON.stringify(x.args) }))); return ''; },
+    confirm: async (o) => { log.confirms.push(o.title); return ctxExtra.answer ?? true; },
+    isAllowed: (cmd) => ctxExtra.allowed?.includes(cmd) || false,
+    desktop: { shell: { run: async (_w, cmd) => { log.ran.push(cmd); return 'ok'; } }, fs: { peek: async () => null, write: async () => 'escrito', trash: async (_w, p) => `${p} a la papelera`, read: async () => { throw new Error('ENOENT: no existe'); } }, proc: { start: async () => 'p1 iniciado' } },
+    computer: ctxExtra.noComputer ? null : {
+      vision: false, screen: { modelWidth: 1366, modelHeight: 768 },
+      permit: async (tool, args, risk, label) => { log.permits.push(`${tool}:${risk}`); return ctxExtra.permit ?? true; },
+      act: async (tool) => { log.acts.push(tool); return 'ok'; },
+    },
+    ...ctxExtra.ctx,
+  };
+  const msgs = [{ role: 'system', content: '' }, { role: 'user', content: 'tarea' }];
+  await AG.runAgent(ctx, msgs);
+  return { log, msgs };
+}
+
+test('agente: cada acción de pantalla pasa por el permiso de su nivel', async () => {
+  const { log } = await runScripted([{ tool: 'inspect_screen', args: {} }, { tool: 'key_press', args: { keys: ['win', 'r'] } }, { tool: 'mouse_click', args: { x: 1, y: 1 } }]);
+  assert.deepEqual(log.permits, ['inspect_screen:low', 'key_press:high', 'mouse_click:low']);
+  assert.deepEqual(log.acts, ['inspect_screen', 'key_press', 'mouse_click']);
+});
+
+test('agente: si el usuario rechaza, la acción NO se ejecuta', async () => {
+  const { log, msgs } = await runScripted([{ tool: 'open_application', args: { target: 'cmd.exe' } }], { permit: false });
+  assert.deepEqual(log.acts, []);
+  assert.ok(msgs.some((m) => m.role === 'tool' && /RECHAZADO/.test(m.content)));
+});
+
+test('agente: sin activar el control, ninguna acción de pantalla llega al equipo', async () => {
+  const { msgs } = await runScripted([{ tool: 'mouse_click', args: { x: 1, y: 1 } }], { noComputer: true });
+  assert.ok(msgs.some((m) => m.role === 'tool' && /no está activado/.test(m.content)));
+});
+
+test('agente: en modo PLAN solo se observa la pantalla', async () => {
+  const { log, msgs } = await runScripted([{ tool: 'inspect_screen', args: {} }, { tool: 'type_text', args: { text: 'x' } }], { ctx: { agent: 'plan' } });
+  assert.deepEqual(log.acts, ['inspect_screen']);
+  assert.ok(msgs.some((m) => m.role === 'tool' && /solo puedes observar/.test(m.content)));
+});
+
+test('agente: comando destructivo pide confirmación aunque esté en la lista de permitidos', async () => {
+  const { log } = await runScripted([{ tool: 'run_command', args: { command: 'git reset --hard' } }, { tool: 'run_command', args: { command: 'npm test' } }],
+    { allowed: ['git reset --hard', 'npm test'] });
+  assert.deepEqual(log.confirms, ['COMANDO DESTRUCTIVO']);       // npm test permitido: no pregunta
+  assert.deepEqual(log.ran, ['git reset --hard', 'npm test']);
+});
+
+test('agente: borrar archivos pide confirmación siempre y va a la papelera', async () => {
+  const { log, msgs } = await runScripted([{ tool: 'delete_file', args: { path: 'tmp.log' } }]);
+  assert.deepEqual(log.confirms, ['MOVER A LA PAPELERA']);
+  assert.ok(msgs.some((m) => m.role === 'tool' && /papelera/.test(m.content)));
+});
+
+test('agente: detener (AbortSignal) corta el bucle antes del siguiente paso', async () => {
+  const ac = new AbortController();
+  ac.abort();
+  await assert.rejects(runScripted([{ tool: 'inspect_screen', args: {} }], { ctx: { signal: ac.signal } }), (e) => e.name === 'AbortError');
+});
+
+test('agente: un error repetido es un bucle: avisa y, si insiste, se detiene', async () => {
+  const same = { tool: 'read_file', args: { path: 'src/main.ts' } };
+  const ac = new AbortController();
+  const steps = Array.from({ length: 20 }, () => same);
+  const r = await runScripted(steps, { ctx: { signal: ac.signal } }).catch((e) => e);
+  const msgs = r.msgs || [];
+  const warnings = msgs.filter((m) => m.role === 'user' && /AVISO: estás repitiendo/.test(m.content));
+  assert.equal(warnings.length, 2, 'dos avisos antes de detenerse');
+  assert.ok(warnings[0].content.includes('tarea'), 'el aviso recuerda la tarea original');
+  const toolCalls = msgs.filter((m) => m.role === 'tool').length;
+  assert.ok(toolCalls < 12, `se detuvo pronto (${toolCalls} llamadas, no 20)`);
+});
+
+test('agente: repetir un clic con éxito NO es un bucle (pulsar 3 veces puede ser la tarea)', async () => {
+  const click = { tool: 'click_element', args: { id: 3 } };
+  const { log, msgs } = await runScripted([click, click, click, click]);
+  assert.equal(log.acts.length, 4);
+  assert.ok(!msgs.some((m) => m.role === 'user' && /AVISO/.test(m.content)));
+});

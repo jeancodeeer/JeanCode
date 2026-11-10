@@ -12,6 +12,7 @@ import { lineDiff, diffStats } from './diff.js';
 import { PROVIDERS, providerById, providerOf, LOCAL_CANDIDATES, OLLAMA_SUGGESTED } from './providers.js';
 import { AUTO, modelKey, chat as routedChat, probeEndpoint, healthOf, validateEndpoint, pickAuto, visibleModels, resolveSaved, formatLog, routeLog, FALLBACK_POLICIES, fallbackPolicy, decide, routeFor, setRouteFor, checkEndpoint, exportConfig, KIND_LABEL, formatTrace, fallbackChain, allowPaidAuto, where, latencyOf } from './router.js';
 import { capsOf, describeCaps, billingOf } from './capabilities.js';
+import { normalizePolicy, describeAction, riskOf, actionKey, needsTerminalApproval, INPUT_TOOLS } from './computer.js';
 import { SLOTS, controlUrlFrom, hfSearch, hfFiles, control, gb } from './hf.js';
 
 const $ = (s, el = document) => el.querySelector(s);
@@ -572,7 +573,8 @@ function addToolLine(call, result, nested) {
   const el = streamEl();
   const row = document.createElement('details');
   row.className = 'tool-line' + (nested ? ' nested' : '');
-  const target = call.args.path || call.args.pattern || call.args.command || call.args.url || call.args.name || '';
+  const target = PC_TOOLS.has(call.tool) ? describeAction(call.tool, call.args)
+    : call.args.path || call.args.pattern || call.args.command || call.args.url || call.args.name || call.args.from || call.args.id || '';
   const bad = /^(ERROR|DENEGADO|RECHAZADO)/.test(String(result));
   row.innerHTML = `<summary><span class="tl-name">${esc(call.tool)}</span><span class="tl-arg mono">${esc(String(target).slice(0, 120))}</span>${bad ? '<span class="tl-bad">✕</span>' : '<span class="tl-ok">✓</span>'}</summary><pre></pre>`;
   $('pre', row).textContent = String(result).slice(0, 4000);
@@ -699,11 +701,20 @@ input.addEventListener('keydown', (e) => {
 input.addEventListener('blur', () => setTimeout(closePopup, 150));
 
 document.addEventListener('keydown', (e) => {
-  if (e.key === 'Escape' && state.abort && $('#popup').hidden && !document.querySelector('dialog[open]')) { state.abort.abort(); return; }
+  if (e.key === 'Escape' && state.abort && $('#popup').hidden && !document.querySelector('dialog[open]')) { stopEverything('detenida con Esc'); return; }
   if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') { e.preventDefault(); state.current = null; openThread(null); input.focus(); }
   if ((e.ctrlKey || e.metaKey) && ['1', '2', '3'].includes(e.key)) { e.preventDefault(); setMode(['chat', 'code', 'agent'][+e.key - 1]); }
 });
-$('#stop-btn').addEventListener('click', () => state.abort?.abort());
+$('#stop-btn').addEventListener('click', () => stopEverything('detenida por el usuario'));
+
+/** Detener de verdad: la respuesta, los comandos en curso y la tarea de control del equipo. */
+function stopEverything(reason) {
+  state.abort?.abort();
+  if (desktop) {
+    desktop.shell.cancel?.().catch(() => {});
+    if (pc.active) desktop.computer.stop(reason).catch(() => {});
+  }
+}
 
 function busy(on) {
   $('#send-btn').disabled = on;
@@ -1061,6 +1072,9 @@ async function sendAgent(t, m, text, turn) {
     workspace: state.workspace, os, skills, mode: state.perm, agent: state.agent, memory,
     agents: state.agents || [], style: store.get('style', 'normal'), rules: store.get('rules', ''),
   };
+  // Control del equipo: solo si el usuario lo activó y el sistema lo admite; una sesión por turno
+  const computer = await beginComputer(text, m);
+  if (computer) sys.computer = { vision: computer.vision, screen: computer.screen };
   if (!t.agentMessages) {
     // tras /compact el historial visible es un resumen: se usa como contexto inicial
     t.agentMessages = [{ role: 'system', content: '' }, ...t.messages.slice(0, -1).map(({ role, content }) => ({ role, content }))];
@@ -1068,14 +1082,20 @@ async function sendAgent(t, m, text, turn) {
   t.agentMessages[0] = { role: 'system', content: agentSystem(sys) };
   const userMsg = t.messages[t.messages.length - 1];
   userMsg.agentIndex = t.agentMessages.length; // para "volver aquí"
-  t.agentMessages.push({ role: 'user', content: await expandMentions(text) });
+  // Con control del equipo, la tarea arranca ya observando: qué ventanas hay abiertas de verdad
+  let observed = '';
+  if (computer) {
+    const w = await actComputer('list_windows', {}, computer.vision);
+    if (!String(w).startsWith('ERROR')) observed = `\n\n[OBSERVACIÓN INICIAL · ventanas abiertas]\n${w}`;
+  }
+  t.agentMessages.push({ role: 'user', content: (await expandMentions(text)) + observed });
 
   let row = null;
   const ctx = {
     ep: m.ep, model: m.id, desktop, workspace: state.workspace, mode: state.perm, agent: state.agent, sys, think: state.think,
     // el agente pide cada paso al enrutador; si cambia de backend, los pasos siguientes siguen en el nuevo
     chat: (o) => routedChat({ id: o.model, ep: o.ep }, o, routeCtx((to) => { ctx.ep = to.ep; ctx.model = to.id; })).then((r) => r.text),
-    signal: state.abort.signal, confirm: confirmDialog, isAllowed, allowCommand, runHooks: hookRunner(hooks),
+    signal: state.abort.signal, confirm: confirmWithAttention, isAllowed, allowCommand, runHooks: hookRunner(hooks), computer,
     onEvent: (ev) => {
       if (ev.type === 'usage') { addUsage(t, ev.usage); if (row) setUsage(row, ev.usage); }
       if (ev.type === 'assistant-start') row = addMessage('assistant', '', { streaming: true, cls: ev.nested ? 'nested' : '' });
@@ -1094,7 +1114,12 @@ async function sendAgent(t, m, text, turn) {
       updateContext();
     },
   };
-  const final = await runAgent(ctx, t.agentMessages);
+  let final;
+  try {
+    final = await runAgent(ctx, t.agentMessages);
+  } finally {
+    if (computer) await endComputer();
+  }
   t.messages.push({ role: 'assistant', content: stripToolBlocks(final) || final });
   const post = await ctx.runHooks('post_turn');
   if (post) addMessage('tool', post.trim());
@@ -1142,14 +1167,14 @@ streamElAll().forEach((el) => el.addEventListener('click', async (e) => {
 
 function streamElAll() { return [$('#chat-stream'), $('#code-stream'), $('#agent-stream')]; }
 
-function confirmDialog({ title, command, path, before, after, allowAlways = false }) {
+function confirmDialog({ title, command, path, before, after, allowAlways = false, alwaysLabel = '' }) {
   return new Promise((resolve) => {
     const d = $('#panel-confirm');
     $('#confirm-title').textContent = title;
     const body = $('#confirm-body');
     if (command != null) {
       $('#confirm-path').textContent = state.workspace || '';
-      body.innerHTML = `<pre class="cmd">${title.includes('COMANDO') ? '$ ' : ''}${esc(command)}</pre>`;
+      body.innerHTML = `<pre class="cmd">${title.includes('COMANDO') || title.includes('PROCESO') ? '$ ' : ''}${esc(command)}</pre>`;
     } else {
       const ops = lineDiff(before, after);
       const st = diffStats(ops);
@@ -1158,9 +1183,9 @@ function confirmDialog({ title, command, path, before, after, allowAlways = fals
     }
     const done = (v) => { d.close(); resolve(v); };
     const always = $('#confirm-always');
-    const canAlways = allowAlways && command && !UNSAFE_CMD.test(command.trim());
+    const canAlways = allowAlways && command && (alwaysLabel || !UNSAFE_CMD.test(command.trim()));
     always.hidden = !canAlways;
-    if (canAlways) always.textContent = 'PERMITIR SIEMPRE ESTE COMANDO AQUÍ';
+    if (canAlways) always.textContent = alwaysLabel || 'PERMITIR SIEMPRE ESTE COMANDO AQUÍ';
     always.onclick = () => done('always');
     $('#confirm-yes').onclick = () => done(true);
     $('#confirm-no').onclick = () => done(false);
@@ -1419,6 +1444,8 @@ function renderSettings() {
   $('#rules').value = store.get('rules', '');
   renderAllowList();
   renderFenix();
+  renderPcSettings();
+  renderPcLog();
 }
 
 function renderAllowList() {
@@ -1442,6 +1469,166 @@ $('#allow-list').addEventListener('click', (e) => {
 });
 $('#style-select').addEventListener('change', (e) => { store.set('style', e.target.value); toast('ESTILO: ' + e.target.selectedOptions[0].textContent.toUpperCase()); });
 $('#rules').addEventListener('change', (e) => store.set('rules', e.target.value));
+
+/* ------------------------------------------------------- control del equipo */
+const PC_TOOLS = new Set(['screenshot', 'inspect_screen', 'list_windows', 'focus_window', 'mouse_move', 'mouse_click', 'click_element',
+  'mouse_drag', 'scroll', 'type_text', 'set_text', 'key_press', 'open_application', 'wait']);
+const pc = { supported: false, active: false, allowedInTask: new Set() };
+const pcEnabled = () => !!desktop && pc.supported && store.get('pcEnabled', false) === true;
+const pcPolicy = () => normalizePolicy(store.get('pcPolicy', null));
+
+if (desktop?.computer) {
+  desktop.computer.supported().then((r) => { pc.supported = !!r.supported; pc.platform = r.platform; renderPcSettings(); }).catch(() => {});
+  desktop.computer.onState((s) => renderPcStatus(s));
+  desktop.computer.onEmergency((reason) => { state.abort?.abort(); toast(String(reason).toUpperCase()); });
+}
+
+/** Abre la sesión de control para este turno del agente (o null si no está activado). */
+async function beginComputer(task, m) {
+  if (!pcEnabled() || state.agent === 'plan' || state.perm === 'plan') return null;
+  pc.allowedInTask = new Set();
+  let info;
+  try {
+    info = await desktop.computer.begin(task, { minimize: store.get('pcMinimize', true) !== false });
+  } catch (e) {
+    addMessage('system', `Control del equipo no disponible: ${e.message}`);
+    return null;
+  }
+  pc.active = true;
+  const vision = capsOf(m.ep, m.id).vision === true;
+  addMessage('system', `CONTROL DEL EQUIPO ACTIVO · ${vision ? 'el modelo ve capturas' : 'el modelo lee los controles de las ventanas (no ve imágenes)'} · detener: botón DETENER, la barra flotante o Ctrl+Alt+Q`);
+  return {
+    vision, screen: info,
+    permit: (tool, args, risk, label) => permitComputer(tool, args, risk, label, m),
+    act: (tool, args) => actComputer(tool, args, vision),
+  };
+}
+
+async function endComputer() {
+  pc.active = false;
+  try { await desktop.computer.end('turno terminado'); } catch { /* ya estaba cerrada */ }
+}
+
+/** Un permiso necesita al usuario delante: JeanCode vuelve al frente y luego se aparta otra vez. */
+async function confirmWithAttention(opts) {
+  if (!pc.active) return confirmDialog(opts);
+  await desktop.computer.attention?.(true).catch(() => {});
+  try { return await confirmDialog(opts); } finally { await desktop.computer.attention?.(false).catch(() => {}); }
+}
+
+async function permitComputer(tool, args, risk, label, m) {
+  const policy = pcPolicy();
+  const bill = billingOf(m.ep, m.id);
+  // Una captura no se puede redactar: enviarla a un proveedor externo pide permiso salvo que el usuario lo permita
+  if (tool === 'screenshot' && !['local', 'own'].includes(bill) && store.get('pcShotsExternal', 'ask') !== 'allow') {
+    return !!(await confirmWithAttention({ title: 'ENVIAR CAPTURA', command: `La captura de tu pantalla se enviará a ${providerOf(m.ep).name} (${m.id}). Lo que esté visible (ventanas, pestañas, textos) llegará al proveedor.` }));
+  }
+  // el riesgo se recalcula con la ventana activa REAL (teclear en una terminal = ejecutar comandos)
+  // destino real: ventana bajo el punto (clics, arrastres) o ventana activa (teclado)
+  const fgInfo = INPUT_TOOLS.includes(tool) ? await desktop.computer.target(tool, args).catch(() => ({})) : {};
+  const foreground = fgInfo.process || '';
+  const env = { terminal: fgInfo.terminal === true };
+  risk = riskOf(tool, args, env);
+  const terminal = needsTerminalApproval(tool, env);
+  const where = terminal ? `\n\nEl destino es una terminal (${foreground}): escribir, pegar o hacer clic ahí puede ejecutar comandos.` : '';
+  if (risk === 'low' && policy.low === 'allow') return true;
+  const key = actionKey(tool, args);
+  if (risk === 'medium' && policy.medium === 'task' && pc.allowedInTask.has(key)) return true;
+  const ok = await confirmWithAttention({
+    title: risk === 'high' ? 'ACCIÓN SENSIBLE EN TU PC' : 'CONTROL DEL EQUIPO',
+    command: label + where,
+    allowAlways: risk === 'medium' && policy.medium === 'task',
+    alwaysLabel: 'PERMITIR ESTA MISMA ACCIÓN EN ESTA TAREA',
+  });
+  if (!ok) return false;
+  if (ok === 'always') pc.allowedInTask.add(key);
+  // aprobación de un solo uso que el escritorio exige para teclear en una terminal (el modelo no puede falsificarla)
+  if (terminal) await desktop.computer.approveTerminal();
+  return true;
+}
+
+/** Ejecuta una acción y la convierte en texto (y, si el modelo ve, la imagen) para el agente. */
+async function actComputer(tool, args, vision) {
+  if (tool === 'screenshot' && !vision) return 'ERROR: tu modelo no ve imágenes. Usa inspect_screen para leer los controles de la ventana activa.';
+  let r;
+  try {
+    r = await desktop.computer.act(tool, args);
+  } catch (e) {
+    const msg = String(e.message || e).replace(/^Error invoking remote method '[^']+': (Error: )?/, '');
+    if (/detenida|detenido/i.test(msg)) throw new DOMException('detenida', 'AbortError');
+    return `ERROR: ${msg}`;
+  }
+  const fg = (w) => (w ? `«${w.title}» (${w.process})` : '?');
+  switch (tool) {
+    case 'screenshot':
+      return { text: `Captura ${r.width}×${r.height}. Ventana activa: ${fg(r.foreground)}. La imagen va en el siguiente mensaje.`, image: `data:image/jpeg;base64,${r.jpeg}` };
+    case 'inspect_screen':
+      return `Ventana activa: ${fg(r.window)}\n` + r.elements.map((e) => `[${e.id}] ${e.type}${e.name ? ` "${e.name}"` : ''}${e.value ? ` = "${e.value}"` : ''} @${e.x},${e.y}${e.focused ? ' (foco)' : ''}${e.enabled ? '' : ' (deshabilitado)'}${e.password ? ' (contraseña: no escribir)' : ''}`).join('\n')
+        + (r.truncated ? '\n(lista recortada: hay más controles)' : '');
+    case 'list_windows': return r.map((w) => `«${w.title}» (${w.process})`).join('\n') || 'sin ventanas';
+    case 'focus_window': return `En primer plano: ${fg(r.focused)}`;
+    case 'open_application': return `Abierto ${r.opened}. Ventana activa: ${fg(r.foreground)}`;
+    default: return `ok${r?.clicked ? ` · clic en «${r.clicked}» (${r.method})` : ''}${r?.typed != null ? ` · ${r.typed} caracteres` : ''}${r?.after ? ` · ventana activa: ${fg(r.after)}` : ''}`;
+  }
+}
+
+const PC_LABEL = {
+  screenshot: 'MIRANDO LA PANTALLA', inspect_screen: 'LEYENDO LA VENTANA', list_windows: 'LISTANDO VENTANAS', focus_window: 'CAMBIANDO DE VENTANA',
+  mouse_move: 'MOVIENDO EL RATÓN', mouse_click: 'HACIENDO CLIC', click_element: 'HACIENDO CLIC', mouse_drag: 'ARRASTRANDO', scroll: 'DESPLAZANDO',
+  type_text: 'ESCRIBIENDO', set_text: 'ESCRIBIENDO', key_press: 'PULSANDO TECLAS', open_application: 'ABRIENDO', wait: 'ESPERANDO',
+};
+function renderPcStatus(s) {
+  const box = $('#pc-status');
+  if (!box) return;
+  const on = s.status === 'running' || s.status === 'paused';
+  box.hidden = !on;
+  if (!on) return;
+  $('#pc-status-text').textContent = s.status === 'paused' ? `EQUIPO EN PAUSA · PASO ${s.step}` : `EQUIPO · PASO ${s.step} · ${s.action ? PC_LABEL[s.action.name] || s.action.name : 'PENSANDO'}`;
+  $('#pc-pause').textContent = s.status === 'paused' ? 'SEGUIR' : 'PAUSAR';
+}
+$('#pc-pause')?.addEventListener('click', async () => {
+  const s = await desktop.computer.state();
+  if (s.status === 'paused') await desktop.computer.resume(); else await desktop.computer.pause();
+});
+$('#pc-stop')?.addEventListener('click', () => stopEverything('detenida por el usuario'));
+
+/** Ajustes → Equipo */
+function renderPcSettings() {
+  const box = $('#pc-settings');
+  if (!box) return;
+  $('#pc-unsupported').hidden = !desktop || pc.supported;
+  if (desktop && !pc.supported) $('#pc-unsupported').textContent = `El control de ratón y teclado aún no está disponible en este sistema (${pc.platform || 'desconocido'}). Terminal, archivos y procesos sí funcionan.`;
+  $('#pc-enabled').disabled = !pc.supported;
+  $('#pc-enabled').checked = pcEnabled();
+  const pol = pcPolicy();
+  $('#pc-low').value = pol.low;
+  $('#pc-medium').value = pol.medium;
+  $('#pc-minimize').checked = store.get('pcMinimize', true) !== false;
+  $('#pc-shots').value = store.get('pcShotsExternal', 'ask');
+}
+async function renderPcLog() {
+  const list = $('#pc-log');
+  if (!list || !desktop?.computer) return;
+  const items = (await desktop.computer.log(40)).reverse();
+  list.textContent = items.length ? items.map((e) => `${e.t.slice(11, 19)} ${e.event === 'action' ? `${e.ok ? '✓' : '✕'} ${e.name} ${JSON.stringify(e.args || {})}${e.error ? ' · ' + e.error : ''} · ${e.ms} ms` : `— ${e.event}${e.task ? ': ' + e.task : ''}${e.reason ? ' (' + e.reason + ')' : ''}`}`).join('\n') : 'Todavía no hay acciones registradas.';
+}
+$('#pc-enabled')?.addEventListener('change', async (e) => {
+  if (e.target.checked) {
+    const ok = await confirmDialog({ title: 'ACTIVAR CONTROL DEL EQUIPO', command: 'En el modo AGENTE, Jean podrá ver tu pantalla, mover el ratón, hacer clic, escribir y abrir aplicaciones en esta PC.\n\n· Una barra flotante muestra cada acción; DETENER o Ctrl+Alt+Q lo para todo al instante.\n· Las acciones sensibles piden tu permiso; las de alto riesgo, siempre.\n· Nunca escribe contraseñas ni opera la ventana de JeanCode.\n· Cada acción queda en el registro de esta pestaña.' });
+    if (!ok) { e.target.checked = false; return; }
+  }
+  store.set('pcEnabled', e.target.checked);
+  toast(e.target.checked ? 'CONTROL DEL EQUIPO ACTIVADO (MODO AGENTE)' : 'CONTROL DEL EQUIPO DESACTIVADO');
+});
+$('#pc-low')?.addEventListener('change', (e) => store.set('pcPolicy', { ...pcPolicy(), low: e.target.value }));
+$('#pc-medium')?.addEventListener('change', (e) => store.set('pcPolicy', { ...pcPolicy(), medium: e.target.value }));
+$('#pc-minimize')?.addEventListener('change', (e) => store.set('pcMinimize', e.target.checked));
+$('#pc-shots')?.addEventListener('change', (e) => store.set('pcShotsExternal', e.target.value));
+$('#pc-log-refresh')?.addEventListener('click', renderPcLog);
+$('#pc-log-copy')?.addEventListener('click', async () => {
+  await renderPcLog();
+  try { await navigator.clipboard.writeText($('#pc-log').textContent); toast('REGISTRO COPIADO'); } catch { toast('NO SE PUDO COPIAR'); }
+});
 
 /* ------------------------------------------------------- modelos locales */
 async function findLocal() {

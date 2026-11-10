@@ -11,7 +11,7 @@
   "scripts": {
     "copy-web": "node scripts/copy-web.mjs",
     "start": "npm run copy-web && electron .",
-    "check": "node --check main.js && node --check preload.js && node --check lib/tools.js && node --check lib/skills.js && node ../scripts/version.mjs",
+    "check": "node --check main.js && node --check preload.js && node --check lib/tools.js && node --check lib/skills.js && node --check lib/redact.js && node --check lib/computer/control.js && node --check lib/computer/driver.js && node --check lib/computer/overlay-preload.js && node ../scripts/version.mjs",
     "test": "node --test ../tests/unit.test.mjs",
     "dist": "npm run copy-web && electron-builder"
   },
@@ -26,6 +26,9 @@
     "directories": {
       "output": "dist"
     },
+    "asarUnpack": [
+      "lib/computer/*.ps1"
+    ],
     "files": [
       "main.js",
       "preload.js",

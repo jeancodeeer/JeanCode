@@ -145,6 +145,7 @@ textarea { resize: vertical; }
 
 /* ---------------------------------------------------------------- shell */
 .app { display: grid; grid-template-columns: 248px minmax(0, 1fr); height: 100%; height: 100dvh; }
+.app > *, .main > * { min-width: 0; } /* sin esto, el contenido mínimo (barra del agente) ensanchaba la columna entre 860 y 900 px */
 .rail { display: flex; flex-direction: column; gap: var(--s4); min-height: 0; padding: var(--s4) var(--s3) var(--s3); border-right: 1px solid var(--line); background: var(--bg); }
 .brand { display: flex; align-items: center; gap: var(--s3); padding: 0 var(--s1); }
 .brand .wordmark { flex: 1; min-width: 0; max-width: 168px; }
@@ -312,6 +313,12 @@ pre code { background: none; border: 0; padding: 0; font-size: inherit; }
 .viewer-preview { width: 100%; height: 100%; border: 0; background: #fff; }
 
 /* ---------------------------------------------------------------- agente */
+/* control del equipo: estado visible mientras el agente opera la PC */
+.pc-status { display: flex; align-items: center; gap: var(--s3); padding: var(--s2) var(--s5); border-bottom: 1px solid var(--line); background: var(--raise); font: 600 11px/1 var(--mono); letter-spacing: .1em; }
+.pc-status #pc-status-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pc-dot { width: 8px; height: 8px; background: var(--bad); flex: none; animation: blink 1.2s steps(2) infinite; }
+.pc-key { color: var(--ash); }
+@media (max-width: 860px) { .pc-status { padding: var(--s2) var(--s3); } .pc-key { display: none; } }
 .agent-bar { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s2); padding: var(--s3) var(--s5); border-bottom: 1px solid var(--line); }
 .seg { display: inline-flex; border: 1px solid var(--line-2); }
 .seg button { min-height: 36px; padding: 0 var(--s3); background: transparent; color: var(--smoke); border: 0; font: 600 11px/1 var(--mono); letter-spacing: .1em; text-transform: uppercase; cursor: pointer; }
@@ -461,3 +468,4 @@ kbd { font: 600 11px/1 var(--mono); border: 1px solid var(--line-3); padding: 2p
   .model select { letter-spacing: 0; text-overflow: ellipsis; }
 }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { transition: none !important; animation: none !important; } }
+.check.pc-gap { margin: var(--s3) 0 var(--s4); }

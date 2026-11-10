@@ -107,21 +107,113 @@ async function search(root, pattern, rel = '.') {
  * Ejecuta un comando de terminal que el usuario ya aprobó en la interfaz.
  * Usa el shell del sistema a propósito (es una terminal), siempre con cwd = espacio de trabajo.
  */
+/**
+ * Mata un proceso y TODOS sus hijos. child.kill() con shell:true solo mata el shell y deja vivos
+ * los procesos que lanzó (npm, node, un servidor...): procesos zombis tras cancelar o agotar el tiempo.
+ */
+function killTree(child) {
+  if (!child || child.exitCode !== null || !child.pid) return;
+  try {
+    if (process.platform === 'win32') {
+      execFile('taskkill', ['/PID', String(child.pid), '/T', '/F'], { windowsHide: true }, () => {});
+    } else {
+      process.kill(-child.pid, 'SIGTERM'); // grupo de procesos (detached:true)
+    }
+  } catch { try { child.kill('SIGKILL'); } catch { /* ya terminó */ } }
+}
+
+const spawnShell = (command, cwd) => spawn(command, {
+  cwd, shell: true, windowsHide: true, env: process.env, detached: process.platform !== 'win32',
+});
+
+const runningCommands = new Set(); // comandos en primer plano, para poder cancelarlos
+
 async function run(root, command, timeoutSec = 120) {
   const cwd = await inside(root, '.');
   return new Promise((resolve) => {
-    const child = spawn(command, { cwd, shell: true, windowsHide: true, env: process.env });
+    const child = spawnShell(command, cwd);
     let out = '';
+    let cancelled = false;
     const add = (b) => { if (out.length < MAX_OUT) out += b.toString(); };
     child.stdout.on('data', add);
     child.stderr.on('data', add);
-    const timer = setTimeout(() => { child.kill(); out += `\n(tiempo agotado: ${timeoutSec}s)`; }, timeoutSec * 1000);
-    child.on('error', (e) => { clearTimeout(timer); resolve(`ERROR al lanzar: ${e.message}`); });
+    const entry = { child, cancel: () => { cancelled = true; killTree(child); } };
+    runningCommands.add(entry);
+    const timer = setTimeout(() => { killTree(child); out += `\n(tiempo agotado: ${timeoutSec}s; proceso y subprocesos terminados)`; }, timeoutSec * 1000);
+    child.on('error', (e) => { clearTimeout(timer); runningCommands.delete(entry); resolve(`ERROR al lanzar: ${e.message}`); });
     child.on('close', (code) => {
       clearTimeout(timer);
-      resolve(`$ ${command}\n(salida ${code})\n${out.slice(0, MAX_OUT)}`);
+      runningCommands.delete(entry);
+      resolve(`$ ${command}\n(salida ${code})${cancelled ? ' (cancelado por el usuario)' : ''}\n${out.slice(0, MAX_OUT)}`);
     });
   });
+}
+
+/** Cancela los comandos en primer plano (botón detener). Devuelve cuántos había. */
+function cancelRuns() {
+  const n = runningCommands.size;
+  for (const e of runningCommands) e.cancel();
+  return n;
+}
+
+/* ---------------- procesos en segundo plano (servidores de desarrollo) ---------------- */
+const MAX_BG = 8;
+const BG_OUT = 64 * 1024;
+const background = new Map(); // id -> { child, command, cwd, started, out, exit }
+let bgSeq = 0;
+
+async function startProcess(root, command) {
+  if ([...background.values()].filter((p) => p.exit === null).length >= MAX_BG) throw new Error(`ya hay ${MAX_BG} procesos en segundo plano: detén alguno (stop_process)`);
+  const cwd = await inside(root, '.');
+  const child = spawnShell(command, cwd);
+  const id = `p${++bgSeq}`;
+  const p = { id, child, command, cwd, started: Date.now(), out: '', exit: null };
+  const add = (b) => { p.out = (p.out + b.toString()).slice(-BG_OUT); };
+  child.stdout.on('data', add);
+  child.stderr.on('data', add);
+  child.on('error', (e) => { p.exit = `error: ${e.message}`; });
+  child.on('close', (code) => { p.exit = code; });
+  background.set(id, p);
+  await new Promise((r) => setTimeout(r, 1500)); // primeras líneas (puerto, errores de arranque)
+  return `${id} iniciado: ${command}\n${p.exit !== null ? `(terminó enseguida, salida ${p.exit})\n` : ''}${p.out.slice(-3000)}`;
+}
+
+function processOutput(id, tail = 4000) {
+  const p = background.get(String(id));
+  if (!p) throw new Error(`no existe el proceso ${id}`);
+  const state = p.exit === null ? `en marcha desde hace ${Math.round((Date.now() - p.started) / 1000)} s` : `terminado (salida ${p.exit})`;
+  return `${p.id} · ${p.command} · ${state}\n${p.out.slice(-Math.min(Number(tail) || 4000, BG_OUT))}`;
+}
+
+function listProcesses() {
+  return [...background.values()].map((p) => ({ id: p.id, command: p.command, running: p.exit === null, exit: p.exit, started: p.started }));
+}
+
+function stopProcess(id) {
+  const p = background.get(String(id));
+  if (!p) throw new Error(`no existe el proceso ${id}`);
+  if (p.exit === null) killTree(p.child);
+  return `${p.id} detenido (${p.command})`;
+}
+
+/** Al salir de la app o en una parada de emergencia: nada queda corriendo a escondidas. */
+function stopAllProcesses() {
+  let n = 0;
+  for (const p of background.values()) if (p.exit === null) { killTree(p.child); n++; }
+  return n + cancelRuns();
+}
+
+/** Mueve o renombra dentro del espacio de trabajo (las dos rutas). No sobrescribe. */
+async function move(root, from, to) {
+  const src = await inside(root, from);
+  const dst = await inside(root, to);
+  await fs.stat(src).catch(() => { throw new Error(`no existe ${from}`); });
+  if (await fs.stat(dst).then(() => true, () => false)) throw new Error(`ya existe ${to}: no se sobrescribe`);
+  await snapshot(root, from);
+  await snapshot(root, to);
+  await fs.mkdir(path.dirname(dst), { recursive: true });
+  await fs.rename(src, dst);
+  return `movido ${from} -> ${to}`;
 }
 
 function version(cmd, args = ['--version']) {
@@ -416,6 +508,7 @@ async function hooks(root) {
 }
 
 module.exports = {
-  inside, list, read, write: writeTracked, edit: editTracked, search, run, systemInfo, osShort,
+  inside, list, read, write: writeTracked, edit: editTracked, search, run, cancelRuns, systemInfo, osShort,
+  startProcess, processOutput, listProcesses, stopProcess, stopAllProcesses, move, killTree,
   undo, peek, glob, webfetch, projectMemory, commands, agents, hooks, beginTurn, rewind,
 };

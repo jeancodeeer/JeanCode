@@ -193,6 +193,12 @@
 
     <!-- AGENT (solo escritorio) -->
     <section class="view" id="view-agent" hidden>
+      <div class="pc-status" id="pc-status" hidden role="status" aria-live="polite">
+        <span class="pc-dot" aria-hidden="true"></span><span id="pc-status-text">EQUIPO</span>
+        <span class="pc-key">CTRL+ALT+Q</span>
+        <button class="btn sm" type="button" id="pc-pause">PAUSAR</button>
+        <button class="btn sm primary" type="button" id="pc-stop">DETENER</button>
+      </div>
       <div class="agent-bar">
         <div class="seg" data-impeccable-ignore="cramped-padding" id="agent-toggle" role="radiogroup" aria-label="Agente">
           <button data-agent="build" class="active" role="radio" aria-checked="true" title="Implementa cambios (Tab alterna)">Build</button>
@@ -315,6 +321,7 @@
     <button class="it active" data-tab="conn">Conexiones</button>
     <button class="it" data-tab="models">Modelos</button>
     <button class="it" data-tab="behavior">Comportamiento</button>
+    <button class="it desktop-only" data-tab="computer" hidden>Equipo</button>
     <button class="it" data-tab="data">Datos</button>
   </div>
 
@@ -370,6 +377,25 @@
     </label>
     <h3>Comandos permitidos del agente</h3>
     <ul class="rows" id="allow-list"></ul>
+  </section>
+
+  <section data-pane="computer" hidden id="pc-settings">
+    <p class="note">En el modo <strong>AGENTE</strong>, Jean puede operar esta PC: ver la pantalla (o leer los controles de las ventanas), mover el ratón, hacer clic, escribir, pulsar atajos y abrir aplicaciones. Una barra flotante muestra cada acción; <strong>DETENER</strong> o <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>Q</kbd> lo para todo al instante.</p>
+    <p class="msg err" id="pc-unsupported" hidden></p>
+    <label class="check"><input type="checkbox" id="pc-enabled"> Permitir que el agente controle esta PC</label>
+    <h3>Permisos por riesgo</h3>
+    <label class="field"><span class="label">Bajo · mirar, mover, clic, escribir</span>
+      <select id="pc-low"><option value="allow">Permitir</option><option value="ask">Preguntar cada vez</option></select></label>
+    <label class="field"><span class="label">Medio · atajos de teclado, abrir aplicaciones</span>
+      <select id="pc-medium"><option value="task">Preguntar una vez por tarea</option><option value="ask">Preguntar cada vez</option></select></label>
+    <p class="note">Alto (atajos con Win o Alt+F4, borrar archivos, comandos destructivos): pregunta siempre. Comandos y archivos siguen el modo de permisos del agente. Nunca escribe contraseñas.</p>
+    <label class="check pc-gap"><input type="checkbox" id="pc-minimize"> Minimizar JeanCode mientras controla (vuelve para pedir permisos)</label>
+    <label class="field"><span class="label">Capturas a proveedores externos</span>
+      <select id="pc-shots"><option value="ask">Preguntar antes de enviar cada captura</option><option value="allow">Permitir</option></select></label>
+    <p class="note">Con modelos locales o tu Codespace las capturas no salen de tus equipos. JeanCode nunca aparece en las capturas.</p>
+    <h3>Registro de acciones</h3>
+    <pre class="route-log" id="pc-log"></pre>
+    <div class="row gap"><button class="btn" type="button" id="pc-log-refresh">Actualizar</button><button class="btn" type="button" id="pc-log-copy">Copiar registro</button></div>
   </section>
 
   <section data-pane="data" hidden>
