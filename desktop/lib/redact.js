@@ -1,7 +1,7 @@
 // Redacción de secretos en el proceso principal (registros, observaciones de pantalla, salidas de comandos).
 // La interfaz web tiene la misma regla en web/js/router.js (redact): el renderer no puede importar CommonJS.
 // Si cambias una, cambia la otra.
-const PREFIXES = /\b(sk-(?:ant-|or-|proj-)?|hf_|gsk_|xai-|fw_|csk-|jean_|jeantest_|AIza|ghp_|gho_|ghs_|github_pat_|nvapi-|glpat-|xox[abpr]-)[A-Za-z0-9_-]{6,}/g;
+const PREFIXES = /\b(sk-(?:ant-|or-|proj-)?|hf_|gsk_|xai-|fw_|csk-|jean_|jeantest_|AIza|ghp_|gho_|ghs_|github_pat_|nvapi-|glpat-|sk_|cpk_|xox[abpr]-)[A-Za-z0-9_-]{6,}/g;
 
 function redact(text) {
   return String(text ?? '')

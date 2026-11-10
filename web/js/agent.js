@@ -10,7 +10,7 @@ const COMPUTER_MAX_STEPS = 100; // una tarea de pantalla son muchas acciones peq
 const SUB_MAX_STEPS = 14;
 const MAX_RESULT = 12000;
 
-const READ_TOOLS = ['list_dir', 'read_file', 'search', 'glob', 'webfetch', 'system_info', 'load_skill', 'todo_write'];
+const READ_TOOLS = ['list_dir', 'read_file', 'search', 'glob', 'diagnostics', 'webfetch', 'system_info', 'load_skill', 'todo_write'];
 const WRITE_TOOLS = ['write_file', 'edit_file', 'move_file'];
 const PROC_TOOLS = ['start_process', 'stop_process'];
 
@@ -23,6 +23,7 @@ Lectura:
 - glob {"pattern": "src/**/*.ts"}                         archivos que cumplen un patrón
 - read_file {"path": "a.js", "offset": 0, "limit": 400}   líneas numeradas de un archivo
 - search {"pattern": "regex", "path": "."}                busca texto en los archivos
+- diagnostics {"path": "a.ts", "deep": true}              errores de sintaxis; deep = también ESLint y tipos (tsc) del proyecto
 - webfetch {"url": "https://..."}                         texto de una página web (documentación)
 - system_info {}                                          sistema operativo, CPU, RAM y herramientas
 - load_skill {"name": "nombre"}                           instrucciones completas de una skill
@@ -45,6 +46,7 @@ export const TOOL_SCHEMAS = [
   ['glob', 'Archivos que cumplen un patrón', S({ pattern: str('p. ej. src/**/*.ts') }, ['pattern'])],
   ['read_file', 'Lee líneas numeradas de un archivo', S({ path: str('ruta relativa'), offset: { type: 'integer' }, limit: { type: 'integer' } }, ['path'])],
   ['search', 'Busca una expresión regular en los archivos', S({ pattern: str('regex'), path: str('carpeta') }, ['pattern'])],
+  ['diagnostics', 'Errores de un archivo como los daría un LSP: sintaxis y, con deep, ESLint y tipos (tsc) del proyecto', S({ path: str('ruta relativa'), deep: { type: 'boolean', description: 'también lint y tipos (más lento)' } }, ['path'])],
   ['webfetch', 'Texto de una página web pública (documentación)', S({ url: str('https://...') }, ['url'])],
   ['system_info', 'Sistema operativo, CPU, RAM y herramientas instaladas', S({})],
   ['load_skill', 'Carga las instrucciones completas de una skill instalada', S({ name: str('nombre de la skill') }, ['name'])],
@@ -89,6 +91,7 @@ Permisos: ${perms}
 Forma de trabajar:
 - En código, inspecciona antes de cambiar (glob, search, read_file). No inventes rutas ni APIs: si un archivo no existe, no insistas.
 - Cambios pequeños y verificables; después ejecuta pruebas o el comando que corresponda.
+- Tras cada escritura recibirás DIAGNÓSTICOS del archivo; si dicen HAY ERRORES, corrígelos antes de seguir.
 - En tareas de 3 pasos o más usa todo_write y actualízalo al avanzar.
 - Si el usuario rechaza una acción, no la repitas: propone otra o pregunta.
 - Respuestas concisas; código en bloques con lenguaje.
@@ -207,6 +210,14 @@ export async function runAgent(ctx, messages, { sub = false } = {}) {
   const limit = sub ? SUB_MAX_STEPS : (ctx.computer ? COMPUTER_MAX_STEPS : MAX_STEPS);
   const readOnly = ctx.mode === 'plan' || ctx.agent === 'plan';
 
+  // Diagnóstico automático tras escribir (como el LSP de OpenCode): el modelo ve sus errores de sintaxis al momento
+  const afterEdit = async (p) => {
+    if (ctx.autoDiagnostics === false || !d.fs?.diagnose) return '';
+    const r = await d.fs.diagnose(ctx.workspace, String(p), { auto: true }).catch(() => '');
+    return r ? `
+${r}` : '';
+  };
+
   const exec = async ({ tool, args }) => {
     if (tool === '__invalid') return 'ERROR: el bloque tool no es JSON válido: ' + args.raw;
     if (COMPUTER_TOOL_NAMES.includes(tool)) {
@@ -257,9 +268,13 @@ export async function runAgent(ctx, messages, { sub = false } = {}) {
         }
         case 'read_file': return clip(await d.fs.read(ctx.workspace, args.path, args.offset || 0, args.limit || 400));
         case 'search': return clip(await d.fs.search(ctx.workspace, args.pattern, args.path || '.'));
+        case 'diagnostics': {
+          if (!d.fs.diagnose) return 'ERROR: los diagnósticos solo están en la app de escritorio.';
+          return clip(await d.fs.diagnose(ctx.workspace, String(args.path), { deep: !!args.deep }));
+        }
         case 'webfetch': return clip(await d.web.fetch(String(args.url)));
-        case 'write_file': { const r = await d.fs.write(ctx.workspace, args.path, String(args.content ?? '')); ctx.onEvent({ type: 'file-changed', path: args.path }); return clip(r + ((await ctx.runHooks?.('post_edit', { path: args.path })) || '')); }
-        case 'edit_file': { const r = await d.fs.edit(ctx.workspace, args.path, String(args.old ?? ''), String(args.new ?? '')); ctx.onEvent({ type: 'file-changed', path: args.path }); return clip(r + ((await ctx.runHooks?.('post_edit', { path: args.path })) || '')); }
+        case 'write_file': { const r = await d.fs.write(ctx.workspace, args.path, String(args.content ?? '')); ctx.onEvent({ type: 'file-changed', path: args.path }); return clip(r + ((await ctx.runHooks?.('post_edit', { path: args.path })) || '') + (await afterEdit(args.path))); }
+        case 'edit_file': { const r = await d.fs.edit(ctx.workspace, args.path, String(args.old ?? ''), String(args.new ?? '')); ctx.onEvent({ type: 'file-changed', path: args.path }); return clip(r + ((await ctx.runHooks?.('post_edit', { path: args.path })) || '') + (await afterEdit(args.path))); }
         case 'run_command': return clip(await d.shell.run(ctx.workspace, String(args.command), Math.min(+args.timeout || 120, 1800)));
         case 'start_process': return clip(await d.proc.start(ctx.workspace, String(args.command)));
         case 'process_output': return clip(await d.proc.output(String(args.id), args.tail));
@@ -280,13 +295,24 @@ export async function runAgent(ctx, messages, { sub = false } = {}) {
           const def = args.agent ? (ctx.sys.agents || []).find((a) => a.name === args.agent) : null;
           if (args.agent && !def) return `ERROR: no existe el subagente "${args.agent}". Disponibles: ${(ctx.sys.agents || []).map((a) => a.name).join(', ') || 'ninguno'}`;
           ctx.onEvent({ type: 'subagent-start', task: args.task, agent: def?.name });
-          const subCtx = { ...ctx, subWrite: def ? def.write : !!args.write, onEvent: (e) => ctx.onEvent({ ...e, nested: true }) };
+          // traza del subagente: qué herramientas usó, cuántas fallaron y cuántos tokens gastó
+          const stats = { tools: {}, errors: 0, prompt: 0, completion: 0, steps: 0, ms: Date.now() };
+          const subCtx = { ...ctx, subWrite: def ? def.write : !!args.write, onEvent: (e) => {
+            if (e.type === 'tool-end') {
+              stats.tools[e.call.tool] = (stats.tools[e.call.tool] || 0) + 1;
+              if (/^(ERROR|DENEGADO|RECHAZADO)/.test(String(e.result ?? ''))) stats.errors++;
+            }
+            if (e.type === 'usage' && e.usage) { stats.prompt += e.usage.prompt || 0; stats.completion += e.usage.completion || 0; }
+            if (e.type === 'assistant-start') stats.steps++;
+            ctx.onEvent({ ...e, nested: true });
+          } };
           const sys = agentSystem({ ...ctx.sys, sub: true, native: ctx.native !== false }) + (def ? `\n\nTU ROL (${def.name}):\n${def.prompt}` : '');
           const report = await runAgent(subCtx, [
             { role: 'system', content: sys },
             { role: 'user', content: String(args.task) },
           ], { sub: true });
-          ctx.onEvent({ type: 'subagent-end', task: args.task, report });
+          stats.ms = Date.now() - stats.ms;
+          ctx.onEvent({ type: 'subagent-end', task: args.task, agent: def?.name, report, stats });
           return clip('INFORME DEL SUBAGENTE:\n' + report);
         }
         default: return `ERROR: herramienta desconocida "${tool}". Usa solo las de la lista.`;

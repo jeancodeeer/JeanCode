@@ -6,12 +6,12 @@ import { getEndpoints, saveEndpoints, addEndpoint, probe, generateKey, discoverS
 import { renderMarkdown, esc } from './md.js';
 import { CODE_SYSTEM, parseFiles, projectContext, buildPreview } from './code.js';
 import { makeZip, downloadBlob } from './zip.js';
-import { agentSystem, runAgent, stripToolBlocks, STYLES } from './agent.js';
+import { agentSystem, runAgent, stripToolBlocks, STYLES, toolSchemasFor } from './agent.js';
 import { BUILTIN, PROMPTS, matchCommands, parseCommand, expandCustom, estimateTokens, CONTEXT_LIMIT } from './commands.js';
 import { lineDiff, diffStats } from './diff.js';
 import { PROVIDERS, providerById, providerOf, LOCAL_CANDIDATES, OLLAMA_SUGGESTED } from './providers.js';
 import { AUTO, modelKey, chat as routedChat, probeEndpoint, healthOf, validateEndpoint, pickAuto, visibleModels, resolveSaved, formatLog, routeLog, FALLBACK_POLICIES, fallbackPolicy, decide, routeFor, setRouteFor, checkEndpoint, exportConfig, KIND_LABEL, formatTrace, fallbackChain, allowPaidAuto, where, latencyOf } from './router.js';
-import { capsOf, describeCaps, billingOf } from './capabilities.js';
+import { capsOf, describeCaps, billingOf, fmtCtx } from './capabilities.js';
 import { normalizePolicy, describeAction, riskOf, actionKey, needsTerminalApproval, INPUT_TOOLS } from './computer.js';
 import { SLOTS, controlUrlFrom, hfSearch, hfFiles, control, gb } from './hf.js';
 
@@ -599,19 +599,31 @@ function updateContext() {
   // dato real del servidor si lo hay (prompt + respuesta del último turno); si no, estimación
   const real = t?.lastContext || 0;
   const used = Math.max(real, real ? 0 : estimateTokens(msgs));
-  const pct = Math.min(100, Math.round((used / CONTEXT_LIMIT) * 100));
+  const win = contextWindow();
+  const pct = Math.min(100, Math.round((used / win.limit) * 100));
   $('#ctx-fill').style.width = pct + '%';
   $('#ctx-text').textContent = pct + '%';
-  const total = t?.usage ? ` · sesión: ↑ ${fmtTok(t.usage.prompt)} ↓ ${fmtTok(t.usage.completion)} tokens` : '';
-  $('#ctx-meter').title = `${real ? '' : '≈ '}${used.toLocaleString()} de ${CONTEXT_LIMIT.toLocaleString()} tokens${total}. Usa /compact para resumir.`;
+  const total = t?.usage ? ` · sesión: ↑ ${fmtTok(t.usage.prompt)} ↓ ${fmtTok(t.usage.completion)} tokens${t.cost ? ` · ≈ ${fmtCost(t.cost)}` : ''}` : '';
+  $('#ctx-meter').title = `${real ? '' : '≈ '}${used.toLocaleString()} de ${win.limit.toLocaleString()} tokens (${win.known ? 'ventana del modelo' : 'ventana desconocida: se suponen 128k'})${total}. Usa /compact para resumir; /context para ver el detalle.`;
   $('#ctx-meter').classList.toggle('warn', pct >= 75);
   return pct;
 }
 
-function addUsage(t, u) {
+/** Ventana de contexto del modelo actual: la informada (proveedor, router, familia) o 128k supuesta. */
+function contextWindow(m = currentModel()) {
+  const c = m ? capsOf(m.ep, m.id).context : null;
+  return c ? { limit: c, known: true } : { limit: CONTEXT_LIMIT, known: false };
+}
+
+const fmtCost = (usd) => (usd < 0.01 ? `$${usd.toFixed(4)}` : `$${usd.toFixed(2)}`);
+
+/** Suma el consumo de un turno; si el proveedor informa el precio por token del modelo (m), también el coste. */
+function addUsage(t, u, m = null) {
   if (!t || !u) return;
   t.usage = { prompt: (t.usage?.prompt || 0) + u.prompt, completion: (t.usage?.completion || 0) + u.completion };
   t.lastContext = u.prompt + u.completion;
+  const price = m ? capsOf(m.ep, m.id).price : null;
+  if (price) t.cost = (t.cost || 0) + u.prompt * price.prompt + u.completion * price.completion;
 }
 
 /* ------------------------------------------------------------- composer */
@@ -800,6 +812,8 @@ async function runCommand({ name, args }) {
     case 'export': exportThread(t); return null;
     case 'zip': $('#dl-zip').click(); return null;
     case 'compact': await compact(t); return null;
+    case 'context': await showContext(t); return null;
+    case 'doctor': await runDoctor(); return null;
     case 'plan': setAgent('plan'); return null;
     case 'build': setAgent('build'); return null;
     case 'undo': {
@@ -814,6 +828,111 @@ async function runCommand({ name, args }) {
   }
 }
 
+/** Traza de un subagente: pasos, herramientas, errores, tokens y tiempo. */
+function subagentSummary(ev) {
+  const st = ev.stats;
+  if (!st) return 'SUBAGENTE TERMINÓ';
+  const tools = Object.entries(st.tools).sort((a, b) => b[1] - a[1]).map(([k, v]) => `${k}×${v}`).join(', ') || 'sin herramientas';
+  const tok = st.prompt || st.completion ? ` · ↑ ${fmtTok(st.prompt)} ↓ ${fmtTok(st.completion)} tokens` : '';
+  return `SUBAGENTE${ev.agent ? ` ${ev.agent.toUpperCase()}` : ''} TERMINÓ · ${st.steps} pasos · ${tools}${st.errors ? ` · ${st.errors} con error` : ''}${tok} · ${Math.round(st.ms / 1000)} s`;
+}
+
+const approxTok = (s) => Math.round(String(s || '').length / 3.6);
+
+/** /context: lo que se envía exactamente al modelo, por partes, con su peso en tokens. */
+async function showContext(t) {
+  const m = currentModel();
+  const win = contextWindow(m);
+  let system, tools = [], history, parts = [];
+  if (state.mode === 'agent' && desktop && state.workspace) {
+    await loadProject();
+    const [skills, os, memory] = await Promise.all([desktop.skills.list(), desktop.system.os(), desktop.project.memory(state.workspace).catch(() => '')]);
+    const sys = agentSys({ os, skills, memory });
+    if (pcEnabled() && pc.supported) sys.computer = { vision: m ? capsOf(m.ep, m.id).vision === true : false, screen: null };
+    system = agentSystem(sys);
+    tools = toolSchemasFor({ computer: sys.computer || null });
+    history = (t?.agentMessages || t?.messages || []).slice(t?.agentMessages ? 1 : 0);
+    parts = [
+      ['memoria del proyecto (AGENTS.md)', memory], ['reglas fijadas', sys.rules],
+      ['lista de skills', skills.map((x) => `${x.name}: ${x.description}`).join('\n')],
+      ['subagentes del proyecto', (sys.agents || []).map((x) => `${x.name}: ${x.description}`).join('\n')],
+    ].filter(([, v]) => String(v || '').trim());
+  } else {
+    system = chatSystem(t);
+    history = (t?.messages || []).slice(-24);
+    parts = [['reglas fijadas', store.get('rules', '')]].filter(([, v]) => String(v || '').trim());
+  }
+  const sysTok = approxTok(system);
+  const toolTok = approxTok(JSON.stringify(tools));
+  const histTok = estimateTokens(history.map((x) => ({ content: typeof x.content === 'string' ? x.content : JSON.stringify(x.content) })));
+  const total = sysTok + toolTok + histTok;
+  const c = m ? capsOf(m.ep, m.id) : null;
+  const lines = [
+    `CONTEXTO · ${m ? `${m.id} en ${providerOf(m.ep).name}` : 'sin modelo'}`,
+    `ventana: ${win.limit.toLocaleString()} tokens ${win.known ? `(informada: ${c.source.join(' + ')})` : '(desconocida: se suponen 128k)'}`,
+    `prompt del sistema: ≈ ${fmtTok(sysTok)} tokens`,
+    ...parts.map(([k, v]) => `  · ${k}: ≈ ${fmtTok(approxTok(v))}`),
+    tools.length ? `herramientas: ${tools.length} definiciones · ≈ ${fmtTok(toolTok)} tokens` : 'herramientas: ninguna en este modo',
+    `historial: ${history.length} mensajes · ≈ ${fmtTok(histTok)} tokens${t?.lastContext ? ` (último turno real: ${fmtTok(t.lastContext)})` : ''}`,
+    `TOTAL ≈ ${fmtTok(total)} de ${fmtTok(win.limit)} (${Math.round((total / win.limit) * 100)} %)`,
+    t?.usage ? `sesión: ↑ ${fmtTok(t.usage.prompt)} ↓ ${fmtTok(t.usage.completion)} tokens${t.cost ? ` · ≈ ${fmtCost(t.cost)} (precio informado por el proveedor)` : ''}` : 'sesión: sin consumo todavía',
+    'Las cifras con ≈ son estimaciones (≈ 3.6 caracteres por token). Debajo, el prompt del sistema completo.',
+  ];
+  addMessage('system', lines.join('\n'));
+  addMessage('tool', `PROMPT DEL SISTEMA (exacto)\n\n${system}`);
+}
+
+/** /doctor: una sola comprobación de toda la configuración efectiva, con causa y remedio. */
+async function runDoctor() {
+  const out = ['DOCTOR'];
+  const ok = (good, text, fix = '') => out.push(`${good ? '✓' : '✗'} ${text}${!good && fix ? ` → ${fix}` : ''}`);
+  const row = addMessage('system', 'DOCTOR · comprobando…');
+  const eps = getEndpoints();
+  ok(eps.length > 0, `${eps.length} conexión(es) de API`, 'añade una en Ajustes → Conexiones');
+  for (const ep of eps) {
+    try {
+      const r = await probeEndpoint(ep);
+      ok(true, `${providerOf(ep).name}: ${r.ids.length} modelos · ${healthOf(ep).ms} ms`);
+    } catch (e) {
+      ok(false, `${providerOf(ep).name}: ${KIND_LABEL[e.kind] || e.kind || 'error'}`, diagnose(e, providerOf(ep).id));
+    }
+  }
+  const m = currentModel();
+  ok(!!m, m ? `modelo activo: ${m.id}` : 'sin modelo activo', 'elige uno arriba a la derecha');
+  if (m) {
+    const c = capsOf(m.ep, m.id);
+    const win = contextWindow(m);
+    ok(win.known, `ventana de contexto: ${win.known ? fmtCtx(win.limit) : 'desconocida (se suponen 128k)'}`, 'si el modelo es pequeño, compacta antes: el medidor puede quedarse corto');
+    if (state.mode === 'agent') ok(c.tools !== false, `herramientas: ${c.tools === true ? 'sí' : c.tools === false ? 'no' : 'sin confirmar'}`, 'el agente necesita un modelo con herramientas');
+  }
+  ok(!!desktop, desktop ? 'app de escritorio: agente, archivos y terminal disponibles' : 'versión web: sin agente local', 'instala JeanCode de escritorio para el modo AGENT');
+  if (desktop) {
+    if (state.workspace) {
+      try {
+        await desktop.fs.list(state.workspace, '.');
+        ok(true, `carpeta de trabajo: ${state.workspace}`);
+        const memory = await desktop.project.memory(state.workspace).catch(() => '');
+        ok(!!memory, memory ? `memoria del proyecto: ≈ ${fmtTok(approxTok(memory))} tokens` : 'sin AGENTS.md', 'ejecuta /init para crearla');
+        const h = await desktop.project.hooks(state.workspace).catch(() => null);
+        if (h?.hooks && Object.keys(h.hooks).length) {
+          const trusted = store.get(`hooksTrust:${state.workspace}`, '') === h.hash;
+          ok(trusted, `hooks del proyecto: ${Object.keys(h.hooks).join(', ')}`, 'se pedirá confianza en el próximo turno del agente');
+        } else out.push('· sin hooks del proyecto');
+        await loadProject();
+        out.push(`· ${state.custom.length} comandos y ${(state.agents || []).length} subagentes del proyecto`);
+      } catch (e) {
+        ok(false, `carpeta de trabajo: ${state.workspace}`, `no se puede leer (${e.message}); elige otra`);
+      }
+    } else ok(false, 'sin carpeta de trabajo', 'elígela en la barra del agente');
+    const skills = await desktop.skills.list().catch(() => []);
+    out.push(`· ${skills.length} skills instaladas`);
+    out.push(`· diagnósticos tras cada edición: ${store.get('autoDiag', true) ? 'activados' : 'desactivados'}`);
+    out.push(`· control del equipo: ${!pc.supported ? 'no disponible en este sistema' : pcEnabled() ? 'activado' : 'desactivado (Ajustes → Equipo)'}`);
+  }
+  if (typeof navigator !== 'undefined' && navigator.onLine === false) ok(false, 'sin conexión a internet', 'las APIs remotas fallarán; usa un modelo local');
+  updateMessage(row, out.join('\n'));
+}
+
 async function compact(t) {
   const m = currentModel();
   if (!t || !t.messages.length || !m) { toast('NADA QUE RESUMIR'); return; }
@@ -822,7 +941,8 @@ async function compact(t) {
   const row = addMessage('system', 'Resumiendo la conversación…');
   try {
     const transcript = (t.agentMessages || t.messages).filter((x) => x.role !== 'system')
-      .map((x) => `${x.role.toUpperCase()}: ${x.content}`).join('\n\n').slice(-120000);
+      .map((x) => `${x.role.toUpperCase()}: ${typeof x.content === 'string' ? x.content : '(imagen)'}`).join('\n\n')
+      .slice(-Math.min(120000, Math.round(contextWindow(m).limit * 2.2))); // ≈ 60 % de la ventana: cabe en modelos pequeños
     const { text: summary } = await routedChat(m, {
       signal: state.abort.signal, think: false,
       messages: [{ role: 'system', content: PROMPTS.compact }, { role: 'user', content: transcript }],
@@ -857,10 +977,21 @@ function extraSystem() {
   return (style ? `\n\n${style}` : '') + (rules ? `\n\nREGLAS FIJADAS POR EL USUARIO (siempre vigentes):\n${rules}` : '');
 }
 
-async function sendChat(t, m) {
-  const sys = (state.mode === 'code'
-    ? CODE_SYSTEM + '\n\n' + projectContext(t.files)
+function chatSystem(t) {
+  return (state.mode === 'code'
+    ? CODE_SYSTEM + '\n\n' + projectContext(t?.files || {})
     : (store.get('sysChat', DEFAULT_SYS) || DEFAULT_SYS)) + extraSystem();
+}
+
+function agentSys({ os, skills, memory }) {
+  return {
+    workspace: state.workspace, os, skills, mode: state.perm, agent: state.agent, memory,
+    agents: state.agents || [], style: store.get('style', 'normal'), rules: store.get('rules', ''),
+  };
+}
+
+async function sendChat(t, m) {
+  const sys = chatSystem(t);
   const history = t.messages.slice(-24).map(({ role, content }) => ({ role, content }));
   const row = addMessage('assistant', '', { streaming: true });
   let text = '';
@@ -889,7 +1020,7 @@ async function sendChat(t, m) {
     updateMessage(row, text, reasoning, false);
     if (!text && !reasoning) row.remove(); // falló antes de responder: solo queda el mensaje de error
     else if (traceRow) attachTrace(row, traceRow);
-    if (usage) { setUsage(row, usage); addUsage(t, usage); }
+    if (usage) { setUsage(row, usage); addUsage(t, usage, m); }
     if (text) t.messages.push({ role: 'assistant', content: text, reasoning, usage: usage || undefined });
     if (state.mode === 'code') applyFiles(t, base, text, true);
   }
@@ -1068,10 +1199,7 @@ async function sendAgent(t, m, text, turn) {
     store.set(`nogitWarned:${state.workspace}`, true);
     addMessage('system', 'Esta carpeta no es un repo git: «volver aquí» deshará los archivos que edite el agente, pero no lo que cambien los comandos de terminal. Con git init se cubre todo.');
   }
-  const sys = {
-    workspace: state.workspace, os, skills, mode: state.perm, agent: state.agent, memory,
-    agents: state.agents || [], style: store.get('style', 'normal'), rules: store.get('rules', ''),
-  };
+  const sys = agentSys({ os, skills, memory });
   // Control del equipo: solo si el usuario lo activó y el sistema lo admite; una sesión por turno
   const computer = await beginComputer(text, m);
   if (computer) sys.computer = { vision: computer.vision, screen: computer.screen };
@@ -1096,8 +1224,9 @@ async function sendAgent(t, m, text, turn) {
     // el agente pide cada paso al enrutador; si cambia de backend, los pasos siguientes siguen en el nuevo
     chat: (o) => routedChat({ id: o.model, ep: o.ep }, o, routeCtx((to) => { ctx.ep = to.ep; ctx.model = to.id; })).then((r) => r.text),
     signal: state.abort.signal, confirm: confirmWithAttention, isAllowed, allowCommand, runHooks: hookRunner(hooks), computer,
+    autoDiagnostics: store.get('autoDiag', true),
     onEvent: (ev) => {
-      if (ev.type === 'usage') { addUsage(t, ev.usage); if (row) setUsage(row, ev.usage); }
+      if (ev.type === 'usage') { addUsage(t, ev.usage, { ep: ctx.ep, id: ctx.model }); if (row) setUsage(row, ev.usage); }
       if (ev.type === 'assistant-start') row = addMessage('assistant', '', { streaming: true, cls: ev.nested ? 'nested' : '' });
       if (ev.type === 'assistant-delta' && row) updateMessage(row, ev.text, ev.reasoning, true);
       if (ev.type === 'assistant-end' && row) {
@@ -1108,7 +1237,7 @@ async function sendAgent(t, m, text, turn) {
       }
       if (ev.type === 'tool-end') addToolLine(ev.call, ev.result, ev.nested);
       if (ev.type === 'subagent-start') addMessage('system', `SUBAGENTE${ev.agent ? ` ${ev.agent.toUpperCase()}` : ''} LANZADO · ${String(ev.task).slice(0, 300)}`);
-      if (ev.type === 'subagent-end') addMessage('system', `SUBAGENTE TERMINÓ`);
+      if (ev.type === 'subagent-end') addMessage('system', subagentSummary(ev));
       if (ev.type === 'todos' && !ev.nested) { t.todos = ev.todos; renderTodos(ev.todos); }
       if (ev.type === 'file-changed') state.fileCache = null;
       updateContext();
@@ -1442,6 +1571,7 @@ function renderSettings() {
   $('#sys-chat').value = store.get('sysChat', DEFAULT_SYS);
   $('#style-select').value = store.get('style', 'normal');
   $('#rules').value = store.get('rules', '');
+  $('#auto-diag').checked = store.get('autoDiag', true);
   renderAllowList();
   renderFenix();
   renderPcSettings();
@@ -1469,6 +1599,7 @@ $('#allow-list').addEventListener('click', (e) => {
 });
 $('#style-select').addEventListener('change', (e) => { store.set('style', e.target.value); toast('ESTILO: ' + e.target.selectedOptions[0].textContent.toUpperCase()); });
 $('#rules').addEventListener('change', (e) => store.set('rules', e.target.value));
+$('#auto-diag').addEventListener('change', (e) => store.set('autoDiag', e.target.checked));
 
 /* ------------------------------------------------------- control del equipo */
 const PC_TOOLS = new Set(['screenshot', 'inspect_screen', 'list_windows', 'focus_window', 'mouse_move', 'mouse_click', 'click_element',

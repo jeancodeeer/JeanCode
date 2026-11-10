@@ -25,7 +25,7 @@ const log = [];
 export function redact(text) {
   return String(text ?? '')
     .replace(/Bearer\s+[^\s"']+/gi, 'Bearer ***')
-    .replace(/\b(sk-(?:ant-|or-|proj-)?|hf_|gsk_|xai-|fw_|csk-|jean_|jeantest_|AIza|ghp_|gho_|ghs_|github_pat_|nvapi-|glpat-|xox[abpr]-)[A-Za-z0-9_-]{6,}/g, '$1***')
+    .replace(/\b(sk-(?:ant-|or-|proj-)?|hf_|gsk_|xai-|fw_|csk-|jean_|jeantest_|AIza|ghp_|gho_|ghs_|github_pat_|nvapi-|glpat-|sk_|cpk_|xox[abpr]-)[A-Za-z0-9_-]{6,}/g, '$1***')
     .replace(/([?&](?:key|api_key|token|access_token)=)[^&\s]+/gi, '$1***')
     .replace(/\b[A-Za-z0-9]{32,}\b/g, '***');
 }

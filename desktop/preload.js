@@ -31,6 +31,7 @@ contextBridge.exposeInMainWorld('jeancodeDesktop', {
     glob: call('fs:glob'),
     move: call('fs:move'),
     trash: call('fs:trash'),
+    diagnose: call('fs:diagnose'),
   },
   web: { fetch: call('web:fetch') },
   project: { memory: call('project:memory'), commands: call('project:commands'), agents: call('project:agents'), hooks: call('project:hooks') },

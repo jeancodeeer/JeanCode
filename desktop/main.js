@@ -3,6 +3,7 @@ const { app, BrowserWindow, ipcMain, dialog, shell, safeStorage, globalShortcut,
 const path = require('node:path');
 const fs = require('node:fs/promises');
 const tools = require('./lib/tools');
+const diagnostics = require('./lib/diagnostics');
 const skillsLib = require('./lib/skills');
 const { ComputerControl } = require('./lib/computer/control');
 
@@ -151,6 +152,7 @@ ipcMain.handle('shell:run', (_e, root, cmd, timeout) => tools.run(root, cmd, tim
 ipcMain.handle('fs:undo', (_e, root) => tools.undo(root));
 ipcMain.handle('fs:peek', (_e, root, rel) => tools.peek(root, rel));
 ipcMain.handle('fs:glob', (_e, root, pat, limit) => tools.glob(root, pat, limit));
+ipcMain.handle('fs:diagnose', (_e, root, rel, opts) => diagnostics.diagnose(root, rel, { deep: !!opts?.deep, auto: !!opts?.auto }));
 ipcMain.handle('web:fetch', (_e, url) => tools.webfetch(url));
 ipcMain.handle('project:memory', (_e, root) => tools.projectMemory(root));
 ipcMain.handle('project:commands', (_e, root) => tools.commands(root));

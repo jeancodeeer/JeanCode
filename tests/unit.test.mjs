@@ -379,3 +379,99 @@ test('agente: repetir un clic con éxito NO es un bucle (pulsar 3 veces puede se
   assert.equal(log.acts.length, 4);
   assert.ok(!msgs.some((m) => m.role === 'user' && /AVISO/.test(m.content)));
 });
+
+/* --------------------------------------- diagnósticos, contexto por modelo, /context, /doctor, subagentes */
+const diag = require('../desktop/lib/diagnostics.js');
+
+test('diagnósticos: errores reales de sintaxis con línea, archivos sanos limpios, nada fuera del espacio', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'jc-diag-'));
+  writeFileSync(join(root, 'mal.js'), 'const a = 1;\nfunction f( {\n');
+  writeFileSync(join(root, 'bien.js'), 'export const a = 1;\n');
+  writeFileSync(join(root, 'mal.json'), '{\n  "a": 1,\n}\n');
+  writeFileSync(join(root, 'mal.py'), 'def f(:\n  pass\n');
+  writeFileSync(join(root, 'nota.txt'), 'x');
+  const bad = await diag.diagnose(root, 'mal.js');
+  assert.match(bad, /node --check.*HAY ERRORES/s);
+  assert.match(bad, /SyntaxError/);
+  assert.ok(!bad.includes(root), 'el informe usa la ruta relativa');
+  assert.match(await diag.diagnose(root, 'bien.js'), /sin errores/, 'un módulo ES correcto no es un error');
+  writeFileSync(join(root, 'esm-mal.js'), 'export function suma(a, b {\n  return a + b;\n}\n');
+  writeFileSync(join(root, 'cjs-mal.js'), 'const x = require("fs");\nmodule.exports = (x;\n');
+  writeFileSync(join(root, 'cjs-bien.cjs'), 'module.exports = 1;\n');
+  const esm = await diag.diagnose(root, 'esm-mal.js');
+  assert.match(esm, /HAY ERRORES[\s\S]*esm-mal\.js:1/);
+  assert.ok(!/\(node:\d+\)/.test(esm), 'sin avisos internos de Node');
+  assert.match(await diag.diagnose(root, 'cjs-mal.js'), /HAY ERRORES/);
+  assert.match(await diag.diagnose(root, 'cjs-bien.cjs'), /sin errores/);
+  assert.match(await diag.diagnose(root, 'mal.json'), /JSON\.parse.*HAY ERRORES[\s\S]*3: /);
+  const py = await diag.diagnose(root, 'mal.py');
+  assert.match(py, /HAY ERRORES[\s\S]*1:\d+: |no está instalada/);
+  assert.match(await diag.diagnose(root, 'nota.txt'), /no hay verificador/);
+  assert.equal(await diag.diagnose(root, 'nota.txt', { auto: true }), '', 'tras editar, sin verificador no se añade nada');
+  await assert.rejects(diag.diagnose(root, '../fuera.js'), /fuera del espacio/);
+  // Python se valida sin escribir __pycache__ en la carpeta del usuario
+  assert.ok(!require('node:fs').existsSync(join(root, '__pycache__')));
+});
+
+test('agente: tras escribir recibe los diagnósticos; se pueden desactivar; la herramienta es de solo lectura', async () => {
+  const seen = [];
+  const fsx = { diagnose: async (_w, p, o) => { seen.push([p, o]); return `DIAGNÓSTICOS ${p} (node --check): HAY ERRORES`; } };
+  const run = async (calls, ctx) => runScripted(calls, { ctx: { ...ctx, desktop: { fs: { peek: async () => null, write: async () => 'escrito', ...fsx } } } });
+  let { msgs } = await run([{ tool: 'write_file', args: { path: 'a.js', content: 'x(' } }], { mode: 'auto-edit' });
+  assert.ok(msgs.some((m) => m.role === 'tool' && /escrito\nDIAGNÓSTICOS a\.js.*HAY ERRORES/.test(m.content)));
+  assert.deepEqual(seen[0], ['a.js', { auto: true }]);
+  ({ msgs } = await run([{ tool: 'write_file', args: { path: 'b.js', content: '' } }], { mode: 'auto-edit', autoDiagnostics: false }));
+  assert.ok(msgs.some((m) => m.role === 'tool' && m.content === 'escrito'));
+  ({ msgs } = await run([{ tool: 'diagnostics', args: { path: 'c.ts', deep: true } }], { agent: 'plan' }));
+  assert.ok(msgs.some((m) => m.role === 'tool' && /DIAGNÓSTICOS c\.ts/.test(m.content)), 'PLAN puede diagnosticar');
+  assert.deepEqual(seen.at(-1), ['c.ts', { deep: true }]);
+});
+
+test('agente: el subagente devuelve su traza (pasos, herramientas, errores y tokens)', async () => {
+  const script = [
+    [{ tool: 'spawn_subagent', args: { task: 'investiga' } }],
+    [{ tool: 'read_file', args: { path: 'no.js' } }, { tool: 'glob', args: { pattern: '*' } }],
+    [], [],
+  ];
+  const events = [];
+  const ctx = {
+    ep: { id: 'x', url: 'http://x/v1', key: 'k', provider: 'custom' }, model: 'm', workspace: 'W', mode: 'ask', agent: 'build', sys: { skills: [] }, native: true,
+    onEvent: (e) => events.push(e),
+    chat: async (o) => { const c = script.shift() || []; o.onUsage?.({ prompt: 100, completion: 10 }); if (c.length) o.onToolCalls(c.map((x, i) => ({ id: `c${i}`, name: x.tool, arguments: JSON.stringify(x.args) }))); return ''; },
+    confirm: async () => true,
+    desktop: { fs: { read: async () => { throw new Error('ENOENT: no existe'); }, glob: async () => ['a.js'] } },
+  };
+  await AG.runAgent(ctx, [{ role: 'system', content: '' }, { role: 'user', content: 't' }]);
+  const end = events.find((e) => e.type === 'subagent-end');
+  assert.ok(end?.stats, 'hay traza');
+  assert.deepEqual(end.stats.tools, { read_file: 1, glob: 1 });
+  assert.equal(end.stats.errors, 1);
+  assert.equal(end.stats.steps, 2);
+  assert.equal(end.stats.prompt, 200);
+});
+
+test('proveedores: los añadidos tienen URL https y el contexto informado por /models se registra', () => {
+  for (const id of ['nvidia', 'sambanova', 'deepinfra', 'hyperbolic', 'novita', 'nebius', 'chutes', 'siliconflow', 'inference', 'moonshot', 'zai', 'dashscope', 'minimax', 'cohere', 'scaleway', 'ionos']) {
+    const p = providerById(id);
+    assert.equal(p.id, id, `${id} existe`);
+    assert.match(p.url, /^https:\/\/[^/]+\/.+/);
+  }
+  assert.equal(new Set(PROVIDERS.map((p) => p.id)).size, PROVIDERS.length, 'ids únicos');
+  const e = { id: 'sn', url: 'https://api.sambanova.ai/v1', key: 'k', provider: 'sambanova' };
+  const P = { adapterOf: null };
+  return import('../web/js/providers.js').then(({ adapterOf }) => {
+    P.adapterOf = adapterOf;
+    const ids = adapterOf(e).models({ data: [{ id: 'GLM-5.3', context_length: 1048576 }, { id: 'vllm-x', max_model_len: 32768 }, { id: 'sin-dato' }] }, e);
+    assert.deepEqual(ids, ['GLM-5.3', 'vllm-x', 'sin-dato']);
+    assert.equal(C.capsOf(e, 'GLM-5.3').context, 1048576);
+    assert.equal(C.capsOf(e, 'vllm-x').context, 32768);
+    assert.equal(C.capsOf(e, 'sin-dato').context, null, 'lo desconocido queda desconocido');
+  });
+});
+
+test('comandos: /context y /doctor existen en todos los modos', () => {
+  for (const mode of ['chat', 'code', 'agent']) {
+    assert.ok(matchCommands('cont', mode).some((c) => c.name === 'context'));
+    assert.ok(matchCommands('doc', mode).some((c) => c.name === 'doctor'));
+  }
+});

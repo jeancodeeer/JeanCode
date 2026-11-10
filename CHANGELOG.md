@@ -4,6 +4,24 @@ JeanCode 1.0 reúne en una sola versión todo lo que se publicó por partes entr
 
 ## Próxima versión (en `main`, ya en la web)
 
+**Más proveedores y un agente que se revisa solo**
+- **16 proveedores nuevos**, con URLs comprobadas en vivo:
+  - NVIDIA NIM, SambaNova, DeepInfra, Hyperbolic, Novita, Nebius, Chutes, SiliconFlow e Inference.net;
+  - Moonshot (Kimi), Z.ai (GLM), Alibaba Qwen, MiniMax y Cohere;
+  - Scaleway e IONOS (UE);
+  - LiteLLM como pasarela local hacia Azure, Bedrock o Vertex.
+- **Detectar modelos de esta PC** prueba también text-generation-webui, KoboldCpp y LiteLLM.
+- **Diagnósticos tipo LSP (escritorio):**
+  - Tras cada escritura, el agente recibe los errores de sintaxis del archivo con su línea y los corrige.
+  - Cubre JS (CommonJS y módulos ES), TS (con el TypeScript del proyecto), JSON, Python, PowerShell, Bash y Go.
+  - La herramienta `diagnostics` con `deep` añade ESLint y `tsc` del propio proyecto.
+  - Nunca escribe en la carpeta. Se desactiva en Ajustes → Comportamiento.
+- **La ventana de contexto es la del modelo:** el medidor y el aviso de compactar ya no suponen 128k para todos. Si `/models` informa la ventana (SambaNova, vLLM, LM Studio, Jean…), se usa esa; `/compact` recorta según esa ventana.
+- **`/context`:** qué se envía exactamente al modelo (prompt del sistema completo, herramientas, historial, tokens de cada parte).
+- **`/doctor`:** conexiones, modelo, ventana, carpeta, memoria, hooks, skills y control del equipo en una sola comprobación, con el remedio de cada fallo.
+- **Coste de la sesión** cuando el proveedor informa precios (p. ej. OpenRouter).
+- **Traza por subagente:** pasos, herramientas, errores, tokens y tiempo.
+
 **Control del equipo (escritorio, Windows)** · ver `docs/computer-control.md`
 - **El agente opera la PC de verdad:**
   - Ve la pantalla o lee los controles de las ventanas con UI Automation; así funciona también con modelos sin visión, como Jean.

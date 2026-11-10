@@ -7,6 +7,8 @@ export const BUILTIN = [
   { name: 'model', desc: 'Cambia de modelo: /model jean-marvel', modes: ['chat', 'code', 'agent'], arg: true },
   { name: 'export', desc: 'Descarga la conversación en Markdown', modes: ['chat', 'code', 'agent'] },
   { name: 'help', desc: 'Comandos y atajos de teclado', modes: ['chat', 'code', 'agent'] },
+  { name: 'context', desc: 'Qué se envía al modelo: prompt, herramientas, historial y tokens', modes: ['chat', 'code', 'agent'] },
+  { name: 'doctor', desc: 'Revisa conexiones, modelo, carpeta, hooks y control del equipo', modes: ['chat', 'code', 'agent'] },
   { name: 'zip', desc: 'Descarga el proyecto en .zip', modes: ['code'] },
   { name: 'init', desc: 'Analiza la carpeta y crea AGENTS.md con la memoria del proyecto', modes: ['agent'] },
   { name: 'plan', desc: 'Agente PLAN: solo analiza y propone (Tab alterna)', modes: ['agent'] },
