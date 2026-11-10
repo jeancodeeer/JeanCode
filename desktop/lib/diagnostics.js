@@ -1,5 +1,6 @@
-// Diagnósticos de archivos para el agente (lo que un LSP le daría): errores de sintaxis y, en modo
-// profundo, lint y tipos con las herramientas que el propio proyecto ya tiene instaladas.
+// Diagnósticos de archivos para el agente (lo que un LSP le daría): errores de sintaxis con analizadores
+// del sistema y, en modo profundo (deep, con permiso del usuario), lint y tipos con las herramientas
+// que el propio proyecto tiene instaladas.
 // Solo lee: nunca escribe en la carpeta (Python se valida con ast.parse, sin __pycache__), sin shell,
 // y siempre con rutas resueltas dentro del espacio de trabajo.
 const fs = require('node:fs/promises');
@@ -72,24 +73,25 @@ const SYNTAX = [
   { re: /\.(ps1|psm1)$/i, tool: 'PowerShell parser', run: (abs) => runFile(process.platform === 'win32' ? 'powershell.exe' : 'pwsh', ['-NoProfile', '-NonInteractive', '-Command', PS_CHECK], { env: { JC_DIAG_FILE: abs } }) },
   { re: /\.(sh|bash)$/i, tool: 'bash -n', run: (abs) => runFile('bash', ['-n', abs]) },
   { re: /\.go$/i, tool: 'gofmt -e', run: async (abs) => { const r = await runFile('gofmt', ['-e', '-l', abs]); return { ...r, code: /:\d+:\d+:/.test(r.out) ? 1 : r.code }; } },
-  { re: /\.(ts|tsx|mts|cts)$/i, tool: 'TypeScript (sintaxis)', run: async (abs, root) => {
-    const tsPath = path.join(root, 'node_modules', 'typescript');
-    if (!fss.existsSync(tsPath)) return { missing: true };
-    // typescript del PROYECTO (no se instala nada): transpileModule informa errores de sintaxis
-    const ts = require(tsPath);
-    const out = ts.transpileModule(await fs.readFile(abs, 'utf8'), { reportDiagnostics: true, fileName: abs, compilerOptions: { jsx: ts.JsxEmit?.Preserve } });
-    const ds = (out.diagnostics || []).map((d) => {
-      const lc = d.file && d.start != null ? d.file.getLineAndCharacterOfPosition(d.start) : null;
-      return `${lc ? `${lc.line + 1}:${lc.character + 1}` : '?'}: ${ts.flattenDiagnosticMessageText(d.messageText, ' ')}`;
-    });
-    return { code: ds.length ? 1 : 0, out: ds.join('\n') };
-  } },
 ];
+// SEGURIDAD: la lista de arriba solo usa analizadores del sistema/la app. Nada del proyecto (node_modules,
+// configuraciones) se carga aquí: un repositorio no confiable no puede ejecutar código con solo abrirlo
+// o con una edición del agente. Lo que usa herramientas del proyecto está en deepChecks y requiere permiso.
 
-/** Análisis profundo con lo que el proyecto ya tenga: ESLint y el comprobador de tipos de TypeScript. */
+// sintaxis TypeScript con el typescript DEL PROYECTO, en un proceso aparte (solo en deep, con permiso)
+const TS_SYNTAX = 'const ts=require(process.env.JC_TS);const f=process.env.JC_DIAG_FILE;const o=ts.transpileModule(require("fs").readFileSync(f,"utf8"),{reportDiagnostics:true,fileName:f,compilerOptions:{jsx:1}});for(const d of o.diagnostics||[]){const p=d.file&&d.start!=null?d.file.getLineAndCharacterOfPosition(d.start):null;console.log((p?(p.line+1)+":"+(p.character+1):"?")+": "+ts.flattenDiagnosticMessageText(d.messageText," "))}process.exitCode=(o.diagnostics||[]).length?1:0';
+
+/**
+ * Análisis profundo con las herramientas del PROYECTO (TypeScript, ESLint, tsc). Ejecuta código del
+ * repositorio (sus paquetes y su eslint.config.js): el agente lo pide con permiso, como un comando.
+ */
 async function deepChecks(abs, rel, root) {
   const out = [];
   const bin = (p) => path.join(root, 'node_modules', ...p.split('/'));
+  if (/\.(tsx?|mts|cts)$/i.test(abs) && fss.existsSync(bin('typescript/package.json'))) {
+    const r = await runFile(NODE[0], ['-e', TS_SYNTAX], { cwd: root, env: { ...NODE[1], JC_TS: bin('typescript'), JC_DIAG_FILE: abs }, timeout: 60000 });
+    out.push({ tool: 'TypeScript (sintaxis)', ok: r.code === 0, out: tidy(r.out, abs, rel) });
+  }
   if (/\.(m?[jt]sx?|cjs|cts|mts)$/i.test(abs) && fss.existsSync(bin('eslint/bin/eslint.js'))) {
     const r = await runFile(NODE[0], [bin('eslint/bin/eslint.js'), '--format', 'unix', abs], { cwd: root, env: NODE[1], timeout: 60000 });
     out.push({ tool: 'eslint', ok: r.code === 0, out: tidy(r.out, abs, rel) });
@@ -120,7 +122,7 @@ async function diagnose(root, rel, { deep = false, auto = false } = {}) {
   }
   if (deep) results.push(...await deepChecks(abs, shown, base));
   if (!results.length) {
-    return auto ? '' : `DIAGNÓSTICOS ${shown}: no hay verificador para este tipo de archivo (se admiten .js .mjs .cjs .ts .tsx .json .py .ps1 .sh .go; con deep también ESLint y tsc del proyecto).`;
+    return auto ? '' : `DIAGNÓSTICOS ${shown}: no hay verificador para este tipo de archivo (se admiten .js .mjs .cjs .json .py .ps1 .sh .go; con deep, y con permiso, TypeScript, ESLint y tsc del proyecto).`;
   }
   return results.map((r) => (r.missing
     ? `DIAGNÓSTICOS ${shown} (${r.tool}): la herramienta no está instalada en esta PC.`

@@ -23,7 +23,7 @@ Lectura:
 - glob {"pattern": "src/**/*.ts"}                         archivos que cumplen un patrón
 - read_file {"path": "a.js", "offset": 0, "limit": 400}   líneas numeradas de un archivo
 - search {"pattern": "regex", "path": "."}                busca texto en los archivos
-- diagnostics {"path": "a.ts", "deep": true}              errores de sintaxis; deep = también ESLint y tipos (tsc) del proyecto
+- diagnostics {"path": "a.js", "deep": false}             errores de sintaxis; deep = TypeScript, ESLint y tsc del proyecto (pide permiso)
 - webfetch {"url": "https://..."}                         texto de una página web (documentación)
 - system_info {}                                          sistema operativo, CPU, RAM y herramientas
 - load_skill {"name": "nombre"}                           instrucciones completas de una skill
@@ -46,7 +46,7 @@ export const TOOL_SCHEMAS = [
   ['glob', 'Archivos que cumplen un patrón', S({ pattern: str('p. ej. src/**/*.ts') }, ['pattern'])],
   ['read_file', 'Lee líneas numeradas de un archivo', S({ path: str('ruta relativa'), offset: { type: 'integer' }, limit: { type: 'integer' } }, ['path'])],
   ['search', 'Busca una expresión regular en los archivos', S({ pattern: str('regex'), path: str('carpeta') }, ['pattern'])],
-  ['diagnostics', 'Errores de un archivo como los daría un LSP: sintaxis y, con deep, ESLint y tipos (tsc) del proyecto', S({ path: str('ruta relativa'), deep: { type: 'boolean', description: 'también lint y tipos (más lento)' } }, ['path'])],
+  ['diagnostics', 'Errores de un archivo como los daría un LSP: sintaxis y, con deep, ESLint y tipos (tsc) del proyecto', S({ path: str('ruta relativa'), deep: { type: 'boolean', description: 'también TypeScript, ESLint y tsc del proyecto (pide permiso)' } }, ['path'])],
   ['webfetch', 'Texto de una página web pública (documentación)', S({ url: str('https://...') }, ['url'])],
   ['system_info', 'Sistema operativo, CPU, RAM y herramientas instaladas', S({})],
   ['load_skill', 'Carga las instrucciones completas de una skill instalada', S({ name: str('nombre de la skill') }, ['name'])],
@@ -270,6 +270,16 @@ ${r}` : '';
         case 'search': return clip(await d.fs.search(ctx.workspace, args.pattern, args.path || '.'));
         case 'diagnostics': {
           if (!d.fs.diagnose) return 'ERROR: los diagnósticos solo están en la app de escritorio.';
+          // deep ejecuta código del proyecto (TypeScript, ESLint y sus configuraciones): se trata como un comando
+          if (args.deep) {
+            if (readOnly || (sub && !ctx.subWrite)) return 'DENEGADO: deep ejecuta herramientas del proyecto; en solo lectura usa diagnostics sin deep.';
+            const label = `diagnostics --deep (TypeScript/ESLint/tsc del proyecto) ${args.path}`;
+            if (!ctx.isAllowed?.('diagnostics --deep')) {
+              let ok = await ctx.confirm({ title: 'EJECUTAR HERRAMIENTAS DEL PROYECTO', command: label, allowAlways: true, alwaysLabel: 'PERMITIR SIEMPRE EN ESTA CARPETA' });
+              if (ok === 'always') { ctx.allowCommand?.('diagnostics --deep'); ok = true; }
+              if (!ok) return 'RECHAZADO por el usuario.';
+            }
+          }
           return clip(await d.fs.diagnose(ctx.workspace, String(args.path), { deep: !!args.deep }));
         }
         case 'webfetch': return clip(await d.web.fetch(String(args.url)));

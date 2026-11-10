@@ -422,9 +422,37 @@ test('agente: tras escribir recibe los diagnósticos; se pueden desactivar; la h
   assert.deepEqual(seen[0], ['a.js', { auto: true }]);
   ({ msgs } = await run([{ tool: 'write_file', args: { path: 'b.js', content: '' } }], { mode: 'auto-edit', autoDiagnostics: false }));
   assert.ok(msgs.some((m) => m.role === 'tool' && m.content === 'escrito'));
+  ({ msgs } = await run([{ tool: 'diagnostics', args: { path: 'c.js' } }], { agent: 'plan' }));
+  assert.ok(msgs.some((m) => m.role === 'tool' && /DIAGNÓSTICOS c\.js/.test(m.content)), 'PLAN puede diagnosticar (sin deep)');
+  assert.deepEqual(seen.at(-1), ['c.js', { deep: false }]);
+  // deep ejecuta código del proyecto: en PLAN se deniega y en BUILD pide permiso como un comando
+  const before = seen.length;
   ({ msgs } = await run([{ tool: 'diagnostics', args: { path: 'c.ts', deep: true } }], { agent: 'plan' }));
-  assert.ok(msgs.some((m) => m.role === 'tool' && /DIAGNÓSTICOS c\.ts/.test(m.content)), 'PLAN puede diagnosticar');
-  assert.deepEqual(seen.at(-1), ['c.ts', { deep: true }]);
+  assert.ok(msgs.some((m) => m.role === 'tool' && /DENEGADO/.test(m.content)));
+  assert.equal(seen.length, before, 'no llegó a ejecutarse');
+  const r = await runScripted([{ tool: 'diagnostics', args: { path: 'c.ts', deep: true } }], { answer: false, ctx: { desktop: { fs: fsx } } });
+  assert.deepEqual(r.log.confirms, ['EJECUTAR HERRAMIENTAS DEL PROYECTO']);
+  assert.equal(seen.length, before, 'rechazado: no se ejecuta');
+});
+
+test('diagnósticos: un node_modules malicioso del proyecto NO se ejecuta sin deep', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'jc-evil-'));
+  const marker = join(root, 'PWNED');
+  mkdirSync(join(root, 'node_modules', 'typescript', 'bin'), { recursive: true });
+  const evil = `require('fs').writeFileSync(${JSON.stringify(marker)}, 'x');`;
+  writeFileSync(join(root, 'node_modules', 'typescript', 'package.json'), '{"name":"typescript","main":"index.js"}');
+  writeFileSync(join(root, 'node_modules', 'typescript', 'index.js'), evil);
+  mkdirSync(join(root, 'node_modules', 'eslint', 'bin'), { recursive: true });
+  writeFileSync(join(root, 'node_modules', 'eslint', 'bin', 'eslint.js'), evil);
+  writeFileSync(join(root, 'a.ts'), 'const x: number = 1;\n');
+  writeFileSync(join(root, 'b.js'), 'const y = 1;\n');
+  for (const f of ['a.ts', 'b.js']) {
+    await diag.diagnose(root, f);
+    await diag.diagnose(root, f, { auto: true });
+  }
+  assert.ok(!require('node:fs').existsSync(marker), 'ni la revisión automática ni la de solo lectura cargan código del proyecto');
+  await diag.diagnose(root, 'a.ts', { deep: true });
+  assert.ok(require('node:fs').existsSync(marker), 'deep sí usa las herramientas del proyecto (por eso pide permiso)');
 });
 
 test('agente: el subagente devuelve su traza (pasos, herramientas, errores y tokens)', async () => {

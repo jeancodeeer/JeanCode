@@ -13,8 +13,8 @@ JeanCode 1.0 reúne en una sola versión todo lo que se publicó por partes entr
 - **Detectar modelos de esta PC** prueba también text-generation-webui, KoboldCpp y LiteLLM.
 - **Diagnósticos tipo LSP (escritorio):**
   - Tras cada escritura, el agente recibe los errores de sintaxis del archivo con su línea y los corrige.
-  - Cubre JS (CommonJS y módulos ES), TS (con el TypeScript del proyecto), JSON, Python, PowerShell, Bash y Go.
-  - La herramienta `diagnostics` con `deep` añade ESLint y `tsc` del propio proyecto.
+  - Cubre JS (CommonJS y módulos ES), JSON, Python, PowerShell, Bash y Go, solo con analizadores del sistema. No ejecuta nada del proyecto, así que abrir un repositorio no confiable es seguro.
+  - La herramienta `diagnostics` con `deep` añade TypeScript, ESLint y `tsc` del propio proyecto. Como eso ejecuta código del repositorio, pide permiso igual que un comando y está prohibido en modo Plan.
   - Nunca escribe en la carpeta. Se desactiva en Ajustes → Comportamiento.
 - **La ventana de contexto es la del modelo:** el medidor y el aviso de compactar ya no suponen 128k para todos. Si `/models` informa la ventana (SambaNova, vLLM, LM Studio, Jean…), se usa esa; `/compact` recorta según esa ventana.
 - **`/context`:** qué se envía exactamente al modelo (prompt del sistema completo, herramientas, historial, tokens de cada parte).
