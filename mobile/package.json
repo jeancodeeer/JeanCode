@@ -1,0 +1,25 @@
+{
+  "name": "jeancode-mobile",
+  "private": true,
+  "description": "JeanCode para iOS y Android: la web de JeanCode empaquetada con Capacitor.",
+  "license": "AGPL-3.0-only",
+  "scripts": {
+    "copy-web": "node scripts/copy-web.mjs",
+    "icons": "node scripts/icons.mjs && capacitor-assets generate --iconBackgroundColor #000000 --splashBackgroundColor #000000",
+    "sync": "npm run copy-web && cap sync",
+    "android": "npm run sync && cap open android",
+    "ios": "npm run sync && cap open ios"
+  },
+  "dependencies": {
+    "@capacitor/android": "8.5.3",
+    "@capacitor/core": "8.5.3",
+    "@capacitor/ios": "8.5.3"
+  },
+  "devDependencies": {
+    "@capacitor/assets": "3.0.5",
+    "@capacitor/cli": "8.5.3"
+  },
+  "allowScripts": {
+    "sharp@0.32.6": true
+  }
+}

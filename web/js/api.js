@@ -121,6 +121,69 @@ function networkHint(ep) {
 
 const MODELS_TIMEOUT = 12000;
 
+/* ------------------------------------------------ APIs que bloquean el navegador (CORS)
+ * El escritorio no tiene CORS (las peticiones salen del proceso principal). En la web y en las apps
+ * móviles, un proveedor que no acepta llamadas de páginas web se alcanza así, en este orden:
+ *   1. el relay de TU Jean-API-Generator (router :8899, /relay/<host>/...): con streaming
+ *   2. en iOS/Android, la red nativa del teléfono (CapacitorHttp): sin CORS, respuesta de una vez
+ * Nunca pasa por servidores de terceros. */
+const LOCALISH = /^https?:\/\/(localhost|127\.|\[::1\]|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/i;
+export const isNativeApp = () => typeof window !== 'undefined' && !!window.Capacitor?.isNativePlatform?.();
+const nativeHttp = () => (isNativeApp() ? window.Capacitor?.Plugins?.CapacitorHttp : null);
+
+/** Router de un Jean-API-Generator configurado (URL del puerto 8899) que hace de relay. */
+export function relayBase() {
+  const j = getEndpoints().find((e) => (e.provider || 'jean') === 'jean' && /-8899\.|:8899(\/|$)/.test(e.url));
+  if (!j) return null;
+  try { return { origin: new URL(j.url).origin, key: j.key }; } catch { return null; }
+}
+
+/** ¿Este endpoint puede verse bloqueado por CORS aquí? (solo web/app, solo proveedores remotos). */
+const corsExposed = (ep) => !bridge()?.http && providerOf(ep).id !== 'jean' && !providerOf(ep).local && !LOCALISH.test(ep.url);
+/** ¿Hay que esquivar CORS para este endpoint? (el proveedor lo bloquea, o ya se vio fallar). */
+const needsBypass = (ep) => corsExposed(ep) && (providerOf(ep).browser === false || ep.corsBlocked === true);
+
+/** URL y cabeceras de una petición: directa o por el relay. */
+export function routeOf(ep, path) {
+  const direct = { url: ep.url + path, headers: headersFor(ep), via: 'direct' };
+  if (!needsBypass(ep)) return direct;
+  const r = relayBase();
+  if (r) {
+    const u = new URL(ep.url + path);
+    return { url: `${r.origin}/relay/${u.host}${u.pathname}${u.search}`, headers: { ...headersFor(ep), 'X-Jean-Key': r.key }, via: 'relay' };
+  }
+  if (nativeHttp()) return { ...direct, via: 'native' };
+  return direct;
+}
+
+/** Recuerda que un proveedor bloquea el navegador (tras un fallo de red con alternativa disponible). */
+function markCorsBlocked(ep) {
+  if (!corsExposed(ep) || ep.corsBlocked || !(relayBase() || nativeHttp())) return false;
+  ep.corsBlocked = true;
+  const list = getEndpoints().map((e) => (e.id === ep.id ? { ...e, corsBlocked: true } : e));
+  saveEndpoints(list);
+  return true;
+}
+
+/** Petición por la red nativa del teléfono (sin CORS, sin streaming). */
+async function nativeRequest(ep, url, { method = 'GET', headers, body, timeout }) {
+  let r;
+  try {
+    r = await nativeHttp().request({ url, method, headers, data: body ? JSON.parse(body) : undefined, connectTimeout: timeout, readTimeout: timeout, responseType: 'json' });
+  } catch (e) {
+    throw new ApiError(networkHint(ep) + ` (${e.message || e})`, 0);
+  }
+  const text = typeof r.data === 'string' ? r.data : JSON.stringify(r.data ?? '');
+  if (r.status >= 400) throw new ApiError(explain(r.status, text, ep), r.status, serverMessage(text));
+  if (typeof r.data === 'object' && r.data) return r.data;
+  try { return JSON.parse(text); } catch { throw notApi(ep, text); }
+}
+
+/** Mensaje claro cuando un proveedor bloquea el navegador y no hay forma de esquivarlo aquí. */
+function corsHint(ep) {
+  return `${providerOf(ep).name} no acepta llamadas desde una página web (CORS). Soluciones: añade tu Jean-API-Generator (URL del puerto 8899) en Ajustes y JeanCode usará su relay, o usa la app de escritorio o la de móvil.`;
+}
+
 async function request(ep, path, init = {}) {
   const b = bridge();
   const timeout = init.timeout ?? ep.timeout ?? 60000;
@@ -130,14 +193,19 @@ async function request(ep, path, init = {}) {
     if (r.status >= 400) throw new ApiError(explain(r.status, r.body, ep), r.status, serverMessage(r.body));
     try { return JSON.parse(r.body); } catch { throw notApi(ep, r.body); }
   }
+  const rt = routeOf(ep, path);
+  if (rt.via === 'native') return nativeRequest(ep, rt.url, { method: init.method, headers: rt.headers, body: init.body, timeout });
   let res;
   try {
     const signal = init.signal || AbortSignal.timeout(timeout);
-    res = await fetch(ep.url + path, { ...init, headers: headersFor(ep), signal });
+    res = await fetch(rt.url, { ...init, headers: rt.headers, signal });
   } catch (e) {
     if (e.name === 'AbortError' && init.signal?.aborted) throw e;
     if (e.name === 'TimeoutError') throw new ApiError(`${providerOf(ep).name} no respondió a tiempo.`, 0, '', 'timeout');
-    throw new ApiError(networkHint(ep), 0);
+    // fallo de red de un proveedor remoto desde la web: casi siempre CORS. Si hay relay o red nativa, se reintenta por ahí.
+    if (rt.via === 'direct' && !init.retried && markCorsBlocked(ep)) return request(ep, path, { ...init, retried: true });
+    throw new ApiError(rt.via === 'relay' ? 'No se pudo conectar con el relay de tu Jean-API-Generator: ¿el Codespace está despierto y el puerto 8899 es público?'
+      : corsExposed(ep) ? `${networkHint(ep)} Si la URL es correcta, puede ser esto: ${corsHint(ep)}` : networkHint(ep), 0);
   }
   if (!res.ok) { const body = await res.text().catch(() => ''); throw new ApiError(explain(res.status, body, ep), res.status, serverMessage(body)); }
   const text = await res.text();
@@ -291,19 +359,38 @@ async function chatOnce({ ep, model, messages, signal, onDelta, onReasoning, onT
     return finish();
   }
 
+  // red nativa del teléfono: sin streaming, la respuesta llega completa (el usuario puede detener igual)
+  const chatNative = async (r) => {
+    const once = { ...payload, stream: false };
+    delete once.stream_options;
+    const job = nativeRequest(ep, r.url, { method: 'POST', headers: r.headers, body: JSON.stringify(once), timeout: firstByteTimeout(ep) });
+    const stop = new Promise((_, reject) => signal?.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError'))));
+    handleChunk(await Promise.race([job, stop]));
+    return finish();
+  };
+  let rt = routeOf(ep, '/chat/completions');
+  if (rt.via === 'native') return chatNative(rt);
   let res;
   const ctl = new AbortController();
   const onUserAbort = () => ctl.abort(new DOMException('aborted', 'AbortError'));
   signal?.addEventListener('abort', onUserAbort);
   const timer = setTimeout(() => ctl.abort(new DOMException('timeout', 'TimeoutError')), firstByteTimeout(ep));
   try {
-    res = await fetch(ep.url + '/chat/completions', {
-      method: 'POST', signal: ctl.signal, body, headers: headersFor(ep),
-    });
+    try {
+      res = await fetch(rt.url, { method: 'POST', signal: ctl.signal, body, headers: rt.headers });
+    } catch (e) {
+      // CORS: un reintento por el relay o la red nativa, si existen
+      if (signal?.aborted || ctl.signal.aborted || rt.via !== 'direct' || !markCorsBlocked(ep)) throw e;
+      rt = routeOf(ep, '/chat/completions');
+      if (rt.via === 'native') return await chatNative(rt);
+      res = await fetch(rt.url, { method: 'POST', signal: ctl.signal, body, headers: rt.headers });
+    }
   } catch (e) {
+    if (e instanceof ApiError) throw e;
     if (signal?.aborted) throw new DOMException('aborted', 'AbortError');
     if (ctl.signal.reason?.name === 'TimeoutError') throw new ApiError(`${providerOf(ep).name} no empezó a responder a tiempo.`, 0, '', 'timeout');
-    throw new ApiError(networkHint(ep), 0);
+    throw new ApiError(rt.via === 'relay' ? 'No se pudo conectar con el relay de tu Jean-API-Generator: ¿el Codespace está despierto y el puerto 8899 es público?'
+      : corsExposed(ep) ? `${networkHint(ep)} Si la URL es correcta, puede ser esto: ${corsHint(ep)}` : networkHint(ep), 0);
   } finally {
     clearTimeout(timer);
   }

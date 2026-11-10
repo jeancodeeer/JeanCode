@@ -1,0 +1,94 @@
+name: mobile
+
+# Apps de iOS y Android: la misma web de JeanCode empaquetada con Capacitor (mobile/).
+# En una etiqueta vX.Y.Z se adjuntan a la Release:
+#   JeanCode-X.Y.Z-android.apk     instalable directamente (firmada con clave de depuración)
+#   JeanCode-X.Y.Z-ios-unsigned.ipa  sin firmar: se instala con AltStore / Sideloadly (tu Apple ID)
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  android:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: mobile
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: mobile/package-lock.json
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+      - name: version
+        id: v
+        shell: bash
+        run: |
+          V=$(node -p "require('fs').readFileSync('../web/js/version.js','utf8').match(/VERSION\s*=\s*'([^']+)'/)[1]")
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then node ../scripts/version.mjs --tag "$GITHUB_REF_NAME"; fi
+          IFS=. read -r MA MI PA <<< "$V"
+          echo "version=$V" >> "$GITHUB_OUTPUT"
+          echo "code=$((MA * 10000 + MI * 100 + PA))" >> "$GITHUB_OUTPUT"
+      - run: npm ci --ignore-scripts
+      - run: npm run sync
+      - name: build apk
+        working-directory: mobile/android
+        run: |
+          sed -i "s/versionCode [0-9]*/versionCode ${{ steps.v.outputs.code }}/; s/versionName \"[^\"]*\"/versionName \"${{ steps.v.outputs.version }}\"/" app/build.gradle
+          chmod +x gradlew
+          ./gradlew assembleDebug --no-daemon
+          cp app/build/outputs/apk/debug/app-debug.apk "../JeanCode-${{ steps.v.outputs.version }}-android.apk"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: jeancode-android
+          path: mobile/JeanCode-*-android.apk
+      - name: upload to release
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload "$GITHUB_REF_NAME" JeanCode-*-android.apk --clobber
+
+  ios:
+    runs-on: macos-latest
+    defaults:
+      run:
+        working-directory: mobile
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: mobile/package-lock.json
+      - name: version
+        id: v
+        run: echo "version=$(node -p "require('fs').readFileSync('../web/js/version.js','utf8').match(/VERSION\s*=\s*'([^']+)'/)[1]")" >> "$GITHUB_OUTPUT"
+      - run: npm ci --ignore-scripts
+      - run: npm run sync
+      - name: build (sin firmar)
+        working-directory: mobile/ios/App
+        run: |
+          xcodebuild -project App.xcodeproj -scheme App -configuration Release -sdk iphoneos \
+            -derivedDataPath build MARKETING_VERSION=${{ steps.v.outputs.version }} \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" build
+          mkdir -p Payload
+          cp -R build/Build/Products/Release-iphoneos/App.app Payload/
+          zip -qr "../../JeanCode-${{ steps.v.outputs.version }}-ios-unsigned.ipa" Payload
+      - uses: actions/upload-artifact@v4
+        with:
+          name: jeancode-ios
+          path: mobile/JeanCode-*-ios-unsigned.ipa
+      - name: upload to release
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload "$GITHUB_REF_NAME" JeanCode-*-ios-unsigned.ipa --clobber

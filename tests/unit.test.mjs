@@ -503,3 +503,23 @@ test('comandos: /context y /doctor existen en todos los modos', () => {
     assert.ok(matchCommands('doc', mode).some((c) => c.name === 'doctor'));
   }
 });
+
+test('CORS: proveedores que bloquean la web van por el relay del Generator; el resto, directo', () => {
+  const nv = { id: 'nv', url: 'https://integrate.api.nvidia.com/v1', key: 'nvapi-x', provider: 'nvidia' };
+  const gq = { id: 'gq', url: 'https://api.groq.com/openai/v1', key: 'gsk_x', provider: 'groq' };
+  const ol = { id: 'ol', url: 'http://localhost:11434/v1', key: 'x', provider: 'ollama' };
+  A.saveEndpoints([nv, gq, ol]);
+  assert.equal(A.routeOf(nv, '/models').via, 'direct', 'sin Generator no hay relay (y se explica el CORS al fallar)');
+  const jean = { id: 'j', url: 'https://abc-8899.app.github.dev/v1', key: 'jean_k', provider: 'jean' };
+  A.saveEndpoints([nv, gq, ol, jean]);
+  const r = A.routeOf(nv, '/chat/completions');
+  assert.equal(r.via, 'relay');
+  assert.equal(r.url, 'https://abc-8899.app.github.dev/relay/integrate.api.nvidia.com/v1/chat/completions');
+  assert.equal(r.headers['X-Jean-Key'], 'jean_k');
+  assert.equal(r.headers.Authorization, 'Bearer nvapi-x', 'la clave del proveedor viaja intacta');
+  assert.equal(A.routeOf(gq, '/models').via, 'direct', 'Groq acepta la web');
+  assert.equal(A.routeOf({ ...gq, corsBlocked: true }, '/models').via, 'relay', 'si se vio bloqueado, relay');
+  assert.equal(A.routeOf(ol, '/models').via, 'direct', 'lo local nunca va por el relay');
+  assert.equal(A.routeOf(jean, '/models').via, 'direct');
+  A.saveEndpoints([]);
+});

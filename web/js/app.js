@@ -194,9 +194,11 @@ async function refreshModels() {
   state.visible = visibleModels(state.routable);
   const failed = results.filter((r) => r.status === 'rejected');
   const unavailable = eps.flatMap((ep) => (healthOf(ep)?.unavailable || []).map((u) => `${u.slot}: ${u.reason}`));
-  status.className = 'status ' + (state.visible.length ? (failed.length ? 'warn' : 'ok') : 'bad');
+  // un catálogo grande sin modelos fijados SÍ está conectado: falta elegir (antes decía «sin conexión»)
+  const reachable = state.visible.length || state.bigCatalog.size;
+  status.className = 'status ' + (reachable ? (failed.length || !state.visible.length ? 'warn' : 'ok') : 'bad');
   status.title = [...failed.map((f) => f.reason.message), ...unavailable].join('\n') || 'API conectada';
-  if (!state.visible.length) {
+  if (!reachable) {
     sel.innerHTML = '<option value="">SIN CONEXIÓN</option>';
   } else {
     // agrupados por proveedor; dentro de cada grupo, en el orden que da la API
@@ -213,7 +215,7 @@ async function refreshModels() {
       if (!groups.has(name)) groups.set(name, []);
       groups.get(name).push(`<option value="pick:${esc(id)}">+ ELEGIR DE ${total} MODELOS…</option>`);
     }
-    const auto = `<option value="${AUTO}">AUTO</option>`;
+    const auto = state.visible.length ? `<option value="${AUTO}">AUTO</option>` : '<option value="">ELIGE UN MODELO</option>';
     // conexión fija: el mejor modelo, pero solo de esa conexión (p. ej. "solo local")
     const withModels = eps.filter((ep) => state.visible.some((m) => m.ep.id === ep.id));
     const pinned = withModels.length > 1
@@ -224,7 +226,7 @@ async function refreshModels() {
       : [...groups].map(([name, opts]) => `<optgroup label="${esc(name.toUpperCase())}">${opts.join('')}</optgroup>`).join('')) + pinned;
   }
   applyRoute();
-  if (failed.length && !state.visible.length) toast(failed[0].reason.message);
+  if (failed.length && !reachable) toast(failed[0].reason.message);
   renderFenix();
 }
 
@@ -1962,7 +1964,8 @@ function applyBrand() {
 }
 
 // web instalable y usable sin conexión (en el escritorio la interfaz ya va dentro de la app)
-if ('serviceWorker' in navigator && location.protocol.startsWith('http') && !desktop) {
+// en las apps de iOS/Android la web ya va dentro del paquete: sin service worker
+if ('serviceWorker' in navigator && location.protocol.startsWith('http') && !desktop && !window.Capacitor?.isNativePlatform?.()) {
   navigator.serviceWorker.register('sw.js').catch(() => { /* sin SW la web funciona igual */ });
 }
 

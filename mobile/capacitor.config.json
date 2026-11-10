@@ -1,0 +1,11 @@
+{
+  "appId": "io.github.jeancodeeer.jeancode",
+  "appName": "JeanCode",
+  "webDir": "www",
+  "backgroundColor": "#000000",
+  "server": { "androidScheme": "https", "cleartext": true },
+  "android": { "allowMixedContent": true },
+  "plugins": {
+    "CapacitorHttp": { "enabled": false }
+  }
+}
