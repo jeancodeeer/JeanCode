@@ -2,6 +2,14 @@
 
 JeanCode 1.0 reúne en una sola versión todo lo que se publicó por partes entre la 0.1 y la 0.4. Las releases antiguas se retiraron de GitHub para que solo quede una descarga oficial. Su código sigue completo en las etiquetas de git (`v0.1.0` … `v0.4.2`), así que cualquier build anterior se puede reconstruir con `git checkout vX.Y.Z && cd desktop && npm ci && npm run dist`.
 
+## Próxima versión (en `main`, ya en la web)
+
+**Apps de iOS y Android, y APIs que bloquean el navegador**
+- **Apps de iOS y Android:** la misma web empaquetada con Capacitor (`mobile/`). Cada release incluye un APK de Android (firmado con clave de depuración) y un IPA de iOS sin firmar, para instalar con AltStore o Sideloadly.
+- **CORS resuelto sin terceros:** en la web, los proveedores que rechazan llamadas desde páginas (NVIDIA NIM, SambaNova, DeepSeek, Mistral…) pasan por el relay `/relay/` de tu propio Jean-API-Generator, con streaming. En el móvil, si no hay relay, se usa la red nativa del teléfono. Un fallo por CORS de un proveedor desconocido se detecta, se reintenta y se recuerda.
+- **Web móvil:** áreas seguras (muesca y barra inferior) en la pantalla de inicio y en los paneles.
+- **Arreglo:** con solo proveedores de catálogo grande (NVIDIA, OpenRouter) y ningún modelo fijado, el selector decía «SIN CONEXIÓN»; ahora ofrece elegir entre sus modelos.
+
 ## 1.1.0 — 10 de noviembre de 2026
 
 **Más proveedores y un agente que se revisa solo**

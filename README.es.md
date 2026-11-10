@@ -49,7 +49,14 @@ Sin servidor, sin cuenta, sin telemetría. Tu modelo, tus claves, tu máquina.
 | **Una clave de API** (OpenRouter, Groq, NVIDIA…) | Abre [JeanCode web](https://jeancodeeer.github.io/JeanCode/) → elige el proveedor → pega la clave. La URL se completa sola. |
 | **Nada todavía** | Crea tu API gratis con [Jean-API-Generator](https://github.com/jeancodeeer/Jean-API-Generator) (un Codespace, ~5 min) y pega su URL `…-8899.app.github.dev/v1`. |
 
-La versión web es una PWA instalable que funciona sin conexión. El modo **AGENT** y el control del equipo necesitan la app de escritorio (Windows `.exe`, macOS `.dmg`, Linux `.AppImage`).
+| PLATAFORMA | CÓMO CONSEGUIRLA | MODOS |
+|---|---|---|
+| **Web** (cualquier móvil o computadora) | [jeancodeeer.github.io/JeanCode](https://jeancodeeer.github.io/JeanCode/): PWA instalable que funciona sin conexión | CHAT · CODE |
+| **Android** | `JeanCode-x.y.z-android.apk` de la [última release](https://github.com/jeancodeeer/JeanCode/releases/latest) | CHAT · CODE |
+| **iOS / iPadOS** | `JeanCode-x.y.z-ios-unsigned.ipa`: se instala con [AltStore](https://altstore.io) o [Sideloadly](https://sideloadly.io) usando tu propio Apple ID | CHAT · CODE |
+| **Windows · macOS · Linux** | `.exe` · `.dmg` · `.AppImage` de la [última release](https://github.com/jeancodeeer/JeanCode/releases/latest) | CHAT · CODE · **AGENT** · control del equipo |
+
+Las apps del móvil son la misma web compilada con Capacitor. El APK de Android va firmado con una clave de depuración (permite «instalar apps desconocidas»); la de iOS va sin firmar porque publicar en la App Store exige una cuenta de desarrollador de Apple de pago.
 
 <br>
 
@@ -131,6 +138,8 @@ Construido a partir de las quejas más comunes sobre Claude Code y OpenCode (iss
 
 Cada conexión se valida antes de usarla (URL mal escrita, http desde una página https, clave en la URL, duplicados, proveedor que no corresponde a ese host: se corrige solo). **AUTO** elige un modelo por modo y salta las conexiones caídas; tú decides qué pasa cuando un modelo falla (mostrar el error, el mismo modelo por otra conexión o cualquier otro modelo). Cada respuesta lleva su ruta, sin claves. **Hugging Face**, en el menú lateral, carga cualquier GGUF del Hub en tu Codespace con barra de progreso.
 
+**APIs que bloquean el navegador (CORS).** Algunos proveedores (NVIDIA NIM, SambaNova, DeepSeek, Mistral, xAI, Scaleway) rechazan las llamadas desde páginas web. JeanCode lo resuelve sin servidores de terceros: en la web envía esas llamadas por el **relay de tu propio Jean-API-Generator** (`/relay/` en el puerto 8899, con streaming, solo hacia una lista fija de proveedores conocidos); en las apps del móvil, si no hay relay, usa la red nativa del teléfono. Un proveedor desconocido que falla desde el navegador se detecta y se recuerda. En el escritorio no hace falta nada de esto.
+
 El repositorio **no contiene URLs ni claves**. En el navegador se guardan en el almacenamiento local; en el escritorio la clave se cifra con el llavero del sistema.
 
 <br>
@@ -146,6 +155,7 @@ node --test --test-concurrency=1 tests/computer/control.test.mjs   # pruebas rea
 
 ```
 web/        HTML/CSS/módulos ES sin paso de build (GitHub Pages + PWA)
+mobile/     web/ empaquetada con Capacitor para iOS y Android (cd mobile && npm install && npm run android|ios)
 desktop/    Electron; usa web/ como interfaz · lib/ = archivos, terminal, diagnósticos, control del equipo
 skills/     skills de ejemplo     docs/     control del equipo, capturas
 ```

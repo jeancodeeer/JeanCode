@@ -49,7 +49,14 @@ No server, no account, no telemetry. Your model, your keys, your machine.
 | **An API key** (OpenRouter, Groq, NVIDIA…) | Open [JeanCode web](https://jeancodeeer.github.io/JeanCode/) → pick the provider → paste the key. The URL is filled in for you. |
 | **Nothing yet** | Create your free API with [Jean-API-Generator](https://github.com/jeancodeeer/Jean-API-Generator) (one Codespace, ~5 min), then paste its `…-8899.app.github.dev/v1` URL. |
 
-The web version is an installable PWA that works offline. The **AGENT** mode and computer control need the desktop app (Windows `.exe`, macOS `.dmg`, Linux `.AppImage`).
+| PLATFORM | GET IT | MODES |
+|---|---|---|
+| **Web** (any phone or computer) | [jeancodeeer.github.io/JeanCode](https://jeancodeeer.github.io/JeanCode/) — installable PWA, works offline | CHAT · CODE |
+| **Android** | `JeanCode-x.y.z-android.apk` from the [latest release](https://github.com/jeancodeeer/JeanCode/releases/latest) | CHAT · CODE |
+| **iOS / iPadOS** | `JeanCode-x.y.z-ios-unsigned.ipa` — install with [AltStore](https://altstore.io) or [Sideloadly](https://sideloadly.io) using your own Apple ID | CHAT · CODE |
+| **Windows · macOS · Linux** | `.exe` · `.dmg` · `.AppImage` from the [latest release](https://github.com/jeancodeeer/JeanCode/releases/latest) | CHAT · CODE · **AGENT** · computer control |
+
+The phone apps are the same web app compiled with Capacitor. The Android APK is signed with a debug key (allow "install unknown apps"); the iOS build is unsigned because App Store distribution needs a paid Apple developer account.
 
 <br>
 
@@ -131,6 +138,8 @@ Built from the most common complaints about Claude Code and OpenCode (issue trac
 
 Every connection is validated before use (bad URL, http from an https page, key in the URL, duplicates, wrong provider for that host — fixed for you). **AUTO** picks a model per mode and skips connections that are down; you choose what happens when a model fails (show the error, same model elsewhere, or any other model). Each answer carries its route, without keys. **Hugging Face** in the side menu loads any GGUF from the Hub into your Codespace with a progress bar.
 
+**APIs that block browsers (CORS).** Some providers (NVIDIA NIM, SambaNova, DeepSeek, Mistral, xAI, Scaleway) refuse calls from web pages. JeanCode handles it without any third-party server: on the web it sends those calls through the **relay of your own Jean-API-Generator** (`/relay/` on port 8899, streaming kept, only to a fixed list of known providers); in the phone apps it falls back to the phone's native networking when there is no relay. An unknown provider that fails from the browser is detected and remembered. The desktop app is never affected.
+
 The repository contains **no URLs and no keys**. In the browser they stay in local storage; in the desktop app the key is encrypted with the OS keychain.
 
 <br>
@@ -146,6 +155,7 @@ node --test --test-concurrency=1 tests/computer/control.test.mjs   # real comput
 
 ```
 web/        plain HTML/CSS/ES modules, no build step (GitHub Pages + PWA)
+mobile/     Capacitor wrapper of web/ for iOS and Android (cd mobile && npm install && npm run android|ios)
 desktop/    Electron; reuses web/ as its UI · lib/ = files, terminal, diagnostics, computer control
 skills/     example skills        docs/     computer control, screenshots
 ```
