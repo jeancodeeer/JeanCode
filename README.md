@@ -37,6 +37,7 @@ No server, no account, no telemetry. Your model, your keys, your machine.
 - **A real agent, not a chat box.** Reads, searches and edits your files, runs terminal commands with your permission, launches parallel subagents, loads skills, keeps a task list, and **rewinds** files and conversation to any message.
 - **It checks its own work.** After every edit the agent gets the file's syntax errors (JS, JSON, Python, PowerShell, Bash, Go) and fixes them before moving on — like an LSP, without running anything from your repo.
 - **It connects to your apps.** Gmail, Drive, Calendar, Docs, Sheets, GitHub, Notion, Linear, Jira, Figma, Supabase and 30 more through **MCP**, the same standard Claude Code uses — one click and you authorize in your browser; every action asks first. [How it works](docs/apps.md).
+- **100 skills and Claude Code-style automations.** One-click catalog of 100 open-source skills (Office files, TDD, debugging, React, Python, security, Hugging Face…), hooks that can block or approve actions, scheduled tasks and `/loop`. [Automations](docs/automations.md).
 - **It can use your computer** (Windows). Sees the screen, reads window controls, clicks, types, presses shortcuts — with risk-based permissions, a floating STOP bar and `Ctrl+Alt+Q` emergency stop.
 - **Nothing hidden.** `/context` shows the exact prompt sent to the model and what each part costs in tokens. `/doctor` checks your whole setup in one go.
 

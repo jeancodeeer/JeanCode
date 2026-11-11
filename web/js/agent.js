@@ -90,7 +90,7 @@ function mcpDocs(mcp, native) {
 }
 
 export function agentSystem({ workspace, os, skills, mode, agent = 'build', memory = '', sub, native = true, agents = [], style = 'normal', rules = '', computer = null, mcp = [] }) {
-  const skillList = skills.length ? skills.map((s) => `- ${s.name}: ${s.description}`).join('\n') : '(ninguna instalada)';
+  const skillList = skills.length ? skills.map((s) => `- ${s.name}: ${String(s.description).replace(/\s+/g, ' ').slice(0, 150)}`).join('\n') : '(ninguna instalada)';
   const role = agent === 'plan'
     ? 'Estás en modo PLAN: analiza, investiga y propone un plan numerado. NO modifiques archivos ni ejecutes comandos.'
     : 'Estás en modo BUILD: implementa los cambios, verifícalos y explica el resultado.';
@@ -227,14 +227,14 @@ export async function runAgent(ctx, messages, { sub = false } = {}) {
   const readOnly = ctx.mode === 'plan' || ctx.agent === 'plan';
 
   // Herramientas de apps conectadas (MCP): permiso por uso; en PLAN y en subagentes de lectura, solo las que solo leen
-  const execMcp = async (tool, args) => {
+  const execMcp = async (tool, args, ask = ctx.confirm) => {
     const def = (ctx.mcp || []).find((t) => t.name === tool);
     if (!def || !d.mcp) return `ERROR: la herramienta ${tool} no está disponible (¿la conexión está activa en Ajustes → Apps?).`;
     if (!def.readOnly && (readOnly || (sub && !ctx.subWrite))) return `DENEGADO: ${tool} puede modificar datos en ${def.serverName}; en modo de solo lectura solo se usan herramientas que solo leen.`;
     const key = `mcp:${tool}`;
     if (!ctx.isAllowed?.(key)) {
       const shown = JSON.stringify(args ?? {}, null, 2);
-      let ok = await ctx.confirm({
+      let ok = await ask({
         title: `${def.readOnly ? 'CONSULTAR' : 'ACTUAR EN'} ${def.serverName.toUpperCase()}`,
         command: `${def.tool}${def.readOnly ? '  (solo lee)' : '  (puede crear o cambiar datos)'}\n${shown.length > 1500 ? shown.slice(0, 1500) + '\n…' : shown}`,
         allowAlways: true, alwaysLabel: 'PERMITIR SIEMPRE ESTA HERRAMIENTA',
@@ -254,9 +254,11 @@ export async function runAgent(ctx, messages, { sub = false } = {}) {
 ${r}` : '';
   };
 
-  const exec = async ({ tool, args }) => {
+  const exec = async ({ tool, args }, hookAllow = false) => {
+    // un hook pre_tool puede aprobar la llamada; lo destructivo y la papelera preguntan igualmente
+    const ask = (o) => (hookAllow && !/DESTRUCTIV|PAPELERA/.test(o.title) ? Promise.resolve(true) : ctx.confirm(o));
     if (tool === '__invalid') return 'ERROR: el bloque tool no es JSON válido: ' + args.raw;
-    if (isMcpTool(tool)) return execMcp(tool, args);
+    if (isMcpTool(tool)) return execMcp(tool, args, ask);
     if (COMPUTER_TOOL_NAMES.includes(tool)) {
       if (!ctx.computer || sub) return 'DENEGADO: el control del equipo no está activado para esta tarea (Ajustes → Control del equipo).';
       if (readOnly && !['screenshot', 'inspect_screen', 'list_windows', 'wait'].includes(tool)) return 'DENEGADO: modo PLAN / solo lectura: solo puedes observar la pantalla.';
@@ -266,10 +268,10 @@ ${r}` : '';
     if (PROC_TOOLS.includes(tool) || tool === 'delete_file') {
       if (readOnly || (sub && !ctx.subWrite)) return 'DENEGADO: modo de solo lectura.';
       if (tool === 'start_process' && !(ctx.isAllowed?.(String(args.command)) && !DESTRUCTIVE_COMMAND.test(String(args.command)))) {
-        const ok = await ctx.confirm({ title: DESTRUCTIVE_COMMAND.test(String(args.command)) ? 'PROCESO DESTRUCTIVO' : 'INICIAR PROCESO', command: String(args.command) });
+        const ok = await ask({ title: DESTRUCTIVE_COMMAND.test(String(args.command)) ? 'PROCESO DESTRUCTIVO' : 'INICIAR PROCESO', command: String(args.command) });
         if (!ok) return 'RECHAZADO por el usuario.';
       }
-      if (tool === 'delete_file' && !(await ctx.confirm({ title: 'MOVER A LA PAPELERA', path: String(args.path), command: `Se enviará «${args.path}» a la papelera del sistema (recuperable).` }))) return 'RECHAZADO por el usuario.';
+      if (tool === 'delete_file' && !(await ask({ title: 'MOVER A LA PAPELERA', path: String(args.path), command: `Se enviará «${args.path}» a la papelera del sistema (recuperable).` }))) return 'RECHAZADO por el usuario.';
     }
     const writes = WRITE_TOOLS.includes(tool);
     const runs = tool === 'run_command';
@@ -285,14 +287,14 @@ ${r}` : '';
     if ((runs && !preAllowed) || fetches || (writes && ctx.mode === 'ask')) {
       let ok;
       if (runs) {
-        ok = await ctx.confirm({ title: destructive ? 'COMANDO DESTRUCTIVO' : 'EJECUTAR COMANDO', command: String(args.command), allowAlways: !destructive });
+        ok = await ask({ title: destructive ? 'COMANDO DESTRUCTIVO' : 'EJECUTAR COMANDO', command: String(args.command), allowAlways: !destructive });
         if (ok === 'always') { ctx.allowCommand?.(String(args.command)); ok = true; }
-      } else if (fetches) ok = await ctx.confirm({ title: 'ABRIR URL', command: String(args.url) });
+      } else if (fetches) ok = await ask({ title: 'ABRIR URL', command: String(args.url) });
       else {
         const before = await d.fs.peek(ctx.workspace, args.path);
         const after = tool === 'write_file' ? String(args.content ?? '')
           : before == null ? null : before.replace(String(args.old ?? ''), () => String(args.new ?? ''));
-        ok = await ctx.confirm({ title: before == null ? 'CREAR ARCHIVO' : 'MODIFICAR ARCHIVO', path: args.path, before: before ?? '', after: after ?? '' });
+        ok = await ask({ title: before == null ? 'CREAR ARCHIVO' : 'MODIFICAR ARCHIVO', path: args.path, before: before ?? '', after: after ?? '' });
       }
       if (!ok) return 'RECHAZADO por el usuario.';
     }
@@ -312,7 +314,7 @@ ${r}` : '';
             if (readOnly || (sub && !ctx.subWrite)) return 'DENEGADO: deep ejecuta herramientas del proyecto; en solo lectura usa diagnostics sin deep.';
             const label = `diagnostics --deep (TypeScript/ESLint/tsc del proyecto) ${args.path}`;
             if (!ctx.isAllowed?.('diagnostics --deep')) {
-              let ok = await ctx.confirm({ title: 'EJECUTAR HERRAMIENTAS DEL PROYECTO', command: label, allowAlways: true, alwaysLabel: 'PERMITIR SIEMPRE EN ESTA CARPETA' });
+              let ok = await ask({ title: 'EJECUTAR HERRAMIENTAS DEL PROYECTO', command: label, allowAlways: true, alwaysLabel: 'PERMITIR SIEMPRE EN ESTA CARPETA' });
               if (ok === 'always') { ctx.allowCommand?.('diagnostics --deep'); ok = true; }
               if (!ok) return 'RECHAZADO por el usuario.';
             }
@@ -369,6 +371,25 @@ ${r}` : '';
     }
   };
 
+  // hooks pre_tool / post_tool alrededor de cada herramienta (como en Claude Code)
+  const execHooked = async (call) => {
+    let allow = false;
+    if (ctx.hooks?.has('pre_tool')) {
+      const pre = await ctx.hooks.run('pre_tool', { tool: call.tool, args: call.args, subagent: sub });
+      if (pre.blocked) return `BLOQUEADO por un hook: ${pre.reason}`;
+      allow = pre.allow;
+    }
+    let r = await exec(call, allow);
+    if (ctx.hooks?.has('post_tool')) {
+      const text = r && typeof r === 'object' ? String(r.text ?? '') : String(r);
+      const post = await ctx.hooks.run('post_tool', { tool: call.tool, args: call.args, result: text.slice(0, 20000), subagent: sub });
+      const extra = [post.context, post.blocked ? `AVISO DE UN HOOK: ${post.reason}` : '', ...post.notes].filter(Boolean).join('\n');
+      if (extra) r = r && typeof r === 'object' ? { ...r, text: `${r.text}\n${extra}` } : `${r}\n${extra}`;
+    }
+    return r;
+  };
+
+  let stopRetries = 0;
   const recent = []; // firmas de las últimas llamadas, para detectar bucles
   let loopWarnings = 0;
   const firstTask = messages.find((m) => m.role === 'user' && typeof m.content === 'string')?.content || '';
@@ -416,16 +437,27 @@ ${r}` : '';
       messages.push({ role: 'assistant', content: text });
       calls = parseToolCalls(text);
     }
-    if (!calls.length) return text;
+    if (!calls.length) {
+      if (!sub && ctx.hooks?.has('stop') && stopRetries < 3) {
+        const st = await ctx.hooks.run('stop', { final: text.slice(0, 20000) });
+        if (st.blocked) {
+          stopRetries++;
+          messages.push({ role: 'user', content: `UN HOOK PIDE CONTINUAR ANTES DE TERMINAR: ${st.reason}` });
+          ctx.onEvent({ type: 'tool-end', call: { tool: 'hook stop', args: {} }, result: `ERROR: ${st.reason}`, sub });
+          continue;
+        }
+      }
+      return text;
+    }
 
     // subagentes del mismo mensaje en paralelo; el resto en orden
     const results = new Array(calls.length);
     const subIdx = calls.map((c, i) => (c.tool === 'spawn_subagent' ? i : -1)).filter((i) => i >= 0);
-    await Promise.all(subIdx.map(async (i) => { results[i] = await exec(calls[i]); }));
+    await Promise.all(subIdx.map(async (i) => { results[i] = await execHooked(calls[i]); }));
     for (let i = 0; i < calls.length; i++) {
       if (results[i] !== undefined) continue;
       ctx.onEvent({ type: 'tool-start', call: calls[i], sub });
-      results[i] = await exec(calls[i]);
+      results[i] = await execHooked(calls[i]);
       ctx.onEvent({ type: 'tool-end', call: calls[i], result: results[i] && typeof results[i] === 'object' ? results[i].text : results[i], sub });
     }
     // Bucle: la MISMA llamada con el MISMO resultado una y otra vez (un error repetido, o una lectura

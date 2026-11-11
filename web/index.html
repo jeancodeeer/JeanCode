@@ -214,6 +214,7 @@
           <summary aria-label="Más acciones del agente"><svg class="i"><use href="#i-more"/></svg></summary>
           <div class="menu-list" role="menu">
             <button role="menuitem" data-panel="skills">Skills</button>
+            <button role="menuitem" class="desktop-only" data-panel="automations" hidden>Automatizaciones</button>
             <button role="menuitem" id="undo-btn">Deshacer el último cambio</button>
           </div>
         </details>
@@ -385,6 +386,12 @@
       <textarea id="sys-chat" rows="3" spellcheck="false"></textarea>
     </label>
     <label class="check desktop-only" hidden><input type="checkbox" id="auto-diag" checked> Revisar cada archivo que edite el agente (errores de sintaxis al momento)</label>
+    <h3 class="desktop-only" hidden>Hooks globales</h3>
+    <p class="note desktop-only" hidden>Comandos que se ejecutan solos en momentos del agente, en todos tus proyectos (como en Claude Code). Eventos: <code>session_start</code>, <code>user_prompt</code>, <code>pre_tool</code>, <code>post_tool</code>, <code>post_edit</code>, <code>stop</code>, <code>post_turn</code>. Reciben JSON por la entrada estándar; salir con código 2 bloquea. <a href="https://github.com/jeancodeeer/JeanCode/blob/main/docs/automations.md" target="_blank" rel="noopener">Guía y ejemplos</a>.</p>
+    <label class="field desktop-only" hidden><span class="label">hooks.json</span>
+      <textarea id="global-hooks" rows="6" spellcheck="false" placeholder='{ "pre_tool": [{ "matcher": "run_command", "command": "node ~/hooks/revisa-comando.js" }] }'></textarea>
+    </label>
+    <div class="row gap desktop-only" hidden><button class="btn" id="global-hooks-save" type="button">Guardar hooks</button><span class="msg" id="global-hooks-msg" role="status" aria-live="polite"></span></div>
     <h3>Comandos permitidos del agente</h3>
     <ul class="rows" id="allow-list"></ul>
   </section>
@@ -455,6 +462,37 @@
       <button class="btn" type="submit">Instalar</button>
     </form>
   </div>
+  <h3>Catálogo · 100 skills</h3>
+  <p class="note">Elegidas de repositorios abiertos (Anthropic, Superpowers, Trail of Bits, Hugging Face y otros), con su licencia. Se descargan de GitHub al instalarlas. Instala solo las que vayas a usar: el agente ve la lista de las instaladas en cada turno.</p>
+  <div class="row gap wrap">
+    <input id="skill-search" type="search" placeholder="Buscar: pdf, pruebas, react, seguridad…" spellcheck="false" class="grow">
+    <button class="btn" id="skill-recommended" type="button">Instalar las 12 recomendadas</button>
+  </div>
+  <div id="skill-catalog"></div>
+</dialog>
+
+<dialog class="panel wide" id="panel-automations">
+  <div class="panel-head"><h2>Automatizaciones</h2><button class="icon-btn" data-close aria-label="Cerrar"><svg class="i"><use href="#i-close"/></svg></button></div>
+  <p class="note">Tareas que el agente hace solo, cada cierto tiempo o a una hora fija, mientras JeanCode está abierto (si se perdió una con la app cerrada, se hace al abrirla). Nadie puede aprobar nada durante una ejecución: lo que pediría permiso se deniega y se cuenta en el resultado. Solo corren los comandos que ya marcaste como «permitir siempre» en esa carpeta.</p>
+  <ul class="rows" id="auto-list"></ul>
+  <h3>Nueva tarea</h3>
+  <form id="auto-form" class="auto-form">
+    <input id="auto-name" type="text" placeholder="Nombre (p. ej. Revisar dependencias)" spellcheck="false">
+    <textarea id="auto-prompt" rows="3" placeholder="Qué debe hacer: «Ejecuta npm outdated y resume qué conviene actualizar»"></textarea>
+    <div class="row gap wrap">
+      <input id="auto-folder" type="text" placeholder="Carpeta de trabajo" spellcheck="false" class="grow">
+      <button class="btn ghost" id="auto-pick" type="button">Elegir…</button>
+    </div>
+    <div class="row gap wrap">
+      <select id="auto-when" aria-label="Frecuencia"></select>
+      <input id="auto-time" type="time" value="09:00" hidden aria-label="Hora">
+      <select id="auto-perm" aria-label="Permisos">
+        <option value="read">Solo lectura (investigar, revisar, informar)</option>
+        <option value="edit">Puede editar archivos</option>
+      </select>
+      <button class="btn primary" type="submit">Programar</button>
+    </div>
+  </form>
 </dialog>
 
 <dialog class="panel" id="panel-confirm">

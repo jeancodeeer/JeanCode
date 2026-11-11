@@ -197,6 +197,20 @@ ipcMain.handle('project:memory', (_e, root) => tools.projectMemory(root));
 ipcMain.handle('project:commands', (_e, root) => tools.commands(root));
 ipcMain.handle('project:agents', (_e, root) => tools.agents(root));
 ipcMain.handle('project:hooks', (_e, root) => tools.hooks(root));
+// hooks globales del usuario (Ajustes): <userData>/hooks.json, no piden confianza porque los escribe él
+const GLOBAL_HOOKS = () => path.join(app.getPath('userData'), 'hooks.json');
+ipcMain.handle('hooks:global', async () => {
+  const text = await fs.readFile(GLOBAL_HOOKS(), 'utf8').catch(() => '');
+  if (!text.trim()) return { text: '', hooks: {} };
+  try { return { text, hooks: tools.cleanHooks(JSON.parse(text)) }; } catch (e) { return { text, hooks: {}, error: e.message }; }
+});
+ipcMain.handle('hooks:saveGlobal', async (_e, text) => {
+  const t = String(text || '').trim();
+  if (t) tools.cleanHooks(JSON.parse(t)); // lanza si no es válido: no se guarda
+  await fs.writeFile(GLOBAL_HOOKS(), t ? `${t}\n` : '', 'utf8');
+  return true;
+});
+ipcMain.handle('hooks:exec', (_e, root, command, input, timeout) => tools.execHook(root, command, input, timeout));
 ipcMain.handle('turn:begin', (_e, root, turn) => tools.beginTurn(root, turn));
 ipcMain.handle('turn:rewind', (_e, root, turn) => tools.rewind(root, turn));
 ipcMain.handle('system:info', () => tools.systemInfo());
@@ -312,6 +326,7 @@ ipcMain.handle('skills:installFolder', async () => {
   return r.canceled ? null : skills().installFrom(r.filePaths[0]);
 });
 ipcMain.handle('skills:installUrl', (_e, url) => skills().installUrl(url, app.getPath('temp')));
+ipcMain.handle('skills:installGithub', (_e, repo, dir, branch) => skills().installGithubDir(repo, dir, branch));
 
 app.whenReady().then(() => {
   createWindow();

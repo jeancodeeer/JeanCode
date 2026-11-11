@@ -8,6 +8,7 @@ export const BUILTIN = [
   { name: 'export', desc: 'Descarga la conversación en Markdown', modes: ['chat', 'code', 'agent'] },
   { name: 'help', desc: 'Comandos y atajos de teclado', modes: ['chat', 'code', 'agent'] },
   { name: 'context', desc: 'Qué se envía al modelo: prompt, herramientas, historial y tokens', modes: ['chat', 'code', 'agent'] },
+  { name: 'loop', desc: 'Repite un mensaje: /loop 10m revisa los tests · /loop stop', modes: ['chat', 'code', 'agent'], arg: true },
   { name: 'doctor', desc: 'Revisa conexiones, modelo, carpeta, hooks y control del equipo', modes: ['chat', 'code', 'agent'] },
   { name: 'zip', desc: 'Descarga el proyecto en .zip', modes: ['code'] },
   { name: 'init', desc: 'Analiza la carpeta y crea AGENTS.md con la memoria del proyecto', modes: ['agent'] },

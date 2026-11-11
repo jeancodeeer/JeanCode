@@ -4,11 +4,18 @@ const path = require('node:path');
 const { execFile } = require('node:child_process');
 
 function parseFrontmatter(text) {
-  const m = text.match(/^---\s*\n([\s\S]*?)\n---/);
+  const m = String(text).replace(/\r\n/g, '\n').match(/^---\s*\n([\s\S]*?)\n---/);
   const meta = {};
+  let key = null;
   if (m) for (const line of m[1].split('\n')) {
     const kv = line.match(/^(\w[\w-]*)\s*:\s*(.*)$/);
-    if (kv) meta[kv[1]] = kv[2].replace(/^["']|["']$/g, '').trim();
+    if (kv) {
+      key = kv[1];
+      // "description: >" o "|" = el valor sigue en las líneas sangradas de abajo
+      meta[key] = /^[>|][+-]?$/.test(kv[2].trim()) ? '' : kv[2].replace(/^["']|["']$/g, '').trim();
+    } else if (key && /^\s+\S/.test(line)) {
+      meta[key] = `${meta[key]} ${line.trim()}`.trim();
+    }
   }
   return meta;
 }
@@ -95,7 +102,44 @@ function create(dir) {
     try { return await installFrom(dest); } finally { await fs.rm(dest, { recursive: true, force: true }); }
   }
 
-  return { list, read, remove, installFrom, installUrl };
+  /**
+   * Instala una skill del catálogo: la carpeta <dir> de un repo público de GitHub, con sus scripts.
+   * Sin git: árbol del repo (1 llamada a la API) + archivos desde raw.githubusercontent.com.
+   */
+  const trees = new Map();
+  async function installGithubDir(repo, dirInRepo, branch = 'main') {
+    if (!/^[\w.-]+\/[\w.-]+$/.test(repo)) throw new Error('repo inválido');
+    const base = String(dirInRepo).replace(/^\/+|\/+$/g, '');
+    if (!base || base.split('/').some((p) => p === '..' || p === '.')) throw new Error('carpeta inválida');
+    const key = `${repo}@${branch}`;
+    if (!trees.has(key)) {
+      const r = await fetch(`https://api.github.com/repos/${repo}/git/trees/${encodeURIComponent(branch)}?recursive=1`, { headers: { Accept: 'application/vnd.github+json', 'User-Agent': 'JeanCode' } });
+      if (r.status === 403 || r.status === 429) throw new Error('GitHub limitó las descargas por ahora (60 por hora sin cuenta); prueba en un rato');
+      if (!r.ok) throw new Error(`no se pudo leer ${repo} (${r.status})`);
+      trees.set(key, (await r.json()).tree || []);
+    }
+    const files = trees.get(key).filter((f) => f.type === 'blob' && f.path.startsWith(`${base}/`));
+    if (!files.some((f) => f.path === `${base}/SKILL.md`)) throw new Error(`${repo}/${base} no tiene SKILL.md`);
+    const total = files.reduce((s, f) => s + (f.size || 0), 0);
+    if (files.length > 300 || total > 25 * 2 ** 20) throw new Error(`la skill es demasiado grande (${files.length} archivos, ${Math.round(total / 2 ** 20)} MB)`);
+    const tmp = path.join(dir, `.tmp-${Date.now()}`);
+    try {
+      for (const f of files) {
+        const rel = f.path.slice(base.length + 1);
+        const out = path.resolve(tmp, rel);
+        if (!out.startsWith(tmp + path.sep)) throw new Error(`ruta insegura en la skill: ${rel}`);
+        await fs.mkdir(path.dirname(out), { recursive: true });
+        // los archivos vacíos (__init__.py…) no se sirven por raw.githubusercontent.com: se crean vacíos
+        if (!f.size) { await fs.writeFile(out, ''); continue; }
+        const r = await fetch(`https://raw.githubusercontent.com/${repo}/${encodeURIComponent(branch)}/${f.path.split('/').map(encodeURIComponent).join('/')}`);
+        if (!r.ok) throw new Error(`descarga fallida: ${rel} (${r.status})`);
+        await fs.writeFile(out, Buffer.from(await r.arrayBuffer()));
+      }
+      return await installFrom(tmp);
+    } finally { await fs.rm(tmp, { recursive: true, force: true }); }
+  }
+
+  return { list, read, remove, installFrom, installUrl, installGithubDir };
 }
 
 module.exports = { create, parseFrontmatter };

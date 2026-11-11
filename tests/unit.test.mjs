@@ -563,3 +563,65 @@ test('agente + apps (MCP): permiso por uso, solo lectura en PLAN, permitir siemp
   const names = AG.toolSchemasFor({ mcp }).map((t) => t.function.name);
   assert.ok(names.includes('mcp__github__create_issue'));
 });
+
+test('automatizaciones: calendario, tareas pendientes y /loop', async () => {
+  const AU = await import('../web/js/automations.js');
+  const lunes9 = new Date(2026, 10, 9, 9, 0).getTime(); // lunes 9 nov 2026, 09:00
+  assert.equal(AU.nextRun({ kind: 'every', minutes: 30 }, lunes9), lunes9 + 30 * 60000);
+  assert.equal(AU.nextRun({ kind: 'every', minutes: 1 }, lunes9), lunes9 + 5 * 60000, 'mínimo 5 minutos');
+  assert.equal(new Date(AU.nextRun({ kind: 'daily', time: '08:30' }, lunes9)).getDate(), 10, 'las 08:30 ya pasaron: mañana');
+  assert.equal(new Date(AU.nextRun({ kind: 'daily', time: '18:00' }, lunes9)).getHours(), 18);
+  const viernes20 = new Date(2026, 10, 13, 20, 0).getTime();
+  assert.equal(new Date(AU.nextRun({ kind: 'weekdays', time: '09:00' }, viernes20)).getDay(), 1, 'después del viernes, el lunes');
+  assert.equal(new Date(AU.nextRun({ kind: 'weekly', time: '09:00' }, lunes9 + 60000)).getDate(), 16, 'el lunes siguiente');
+  assert.deepEqual(AU.dueTasks([{ id: 'a', next: 1 }, { id: 'b', next: Date.now() + 1e6 }, { id: 'c', next: 1, enabled: false }]).map((t) => t.id), ['a']);
+  assert.equal(AU.parseInterval('10m'), 600000);
+  assert.equal(AU.parseInterval('5s'), 60000, 'mínimo 1 minuto');
+  assert.equal(AU.parseInterval('mañana'), null);
+  assert.throws(() => AU.parseSchedule('daily', ''), /hora/);
+});
+
+test('hooks: bloquear con salida 2, aprobar con JSON, contexto, matcher y post_tool', async () => {
+  const { createHooks } = await import('../web/js/hooks.js');
+  const ran = [];
+  const fake = async (command, input) => {
+    ran.push([command, input.event, input.tool]);
+    if (command === 'bloquea') return { code: 2, stdout: '', stderr: 'no se puede tocar .env' };
+    if (command === 'aprueba') return { code: 0, stdout: '{"decision":"allow"}', stderr: '' };
+    if (command === 'contexto') return { code: 0, stdout: 'rama: main', stderr: '' };
+    if (command === 'falla') return { code: 1, stdout: '', stderr: 'roto' };
+    return { code: 0, stdout: '', stderr: '' };
+  };
+  const H = createHooks([
+    { label: 'globales', hooks: { pre_tool: [{ matcher: 'write_file|edit_file', command: 'bloquea' }, { matcher: 'run_command', command: 'aprueba' }], session_start: [{ command: 'contexto' }] } },
+    { label: 'proyecto', hooks: { post_tool: [{ command: 'falla' }], post_edit: [{ command: 'fmt {path}' }] } },
+  ], fake);
+  const b = await H.run('pre_tool', { tool: 'write_file', args: {} });
+  assert.equal(b.blocked, true);
+  assert.equal(b.reason, 'no se puede tocar .env');
+  assert.equal((await H.run('pre_tool', { tool: 'run_command' })).allow, true);
+  assert.equal((await H.run('pre_tool', { tool: 'read_file' })).blocked, false, 'el matcher no coincide');
+  assert.equal((await H.run('pre_tool', { tool: 'xwrite_file' })).blocked, false, 'el matcher es exacto');
+  assert.equal((await H.run('session_start', {})).context, 'rama: main');
+  assert.match((await H.run('post_tool', { tool: 'x' })).notes[0], /salida 1/);
+  assert.match((await H.run('post_edit', { path: 'a; rm -rf /' })).notes[0], /omitido/);
+  await H.run('post_edit', { path: 'src/a.js' });
+  assert.deepEqual(ran.at(-1), ['fmt src/a.js', 'post_edit', undefined]);
+  assert.equal(H.has('stop'), false);
+});
+
+test('agente + hooks: pre_tool bloquea la herramienta, stop obliga a seguir', async () => {
+  const blocked = [];
+  const hooks = {
+    has: (e) => e === 'pre_tool' || e === 'stop',
+    run: async (e, p) => {
+      if (e === 'pre_tool') { blocked.push(p.tool); return { blocked: p.tool === 'run_command', reason: 'comandos prohibidos por la política', allow: false, context: '', notes: [] }; }
+      return { blocked: hooks.stops++ === 0, reason: 'falta ejecutar las pruebas', allow: false, context: '', notes: [] };
+    },
+    stops: 0,
+  };
+  const { log, msgs } = await runScripted([{ tool: 'run_command', args: { command: 'npm test' } }], { ctx: { hooks } });
+  assert.deepEqual(log.ran, [], 'el comando no se ejecutó');
+  assert.ok(msgs.some((m) => m.role === 'tool' && /BLOQUEADO por un hook: comandos prohibidos/.test(m.content)));
+  assert.ok(msgs.some((m) => m.role === 'user' && /UN HOOK PIDE CONTINUAR.*pruebas/.test(m.content)), 'stop hizo seguir una vez');
+});

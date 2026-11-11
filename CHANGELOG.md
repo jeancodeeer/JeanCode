@@ -4,6 +4,13 @@ JeanCode 1.0 reúne en una sola versión todo lo que se publicó por partes entr
 
 ## Próxima versión (en `main`, ya en la web)
 
+**100 skills y automatizaciones como en Claude Code**
+- **Catálogo de 100 skills** (Skills → Catálogo): Word, PDF, Excel y PowerPoint; TDD, depuración y planes; revisión de código; React, Next.js, Python, Go y Rust; APIs y bases de datos; DevOps; seguridad (Trail of Bits); IA y Hugging Face; análisis de datos. Elegidas de repositorios con licencia abierta y descargadas de GitHub al instalarlas, con sus scripts. Las 100 se comprobaron instalándolas.
+- **Hooks** como los de Claude Code: `session_start`, `user_prompt`, `pre_tool`, `post_tool`, `post_edit`, `stop` y `post_turn`, con filtro por herramienta, JSON por la entrada estándar, bloqueo con código de salida 2 o decisión en JSON. Hooks globales en Ajustes.
+- **Tareas programadas** (Más → Automatizaciones): el agente trabaja solo cada cierto tiempo o a una hora; lo que necesitaría permiso se deniega y se informa.
+- **`/loop 10m <mensaje>`** repite un mensaje cada intervalo.
+- Guía: `docs/automations.md`.
+
 **Conexiones con otras apps (MCP)**
 - **Ajustes → Apps**: 41 conexiones comprobadas en vivo. Google (Gmail, Drive, Calendar, Docs, Sheets, Slides, Chat, Tasks, Keep, Meet) con su servidor oficial; GitHub; Notion, Linear, Jira/Confluence, Asana, Sentry, Figma, Canva, Supabase, Neon, Netlify, Zapier, Stripe, PayPal y más; y servidores locales (carpetas, memoria, navegador Playwright, Chrome DevTools, Git).
 - Mismo estándar que Claude Code (MCP, SDK oficial): servidores remotos con OAuth (se autoriza en el navegador, con PKCE) o token, y servidores locales. También se puede añadir cualquier otro servidor MCP.

@@ -15,6 +15,9 @@ import { capsOf, describeCaps, billingOf, fmtCtx } from './capabilities.js';
 import { normalizePolicy, describeAction, riskOf, actionKey, needsTerminalApproval, INPUT_TOOLS } from './computer.js';
 import { SLOTS, controlUrlFrom, hfSearch, hfFiles, control, gb } from './hf.js';
 import { initApps } from './apps.js';
+import { createHooks } from './hooks.js';
+import { initAutomations, parseInterval } from './automations.js';
+import { SKILL_CATALOG, SKILL_CATEGORIES } from './skills-catalog.js';
 
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => [...el.querySelectorAll(s)];
@@ -817,6 +820,20 @@ async function runCommand({ name, args }) {
     case 'compact': await compact(t); return null;
     case 'context': await showContext(t); return null;
     case 'doctor': await runDoctor(); return null;
+    case 'loop': {
+      // /loop 10m <mensaje>: lo envía ahora y luego cada intervalo, mientras la app siga abierta
+      if (/^(stop|para|parar)$/i.test(args)) { stopLoop('BUCLE DETENIDO'); return null; }
+      const [, every, msg] = args.match(/^(\S+)\s+([\s\S]+)$/) || [];
+      const ms = parseInterval(every);
+      if (!ms || !msg) { toast('USO: /loop 10m <mensaje>  ·  /loop stop'); return null; }
+      stopLoop();
+      state.loop = { msg, ms, until: Date.now() + 7 * 86400000, timer: setInterval(() => {
+        if (Date.now() > state.loop?.until) { stopLoop('BUCLE TERMINADO (7 DÍAS)'); return; }
+        if (!state.abort) send(state.loop.msg);
+      }, ms) };
+      addMessage('system', `Bucle activo: «${msg.slice(0, 120)}» cada ${every} (máx. 7 días). /loop stop para pararlo.`);
+      return msg;
+    }
     case 'plan': setAgent('plan'); return null;
     case 'build': setAgent('build'); return null;
     case 'undo': {
@@ -934,6 +951,48 @@ async function runDoctor() {
   }
   if (typeof navigator !== 'undefined' && navigator.onLine === false) ok(false, 'sin conexión a internet', 'las APIs remotas fallarán; usa un modelo local');
   updateMessage(row, out.join('\n'));
+}
+
+function stopLoop(msg) {
+  if (state.loop?.timer) clearInterval(state.loop.timer);
+  if (state.loop && msg) toast(msg);
+  state.loop = null;
+}
+
+/**
+ * Ejecuta una tarea programada sin nadie delante: hilo propio, modelo del modo Agente, sin permisos
+ * interactivos (lo que pediría permiso se deniega y se informa). Solo comandos "permitir siempre" de esa carpeta.
+ */
+async function runAutomation(task) {
+  const decision = decide(routeFor('agent'), { models: state.visible || [], mode: 'agent', endpoints: getEndpoints(), need: { tools: true, tokens: 4000 } });
+  const m = decision.model;
+  if (!m) throw new Error('no hay un modelo disponible para el agente');
+  await desktop.fs.list(task.folder, '.'); // la carpeta existe y se puede leer
+  const t = { id: crypto.randomUUID(), mode: 'agent', title: `⏱ ${task.name.toUpperCase()}`.slice(0, 60), messages: [{ role: 'user', content: task.prompt, turn: Date.now() }], files: {}, changed: {}, updated: Date.now(), automation: task.id };
+  state.threads.unshift(t); saveThreads(); renderThreads();
+  const [skills, os, memory, mcpAll] = await Promise.all([desktop.skills.list(), desktop.system.os(), desktop.project.memory(task.folder).catch(() => ''), desktop.mcp ? desktop.mcp.tools().catch(() => []) : []]);
+  const allowList = store.get(`allow:${task.folder}`, []);
+  const denied = [];
+  const tools = [];
+  // solo las herramientas de apps que el usuario permitió siempre (nadie puede aprobar las demás)
+  const mcp = mcpAll.filter((x) => allowList.includes(`mcp:${x.name}`));
+  const sys = { workspace: task.folder, os, skills, mode: task.perm === 'edit' ? 'auto-edit' : 'plan', agent: task.perm === 'edit' ? 'build' : 'plan', memory, agents: [], style: 'concise', rules: store.get('rules', ''), mcp };
+  const messages = [{ role: 'system', content: agentSystem(sys) + '\n\nEJECUCIÓN PROGRAMADA SIN SUPERVISIÓN: nadie puede aprobar acciones ahora. Si algo necesita permiso, no insistas: explica al final qué quedó pendiente.' }, { role: 'user', content: task.prompt }];
+  const ac = new AbortController();
+  const ctx = {
+    ep: m.ep, model: m.id, desktop, workspace: task.folder, mode: sys.mode, agent: sys.agent, sys, think: false, signal: ac.signal, mcp,
+    chat: (o) => routedChat({ id: o.model, ep: o.ep }, o, { models: state.routable || state.models, mode: 'agent', endpoints: getEndpoints(), decision, need: { tools: true } }).then((r) => r.text),
+    confirm: async (o) => { denied.push(`${o.title}: ${String(o.command || o.path || '').split('\n')[0].slice(0, 120)}`); return false; },
+    isAllowed: (cmd) => !UNSAFE_CMD.test(cmd.trim()) && allowList.includes(cmd.trim()), allowCommand: () => {},
+    onEvent: (ev) => { if (ev.type === 'tool-end' && !ev.nested) tools.push(`${ev.call.tool}${/^(ERROR|DENEGADO|RECHAZADO)/.test(String(ev.result)) ? ' ✕' : ' ✓'}`); },
+  };
+  const timer = setTimeout(() => ac.abort(), 30 * 60000); // como mucho 30 minutos por ejecución
+  let final;
+  try { final = await runAgent(ctx, messages); } finally { clearTimeout(timer); }
+  const extra = [tools.length ? `Herramientas: ${tools.join(', ')}` : '', denied.length ? `Quedó pendiente de tu permiso:\n- ${denied.join('\n- ')}` : ''].filter(Boolean).join('\n\n');
+  t.messages.push({ role: 'assistant', content: `${stripToolBlocks(final) || final}${extra ? `\n\n---\n${extra}` : ''}` });
+  t.updated = Date.now(); saveThreads(); renderThreads();
+  return { ok: true, summary: (stripToolBlocks(final) || final).replace(/\s+/g, ' ').slice(0, 200), thread: t.id };
 }
 
 async function compact(t) {
@@ -1159,20 +1218,19 @@ async function loadHooks() {
   return h.hooks;
 }
 
-function hookRunner(hooks) {
-  return async (event, vars = {}) => {
-    const cmds = hooks?.[event];
-    if (!cmds?.length) return '';
-    let out = '';
-    for (const tpl of cmds) {
-      // {path} viene del modelo: solo rutas con caracteres seguros, o el hook se omite
-      if (tpl.includes('{path}') && !/^[\w./-]+$/.test(String(vars.path || ''))) { out += `\n[hook ${event}] omitido: ruta con caracteres no seguros`; continue; }
-      const cmd = tpl.replace(/\{path\}/g, String(vars.path || ''));
-      const r = await desktop.shell.run(state.workspace, cmd, 120);
-      out += `\n[hook ${event}] ${r.slice(0, 1500)}`;
-    }
-    return out;
+/** Hooks globales (Ajustes) + los del proyecto (si confiaste): motor común para todo el turno. */
+async function hookEngine(projectHooks) {
+  const global = desktop.hooks ? await desktop.hooks.global().catch(() => null) : null;
+  if (global?.error) addMessage('system', `Los hooks globales no son válidos (${global.error}): Ajustes → Comportamiento.`);
+  const engine = createHooks([{ hooks: global?.hooks, label: 'globales' }, { hooks: projectHooks, label: 'proyecto' }],
+    (command, input, timeout) => desktop.hooks.exec(state.workspace, command, { ...input, workspace: state.workspace }, timeout));
+  // compatibilidad: post_edit y post_turn devuelven texto para el resultado o el chat
+  engine.text = async (event, vars = {}) => {
+    if (!engine.has(event)) return '';
+    const r = await engine.run(event, vars);
+    return [r.context, r.blocked ? r.reason : '', ...r.notes].filter(Boolean).map((x) => `\n[hook ${event}] ${x.slice(0, 1500)}`).join('');
   };
+  return engine;
 }
 
 function renderTodos(todos) {
@@ -1202,7 +1260,18 @@ async function sendAgent(t, m, text, turn) {
     store.set(`nogitWarned:${state.workspace}`, true);
     addMessage('system', 'Esta carpeta no es un repo git: «volver aquí» deshará los archivos que edite el agente, pero no lo que cambien los comandos de terminal. Con git init se cubre todo.');
   }
+  const engine = await hookEngine(hooks);
+  // user_prompt: un hook puede rechazar el mensaje (salida 2) o añadirle contexto
+  let hookContext = '';
+  if (engine.has('user_prompt')) {
+    const up = await engine.run('user_prompt', { prompt: text });
+    if (up.blocked) { addMessage('system', `Un hook no dejó enviar el mensaje: ${up.reason}`); return; }
+    hookContext = up.context;
+  }
+  // session_start: al empezar una conversación del agente, su salida queda como contexto de la sesión
+  if (!t.agentMessages && engine.has('session_start')) t.sessionContext = (await engine.run('session_start', {})).context || '';
   const sys = agentSys({ os, skills, memory });
+  if (t.sessionContext) sys.rules = `${sys.rules || ''}\n\nCONTEXTO DE INICIO (hooks session_start):\n${t.sessionContext}`;
   // apps conectadas (MCP): las herramientas de las conexiones activas en este momento
   const mcpTools = desktop.mcp ? await desktop.mcp.tools().catch(() => []) : [];
   sys.mcp = mcpTools;
@@ -1222,14 +1291,14 @@ async function sendAgent(t, m, text, turn) {
     const w = await actComputer('list_windows', {}, computer.vision);
     if (!String(w).startsWith('ERROR')) observed = `\n\n[OBSERVACIÓN INICIAL · ventanas abiertas]\n${w}`;
   }
-  t.agentMessages.push({ role: 'user', content: (await expandMentions(text)) + observed });
+  t.agentMessages.push({ role: 'user', content: (await expandMentions(text)) + observed + (hookContext ? `\n\n[CONTEXTO DE UN HOOK]\n${hookContext}` : '') });
 
   let row = null;
   const ctx = {
     ep: m.ep, model: m.id, desktop, workspace: state.workspace, mode: state.perm, agent: state.agent, sys, think: state.think,
     // el agente pide cada paso al enrutador; si cambia de backend, los pasos siguientes siguen en el nuevo
     chat: (o) => routedChat({ id: o.model, ep: o.ep }, o, routeCtx((to) => { ctx.ep = to.ep; ctx.model = to.id; })).then((r) => r.text),
-    signal: state.abort.signal, confirm: confirmWithAttention, isAllowed, allowCommand, runHooks: hookRunner(hooks), computer,
+    signal: state.abort.signal, confirm: confirmWithAttention, isAllowed, allowCommand, hooks: engine, runHooks: engine.text, computer,
     autoDiagnostics: store.get('autoDiag', true), mcp: mcpTools,
     onEvent: (ev) => {
       if (ev.type === 'usage') { addUsage(t, ev.usage, { ep: ctx.ep, id: ctx.model }); if (row) setUsage(row, ev.usage); }
@@ -1608,6 +1677,15 @@ $('#style-select').addEventListener('change', (e) => { store.set('style', e.targ
 $('#rules').addEventListener('change', (e) => store.set('rules', e.target.value));
 $('#auto-diag').addEventListener('change', (e) => store.set('autoDiag', e.target.checked));
 
+/* hooks globales (escritorio): <userData>/hooks.json */
+if (desktop?.hooks) {
+  desktop.hooks.global().then((g) => { $('#global-hooks').value = g?.text || ''; if (g?.error) $('#global-hooks-msg').textContent = `No es válido: ${g.error}`; }).catch(() => {});
+  $('#global-hooks-save').addEventListener('click', async () => {
+    const msg = $('#global-hooks-msg');
+    try { await desktop.hooks.saveGlobal($('#global-hooks').value); msg.textContent = 'Guardados: se aplican desde el próximo mensaje.'; } catch (err) { msg.textContent = `No se guardó: ${String(err.message).replace(/^Error invoking remote method[^:]*: (Error: )?/, '')}`; }
+  });
+}
+
 /* relay CORS propio (Cloudflare Worker de relay/worker.js): solo hace falta en la web y el móvil */
 if (desktop) $$('.web-only').forEach((el) => { el.hidden = true; });
 $('#relay-form').addEventListener('submit', async (e) => {
@@ -1635,6 +1713,7 @@ const pcPolicy = () => normalizePolicy(store.get('pcPolicy', null));
 
 if (desktop?.computer) {
   initApps({ $, esc, toast, desktop, confirmDialog });
+  initAutomations({ $, esc, toast, store, desktop, confirmDialog, run: runAutomation, openThread: (id) => { const t = state.threads.find((x) => x.id === id); if (t) { setMode('agent'); openThread(id); } } });
   desktop.computer.supported().then((r) => { pc.supported = !!r.supported; pc.platform = r.platform; renderPcSettings(); }).catch(() => {});
   desktop.computer.onState((s) => renderPcStatus(s));
   desktop.computer.onEmergency((reason) => { state.abort?.abort(); toast(String(reason).toUpperCase()); });
@@ -1954,6 +2033,32 @@ async function renderSkills() {
   const list = $('#skill-list');
   const skills = await desktop.skills.list();
   list.innerHTML = skills.map((s) => `<li><span class="ep-url"><strong>${esc(s.name)}</strong> — ${esc(s.description)}</span><button class="btn ghost sm" data-skill-del="${esc(s.id)}">QUITAR</button></li>`).join('') || '<li>Sin skills instaladas.</li>';
+  renderSkillCatalog(new Set(skills.map((s) => s.name)));
+}
+
+/* catálogo de 100 skills (web/js/skills-catalog.js): se instalan desde su repositorio de GitHub */
+const RECOMMENDED = ['systematic-debugging', 'test-driven-development', 'writing-plans', 'brainstorming', 'verification-before-completion',
+  'code-review-excellence', 'pdf', 'docx', 'xlsx', 'pptx', 'frontend-design', 'webapp-testing'];
+function renderSkillCatalog(installed = new Set()) {
+  const q = ($('#skill-search')?.value || '').trim().toLowerCase();
+  const match = (c) => !q || `${c.name} ${c.desc} ${c.category}`.toLowerCase().includes(q);
+  $('#skill-catalog').innerHTML = SKILL_CATEGORIES.map((cat) => {
+    const items = SKILL_CATALOG.filter((c) => c.category === cat && match(c));
+    if (!items.length) return '';
+    return `<h4 class="apps-cat">${esc(cat)} · ${items.length}</h4><ul class="rows">${items.map((c) => `<li>
+      <span class="ep-prov">${esc(c.name)}</span><span class="ep-url apps-desc">${esc(c.desc)}</span>
+      <span class="ep-meta">${esc(c.repo.split('/')[0])} · ${esc(c.license)}</span>
+      ${installed.has(c.name) ? '<span class="ep-meta">instalada</span>' : `<button class="btn sm" type="button" data-skill-add="${esc(c.id)}">Instalar</button>`}
+    </li>`).join('')}</ul>`;
+  }).join('') || '<p class="note">Ninguna skill coincide.</p>';
+}
+async function installCatalogSkills(entries) {
+  let ok = 0;
+  for (const c of entries) {
+    try { await desktop.skills.installGithub(c.repo, c.dir); ok++; } catch (err) { toast(`${c.name.toUpperCase()}: ${String(err.message).toUpperCase().slice(0, 90)}`); }
+  }
+  if (ok) toast(ok === 1 ? `SKILL INSTALADA: ${entries[0].name.toUpperCase()}` : `${ok} SKILLS INSTALADAS`);
+  renderSkills();
 }
 if (desktop) {
   $('#skill-list').addEventListener('click', async (e) => {
@@ -1962,6 +2067,21 @@ if (desktop) {
   });
   $('#skill-folder').addEventListener('click', async () => {
     try { const r = await desktop.skills.installFolder(); if (r) toast('SKILL INSTALADA: ' + r); renderSkills(); } catch (err) { toast(err.message); }
+  });
+  $('#skill-catalog').addEventListener('click', async (e) => {
+    const b = e.target.closest('[data-skill-add]');
+    if (!b) return;
+    b.disabled = true; b.textContent = 'Instalando…';
+    await installCatalogSkills(SKILL_CATALOG.filter((c) => c.id === b.dataset.skillAdd));
+  });
+  $('#skill-search').addEventListener('input', () => desktop.skills.list().then((s) => renderSkillCatalog(new Set(s.map((x) => x.name)))));
+  $('#skill-recommended').addEventListener('click', async (e) => {
+    const installed = new Set((await desktop.skills.list()).map((s) => s.name));
+    const todo = SKILL_CATALOG.filter((c) => RECOMMENDED.includes(c.name) && !installed.has(c.name));
+    if (!todo.length) { toast('YA ESTÁN INSTALADAS'); return; }
+    e.target.disabled = true; e.target.textContent = `Instalando ${todo.length}…`;
+    await installCatalogSkills(todo);
+    e.target.disabled = false; e.target.textContent = 'Instalar las 12 recomendadas';
   });
   $('#skill-url-form').addEventListener('submit', async (e) => {
     e.preventDefault();
