@@ -321,6 +321,7 @@
     <button class="it active" data-tab="conn">Conexiones</button>
     <button class="it" data-tab="models">Modelos</button>
     <button class="it" data-tab="behavior">Comportamiento</button>
+    <button class="it desktop-only" data-tab="apps" hidden>Apps</button>
     <button class="it desktop-only" data-tab="computer" hidden>Equipo</button>
     <button class="it" data-tab="data">Datos</button>
   </div>
@@ -386,6 +387,21 @@
     <label class="check desktop-only" hidden><input type="checkbox" id="auto-diag" checked> Revisar cada archivo que edite el agente (errores de sintaxis al momento)</label>
     <h3>Comandos permitidos del agente</h3>
     <ul class="rows" id="allow-list"></ul>
+  </section>
+
+  <section data-pane="apps" hidden id="apps-pane">
+    <p class="note">Conecta el agente con tus apps: Gmail, Drive, Calendar, GitHub, Notion, Linear… Cada conexión le da herramientas nuevas (servidores <strong>MCP</strong>, el mismo estándar que Claude Code). Cada uso pide tu permiso, y los tokens se guardan cifrados en este equipo.</p>
+    <h3>Tus conexiones</h3>
+    <ul class="rows" id="apps-list"></ul>
+    <h3>Añadir</h3>
+    <div id="apps-catalog"></div>
+    <h3>Otro servidor MCP</h3>
+    <form id="apps-custom" class="add-form">
+      <input name="name" type="text" placeholder="Nombre" required spellcheck="false">
+      <input name="target" type="text" placeholder="https://…/mcp  o  npx -y paquete" required spellcheck="false">
+      <input name="header" type="password" placeholder="Token (opcional)" autocomplete="off" spellcheck="false">
+      <button class="btn" type="submit">Añadir</button>
+    </form>
   </section>
 
   <section data-pane="computer" hidden id="pc-settings">

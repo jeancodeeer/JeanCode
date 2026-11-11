@@ -14,6 +14,7 @@ import { AUTO, modelKey, chat as routedChat, probeEndpoint, healthOf, validateEn
 import { capsOf, describeCaps, billingOf, fmtCtx } from './capabilities.js';
 import { normalizePolicy, describeAction, riskOf, actionKey, needsTerminalApproval, INPUT_TOOLS } from './computer.js';
 import { SLOTS, controlUrlFrom, hfSearch, hfFiles, control, gb } from './hf.js';
+import { initApps } from './apps.js';
 
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => [...el.querySelectorAll(s)];
@@ -1202,6 +1203,9 @@ async function sendAgent(t, m, text, turn) {
     addMessage('system', 'Esta carpeta no es un repo git: «volver aquí» deshará los archivos que edite el agente, pero no lo que cambien los comandos de terminal. Con git init se cubre todo.');
   }
   const sys = agentSys({ os, skills, memory });
+  // apps conectadas (MCP): las herramientas de las conexiones activas en este momento
+  const mcpTools = desktop.mcp ? await desktop.mcp.tools().catch(() => []) : [];
+  sys.mcp = mcpTools;
   // Control del equipo: solo si el usuario lo activó y el sistema lo admite; una sesión por turno
   const computer = await beginComputer(text, m);
   if (computer) sys.computer = { vision: computer.vision, screen: computer.screen };
@@ -1226,7 +1230,7 @@ async function sendAgent(t, m, text, turn) {
     // el agente pide cada paso al enrutador; si cambia de backend, los pasos siguientes siguen en el nuevo
     chat: (o) => routedChat({ id: o.model, ep: o.ep }, o, routeCtx((to) => { ctx.ep = to.ep; ctx.model = to.id; })).then((r) => r.text),
     signal: state.abort.signal, confirm: confirmWithAttention, isAllowed, allowCommand, runHooks: hookRunner(hooks), computer,
-    autoDiagnostics: store.get('autoDiag', true),
+    autoDiagnostics: store.get('autoDiag', true), mcp: mcpTools,
     onEvent: (ev) => {
       if (ev.type === 'usage') { addUsage(t, ev.usage, { ep: ctx.ep, id: ctx.model }); if (row) setUsage(row, ev.usage); }
       if (ev.type === 'assistant-start') row = addMessage('assistant', '', { streaming: true, cls: ev.nested ? 'nested' : '' });
@@ -1630,6 +1634,7 @@ const pcEnabled = () => !!desktop && pc.supported && store.get('pcEnabled', fals
 const pcPolicy = () => normalizePolicy(store.get('pcPolicy', null));
 
 if (desktop?.computer) {
+  initApps({ $, esc, toast, desktop, confirmDialog });
   desktop.computer.supported().then((r) => { pc.supported = !!r.supported; pc.platform = r.platform; renderPcSettings(); }).catch(() => {});
   desktop.computer.onState((s) => renderPcStatus(s));
   desktop.computer.onEmergency((reason) => { state.abort?.abort(); toast(String(reason).toUpperCase()); });

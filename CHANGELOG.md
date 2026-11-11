@@ -4,6 +4,14 @@ JeanCode 1.0 reúne en una sola versión todo lo que se publicó por partes entr
 
 ## Próxima versión (en `main`, ya en la web)
 
+**Conexiones con otras apps (MCP)**
+- **Ajustes → Apps**: 41 conexiones comprobadas en vivo. Google (Gmail, Drive, Calendar, Docs, Sheets, Slides, Chat, Tasks, Keep, Meet) con su servidor oficial; GitHub; Notion, Linear, Jira/Confluence, Asana, Sentry, Figma, Canva, Supabase, Neon, Netlify, Zapier, Stripe, PayPal y más; y servidores locales (carpetas, memoria, navegador Playwright, Chrome DevTools, Git).
+- Mismo estándar que Claude Code (MCP, SDK oficial): servidores remotos con OAuth (se autoriza en el navegador, con PKCE) o token, y servidores locales. También se puede añadir cualquier otro servidor MCP.
+- El agente recibe las herramientas como `mcp__app__herramienta`; cada uso pide permiso (con «permitir siempre» por herramienta) y en PLAN solo se usan las de solo lectura. Tokens cifrados con el llavero del sistema.
+- Guía: `docs/apps.md`.
+
+**Relay propio sin Codespace:** un Cloudflare Worker gratis (`relay/`) hace de relay CORS para la web y el móvil cuando no usas Jean-API-Generator.
+
 **Apps de iOS y Android, y APIs que bloquean el navegador**
 - **Apps de iOS y Android:** la misma web empaquetada con Capacitor (`mobile/`). Cada release incluye un APK de Android (firmado con clave de depuración) y un IPA de iOS sin firmar, para instalar con AltStore o Sideloadly.
 - **CORS resuelto sin terceros:** en la web, los proveedores que rechazan llamadas desde páginas (NVIDIA NIM, SambaNova, DeepSeek, Mistral…) pasan por el relay `/relay/` de tu propio Jean-API-Generator, con streaming. En el móvil, si no hay relay, se usa la red nativa del teléfono. Un fallo por CORS de un proveedor desconocido se detecta, se reintenta y se recuerda.

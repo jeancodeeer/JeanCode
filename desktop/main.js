@@ -3,6 +3,7 @@ const { app, BrowserWindow, ipcMain, dialog, shell, safeStorage, globalShortcut,
 const path = require('node:path');
 const fs = require('node:fs/promises');
 const tools = require('./lib/tools');
+const { McpManager } = require('./lib/mcp');
 const diagnostics = require('./lib/diagnostics');
 const skillsLib = require('./lib/skills');
 const { ComputerControl } = require('./lib/computer/control');
@@ -152,6 +153,44 @@ ipcMain.handle('shell:run', (_e, root, cmd, timeout) => tools.run(root, cmd, tim
 ipcMain.handle('fs:undo', (_e, root) => tools.undo(root));
 ipcMain.handle('fs:peek', (_e, root, rel) => tools.peek(root, rel));
 ipcMain.handle('fs:glob', (_e, root, pat, limit) => tools.glob(root, pat, limit));
+/* ---------------- conexiones con otras apps (MCP) ---------------- */
+// mcp.json guarda las conexiones; tokens OAuth, cabeceras y variables van CIFRADOS con el llavero
+// del sistema. Sin llavero, los secretos no se escriben en disco (hay que volver a autorizar).
+const MCP_FILE = () => path.join(app.getPath('userData'), 'mcp.json');
+const SECRET_KEYS = ['headers', 'env', 'oauth', 'clientSecret'];
+const mcp = new McpManager({
+  open: (url) => {
+    if (!/^https:\/\//.test(url)) throw new Error('URL de autorización no segura');
+    return shell.openExternal(url);
+  },
+  store: {
+    async load() {
+      try {
+        const j = JSON.parse(await fs.readFile(MCP_FILE(), 'utf8'));
+        if (j.enc && safeStorage.isEncryptionAvailable()) return JSON.parse(decrypt(j.enc));
+        return j.servers || [];
+      } catch { return []; }
+    },
+    async save(servers) {
+      const enc = safeStorage.isEncryptionAvailable();
+      const body = enc ? { enc: encrypt(JSON.stringify(servers)) }
+        : { servers: servers.map((s) => Object.fromEntries(Object.entries(s).filter(([k]) => !SECRET_KEYS.includes(k)))) };
+      await fs.mkdir(path.dirname(MCP_FILE()), { recursive: true });
+      const tmp = `${MCP_FILE()}.${process.pid}.tmp`;
+      await fs.writeFile(tmp, JSON.stringify(body), { encoding: 'utf8', mode: 0o600 });
+      await fs.rename(tmp, MCP_FILE());
+    },
+  },
+});
+ipcMain.handle('mcp:list', () => mcp.list());
+ipcMain.handle('mcp:save', (_e, def) => mcp.save(def));
+ipcMain.handle('mcp:remove', (_e, id) => mcp.remove(id));
+ipcMain.handle('mcp:connect', (_e, id) => mcp.connect(id, { interactive: true }));
+ipcMain.handle('mcp:disconnect', async (_e, id) => { await mcp.disconnect(id); return mcp.list(); });
+ipcMain.handle('mcp:connectAll', () => mcp.connectAll());
+ipcMain.handle('mcp:tools', () => mcp.tools());
+ipcMain.handle('mcp:call', (_e, id, tool, args) => mcp.call(id, tool, args));
+
 ipcMain.handle('fs:diagnose', (_e, root, rel, opts) => diagnostics.diagnose(root, rel, { deep: !!opts?.deep, auto: !!opts?.auto }));
 ipcMain.handle('web:fetch', (_e, url) => tools.webfetch(url));
 ipcMain.handle('project:memory', (_e, root) => tools.projectMemory(root));
@@ -284,4 +323,5 @@ app.on('will-quit', () => {
   globalShortcut.unregisterAll();
   tools.stopAllProcesses();
   if (control) control.driver.stop();
+  mcp.closeAll().catch(() => {});
 });

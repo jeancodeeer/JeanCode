@@ -39,6 +39,10 @@ contextBridge.exposeInMainWorld('jeancodeDesktop', {
   shell: { run: call('shell:run'), cancel: call('shell:cancel') },
   proc: { start: call('proc:start'), output: call('proc:output'), list: call('proc:list'), stop: call('proc:stop') },
   // Control del equipo: cada acción la ejecuta el proceso principal en serie, con parada y registro
+  mcp: {
+    list: call('mcp:list'), save: call('mcp:save'), remove: call('mcp:remove'), connect: call('mcp:connect'),
+    disconnect: call('mcp:disconnect'), connectAll: call('mcp:connectAll'), tools: call('mcp:tools'), call: call('mcp:call'),
+  },
   computer: {
     supported: call('computer:supported'),
     begin: call('computer:begin'),

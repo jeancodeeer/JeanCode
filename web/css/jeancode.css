@@ -469,3 +469,12 @@ kbd { font: 600 11px/1 var(--mono); border: 1px solid var(--line-3); padding: 2p
 }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { transition: none !important; animation: none !important; } }
 .check.pc-gap { margin: var(--s3) 0 var(--s4); }
+
+/* Ajustes → Apps (conexiones MCP) */
+.btn.sm { min-height: 32px; padding: 0 var(--s3); font-size: 12px; }
+.apps-cat { margin: var(--s4) 0 var(--s2); font: 600 11px/1 var(--mono); letter-spacing: .08em; color: var(--ash); text-transform: uppercase; }
+.rows li .apps-desc { white-space: normal; font-family: inherit; font-size: 13px; }
+.apps-tools { flex-basis: 100%; max-height: 220px; overflow: auto; font-size: 12px; color: var(--ink); padding: var(--s2) 0; }
+.apps-tools div { padding: 2px 0; }
+.apps-ask { flex-basis: 100%; margin-top: var(--s2); }
+.apps-ask a { align-self: center; }

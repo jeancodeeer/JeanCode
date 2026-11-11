@@ -539,3 +539,27 @@ test('relay Cloudflare: clave obligatoria, solo hosts conocidos, preflight', asy
   assert.equal(pre.headers.get('Access-Control-Allow-Origin'), 'https://jeancodeeer.github.io');
   assert.equal((await W.fetch(new Request('https://r.example/relay/evil.com/x', { headers: { 'X-Jean-Key': 'k' } }), {})).status, 401, 'sin RELAY_KEY configurada no abre nada');
 });
+
+test('agente + apps (MCP): permiso por uso, solo lectura en PLAN, permitir siempre', async () => {
+  const calls = [];
+  const mcp = [
+    { name: 'mcp__github__get_issue', server: 's1', serverName: 'GitHub', tool: 'get_issue', description: 'lee', schema: { type: 'object' }, readOnly: true },
+    { name: 'mcp__github__create_issue', server: 's1', serverName: 'GitHub', tool: 'create_issue', description: 'crea', schema: { type: 'object' }, readOnly: false },
+  ];
+  const desktop = { mcp: { call: async (s, t, a) => { calls.push(t); return `ok ${t}`; } }, fs: {} };
+  let r = await runScripted([{ tool: 'mcp__github__create_issue', args: { title: 'x' } }], { ctx: { mcp, desktop } });
+  assert.deepEqual(r.log.confirms, ['ACTUAR EN GITHUB']);
+  assert.deepEqual(calls, ['create_issue']);
+  r = await runScripted([{ tool: 'mcp__github__create_issue', args: {} }], { answer: false, ctx: { mcp, desktop } });
+  assert.ok(r.msgs.some((m) => m.role === 'tool' && /RECHAZADO/.test(m.content)));
+  assert.equal(calls.length, 1, 'rechazada: no se ejecuta');
+  r = await runScripted([{ tool: 'mcp__github__create_issue', args: {} }, { tool: 'mcp__github__get_issue', args: {} }], { ctx: { mcp, desktop, agent: 'plan' } });
+  assert.ok(r.msgs.some((m) => m.role === 'tool' && /DENEGADO/.test(m.content)), 'PLAN no escribe en apps');
+  assert.deepEqual(calls, ['create_issue', 'get_issue'], 'PLAN sí puede leer');
+  r = await runScripted([{ tool: 'mcp__github__get_issue', args: {} }], { allowed: ['mcp:mcp__github__get_issue'], ctx: { mcp, desktop } });
+  assert.deepEqual(r.log.confirms, [], 'permitida siempre: no vuelve a preguntar');
+  r = await runScripted([{ tool: 'mcp__nada__x', args: {} }], { ctx: { mcp, desktop } });
+  assert.ok(r.msgs.some((m) => m.role === 'tool' && /no está disponible/.test(m.content)));
+  const names = AG.toolSchemasFor({ mcp }).map((t) => t.function.name);
+  assert.ok(names.includes('mcp__github__create_issue'));
+});
