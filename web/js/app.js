@@ -15,6 +15,7 @@ import { capsOf, describeCaps, billingOf, fmtCtx } from './capabilities.js';
 import { normalizePolicy, describeAction, riskOf, actionKey, needsTerminalApproval, INPUT_TOOLS } from './computer.js';
 import { SLOTS, controlUrlFrom, hfSearch, hfFiles, control, gb } from './hf.js';
 import { initApps } from './apps.js';
+import { loadThreads, saveThreadsSoon, saveThreadsNow, wipeThreads } from './history.js';
 import { createHooks } from './hooks.js';
 import { initAutomations, parseInterval } from './automations.js';
 import { SKILL_CATALOG, SKILL_CATEGORIES } from './skills-catalog.js';
@@ -27,7 +28,7 @@ const DEFAULT_SYS = 'Eres Jean, un asistente de programación. Responde en el id
 
 const state = {
   mode: 'chat',
-  threads: store.get('threads', []),
+  threads: [], // se cargan de IndexedDB al arrancar (history.js)
   current: null,
   models: [],   // todos los modelos de todas las conexiones (respaldo)
   visible: [],  // los que se muestran en el selector (sin duplicados de un mismo Codespace)
@@ -52,7 +53,7 @@ function toast(msg) {
   clearTimeout(toast._t);
   toast._t = setTimeout(() => t.classList.remove('show'), 2600);
 }
-const saveThreads = () => store.set('threads', state.threads.slice(0, 200));
+const saveThreads = () => saveThreadsSoon(state.threads.slice(0, 200), state.current);
 const thread = () => state.threads.find((t) => t.id === state.current) || null;
 
 function newThread(mode = state.mode) {
@@ -2034,7 +2035,7 @@ $('#export-btn').addEventListener('click', () => {
 $('#wipe-btn').addEventListener('click', () => {
   if (!window.confirm('Esto borra la URL, la clave y todo el historial de este equipo. ¿Seguir?')) return;
   store.wipe();
-  location.reload();
+  wipeThreads().finally(() => location.reload());
 });
 
 async function renderSkills() {
@@ -2134,6 +2135,9 @@ if ('serviceWorker' in navigator && location.protocol.startsWith('http') && !des
     if (saved?.secrets?.hfToken) store.set('hfToken', saved.secrets.hfToken, false);
     try { localStorage.removeItem('jeancode.hfToken'); } catch { /* versiones anteriores lo dejaban en claro */ }
   }
+  let warned = false;
+  state.threads = await loadThreads(() => { if (!warned) { warned = true; toast('NO SE PUDO GUARDAR EL HISTORIAL: REVISA EL ESPACIO DEL DISCO'); } });
+  window.addEventListener('pagehide', () => { saveThreadsNow(state.threads.slice(0, 200)); });
   if (getEndpoints().length) await enterApp();
   else showSplash();
 })();

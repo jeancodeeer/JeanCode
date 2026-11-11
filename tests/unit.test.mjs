@@ -643,3 +643,21 @@ test('control: buscar controles por nombre (sin tildes, por etiqueta vecina) y s
   assert.equal((await c.elementByName('correo electronico', 'Edit')).id, 4, 'campo sin nombre junto a su etiqueta');
   await assert.rejects(c.elementByName('Imprimir'), /no hay ningún control llamado «Imprimir».*Guardar/);
 });
+
+test('historial: al guardar se quitan capturas, el prompt del sistema y se recortan resultados antiguos', async () => {
+  const { compactThread } = await import('../web/js/history.js');
+  const agentMessages = [{ role: 'system', content: 'S'.repeat(9000) },
+    ...Array.from({ length: 30 }, (_, i) => ({ role: 'tool', tool_call_id: `c${i}`, content: `${i}:` + 'r'.repeat(20000) })),
+    { role: 'user', content: [{ type: 'text', text: 'Captura actual' }, { type: 'image_url', image_url: { url: 'data:image/jpeg;base64,' + 'A'.repeat(100000) } }] }];
+  const t = { id: 't', messages: [{ role: 'user', content: 'hola' }], agentMessages };
+  const c = compactThread(t);
+  assert.equal(c.agentMessages[0].content, '', 'el prompt del sistema se regenera: no se guarda');
+  assert.ok(!JSON.stringify(c).includes('data:image'), 'sin capturas');
+  assert.match(c.agentMessages.at(-1).content, /Captura actual[\s\S]*captura omitida/);
+  assert.ok(c.agentMessages[1].content.length < 4200 && /recortado al guardar/.test(c.agentMessages[1].content), 'resultados antiguos recortados');
+  assert.equal(c.agentMessages[29].content.length, 20003, 'los últimos se guardan completos');
+  assert.equal(c.agentMessages[1].tool_call_id, 'c0', 'se conserva la relación con su llamada');
+  assert.deepEqual(c.messages, t.messages, 'lo que ve el usuario no se toca');
+  assert.equal(t.agentMessages[0].content.length, 9000, 'no modifica la conversación en memoria');
+  assert.ok(JSON.stringify(c).length < JSON.stringify(t).length / 2);
+});

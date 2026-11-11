@@ -126,6 +126,6 @@ export function initApps({ $, esc, toast, desktop, confirmDialog }) {
   });
 
   // al abrir la app, las conexiones que no necesitan navegador se activan solas
-  desktop.mcp.connectAll().then(refresh).catch(refresh);
+  setTimeout(() => desktop.mcp.connectAll().then(refresh).catch(refresh), 3000);
   return { refresh };
 }

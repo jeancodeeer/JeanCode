@@ -4,6 +4,10 @@ JeanCode 1.0 reúne en una sola versión todo lo que se publicó por partes entr
 
 ## Próxima versión (en `main`, ya en la web)
 
+**Optimización (medida)**
+- **Historial en IndexedDB** en lugar de localStorage. Antes cada mensaje reescribía todas las conversaciones (con 60 conversaciones del agente, 11 MB por guardado) y, al pasar el límite de ~5 MB del navegador, el historial dejaba de guardarse sin avisar. Ahora cada conversación se guarda aparte, solo si cambió, agrupando los guardados seguidos: 3,7 ms por guardado y 50 guardados durante una respuesta = 1 escritura. Las capturas de pantalla viejas y el prompt del sistema no se guardan y los resultados antiguos de herramientas se recortan. La migración desde localStorage es automática y, si algo falla al guardar, se avisa.
+- **Arranque del escritorio**: el SDK de MCP se cargaba al abrir la app (0,5 s en caliente, 3,8 s en frío) aunque no usaras ninguna app conectada; ahora se carga la primera vez que se usa (14 ms). Las apps conectadas se activan 3 s después de abrir, sin competir con el arranque.
+
 **Control de la PC más fiable para modelos pequeños**
 - `click_element` y `set_text` por **nombre** (sin tildes ni mayúsculas); los campos sin nombre se encuentran por su etiqueta vecina; si no existe, el error sugiere los controles que sí hay.
 - **OCR de Windows**: `read_text` lee el texto de cualquier app (aunque no exponga controles) y `click_text` hace clic sobre un texto visible; sin necesidad de un modelo con visión. Amplía la imagen hasta ×3 para leer palabras sueltas de botones.

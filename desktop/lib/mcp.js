@@ -6,10 +6,20 @@
 // Lo que devuelve un servidor son DATOS para el modelo, no órdenes (lo dice el prompt del agente).
 const http = require('node:http');
 const crypto = require('node:crypto');
-const { Client } = require('@modelcontextprotocol/sdk/client/index.js');
-const { StdioClientTransport, getDefaultEnvironment } = require('@modelcontextprotocol/sdk/client/stdio.js');
-const { StreamableHTTPClientTransport } = require('@modelcontextprotocol/sdk/client/streamableHttp.js');
-const { UnauthorizedError } = require('@modelcontextprotocol/sdk/client/auth.js');
+// El SDK tarda ~0,5 s en caliente y varios segundos en frío: se carga la primera vez que se usa una app,
+// no al abrir JeanCode.
+let SDK = null;
+function sdk() {
+  if (!SDK) {
+    SDK = {
+      ...require('@modelcontextprotocol/sdk/client/index.js'),
+      ...require('@modelcontextprotocol/sdk/client/stdio.js'),
+      ...require('@modelcontextprotocol/sdk/client/streamableHttp.js'),
+      ...require('@modelcontextprotocol/sdk/client/auth.js'),
+    };
+  }
+  return SDK;
+}
 
 const CLIENT_INFO = { name: 'JeanCode', version: '1' };
 const OAUTH_PORT = 33418;                   // fijo: el registro OAuth guarda esta redirección exacta
@@ -209,6 +219,7 @@ class McpManager {
   }
 
   async open_(s, interactive) {
+    const { Client, StdioClientTransport, getDefaultEnvironment, StreamableHTTPClientTransport, UnauthorizedError } = sdk();
     const client = new Client(CLIENT_INFO, { capabilities: {} });
     if (s.type === 'stdio') {
       const spec = spawnSpec(s.command, s.args || []);
