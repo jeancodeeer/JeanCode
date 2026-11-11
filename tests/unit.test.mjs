@@ -625,3 +625,21 @@ test('agente + hooks: pre_tool bloquea la herramienta, stop obliga a seguir', as
   assert.ok(msgs.some((m) => m.role === 'tool' && /BLOQUEADO por un hook: comandos prohibidos/.test(m.content)));
   assert.ok(msgs.some((m) => m.role === 'user' && /UN HOOK PIDE CONTINUAR.*pruebas/.test(m.content)), 'stop hizo seguir una vez');
 });
+
+test('control: buscar controles por nombre (sin tildes, por etiqueta vecina) y sugerencias', async () => {
+  const { ComputerControl } = require('../desktop/lib/computer/control.js');
+  const c = new ComputerControl({ logFile: join(mkdtempSync(join(tmpdir(), 'jc-pcu-')), 'l.jsonl') });
+  const R = (x, y, w = 80, h = 24) => ({ x, y, w, h });
+  c.lastRaw = { at: Date.now(), elements: [
+    { id: 1, type: 'Button', name: 'Guardar como…', automationId: '', value: '', enabled: true, rect: R(10, 10) },
+    { id: 2, type: 'Button', name: 'Guardar', automationId: 'save', value: '', enabled: true, rect: R(100, 10) },
+    { id: 3, type: 'Text', name: 'Correo electrónico:', automationId: '', value: '', enabled: true, rect: R(10, 60, 120) },
+    { id: 4, type: 'Edit', name: '', automationId: '', value: '', enabled: true, rect: R(140, 58, 200) },
+    { id: 5, type: 'Edit', name: '', automationId: '', value: '', enabled: true, rect: R(140, 300, 200) },
+    { id: 6, type: 'Button', name: 'Cancelar', automationId: '', value: '', enabled: false, rect: R(200, 10) },
+  ] };
+  assert.equal((await c.elementByName('guardar')).id, 2, 'exacto gana a "empieza por"');
+  assert.equal((await c.elementByName('SAVE')).id, 2, 'también por automationId');
+  assert.equal((await c.elementByName('correo electronico', 'Edit')).id, 4, 'campo sin nombre junto a su etiqueta');
+  await assert.rejects(c.elementByName('Imprimir'), /no hay ningún control llamado «Imprimir».*Guardar/);
+});

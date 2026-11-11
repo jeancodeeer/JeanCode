@@ -18,7 +18,11 @@ $lbl.Location = New-Object System.Drawing.Point(200, 80); $lbl.Size = New-Object
 $pw = New-Object System.Windows.Forms.TextBox
 $pw.Name = 'Clave'; $pw.AccessibleName = 'Clave'; $pw.UseSystemPasswordChar = $true
 $pw.Location = New-Object System.Drawing.Point(20, 130); $pw.Size = New-Object System.Drawing.Size(200, 30)
+$lab = New-Object System.Windows.Forms.Label
+$lab.Text = 'Nombre:'; $lab.Location = New-Object System.Drawing.Point(240, 134); $lab.Size = New-Object System.Drawing.Size(70, 24)
+$nom = New-Object System.Windows.Forms.TextBox
+$nom.Location = New-Object System.Drawing.Point(312, 130); $nom.Size = New-Object System.Drawing.Size(168, 30)
 $script:n = 0
 $btn.Add_Click({ $script:n++; $lbl.Text = "Clics: $script:n" })
-$f.Controls.AddRange(@($tb, $btn, $lbl, $pw))
+$f.Controls.AddRange(@($tb, $btn, $lbl, $pw, $lab, $nom))
 [void]$f.ShowDialog()

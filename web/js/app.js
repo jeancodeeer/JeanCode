@@ -1706,7 +1706,7 @@ $('#relay-form').addEventListener('submit', async (e) => {
 
 /* ------------------------------------------------------- control del equipo */
 const PC_TOOLS = new Set(['screenshot', 'inspect_screen', 'list_windows', 'focus_window', 'mouse_move', 'mouse_click', 'click_element',
-  'mouse_drag', 'scroll', 'type_text', 'set_text', 'key_press', 'open_application', 'wait']);
+  'mouse_drag', 'scroll', 'type_text', 'set_text', 'key_press', 'open_application', 'wait', 'read_text', 'click_text', 'wait_for']);
 const pc = { supported: false, active: false, allowedInTask: new Set() };
 const pcEnabled = () => !!desktop && pc.supported && store.get('pcEnabled', false) === true;
 const pcPolicy = () => normalizePolicy(store.get('pcPolicy', null));
@@ -1804,7 +1804,15 @@ async function actComputer(tool, args, vision) {
     case 'list_windows': return r.map((w) => `«${w.title}» (${w.process})`).join('\n') || 'sin ventanas';
     case 'focus_window': return `En primer plano: ${fg(r.focused)}`;
     case 'open_application': return `Abierto ${r.opened}. Ventana activa: ${fg(r.foreground)}`;
-    default: return `ok${r?.clicked ? ` · clic en «${r.clicked}» (${r.method})` : ''}${r?.typed != null ? ` · ${r.typed} caracteres` : ''}${r?.after ? ` · ventana activa: ${fg(r.after)}` : ''}`;
+    case 'read_text': return `Texto visible (${r.scope === 'screen' ? 'pantalla' : `ventana ${fg(r.window)}`}, OCR ${r.language}):\n` + (r.lines.map((l) => `"${l.text}" @${l.x},${l.y}`).join('\n') || '(no se lee texto)');
+    case 'wait_for': return r.found ? `Apareció (${r.in}): ${r.element || `"${r.line}"`} · ventana «${r.window}»` : `ERROR: ${r.note} (ventana «${r.window}»)`;
+    default: {
+      // "changes": qué apareció o desapareció en la ventana tras la acción (para verificar sin adivinar)
+      const c = r?.changes;
+      const changes = !c ? '' : c.window ? `\nCAMBIO: ${c.window}` : c.none ? `\nCAMBIOS: ninguno — ${c.none}`
+        : `\nCAMBIOS:${c.appeared?.length ? `\n  aparece: ${c.appeared.join(' | ')}` : ''}${c.gone?.length ? `\n  ya no está: ${c.gone.join(' | ')}` : ''}`;
+      return `ok${r?.clicked ? ` · clic en «${r.clicked}»${r.method ? ` (${r.method})` : ''}` : ''}${r?.field ? ` · campo «${r.field}»` : ''}${r?.typed != null ? ` · ${r.typed} caracteres` : ''}${r?.after ? ` · ventana activa: ${fg(r.after)}` : ''}${changes}`;
+    }
   }
 }
 
@@ -1812,6 +1820,7 @@ const PC_LABEL = {
   screenshot: 'MIRANDO LA PANTALLA', inspect_screen: 'LEYENDO LA VENTANA', list_windows: 'LISTANDO VENTANAS', focus_window: 'CAMBIANDO DE VENTANA',
   mouse_move: 'MOVIENDO EL RATÓN', mouse_click: 'HACIENDO CLIC', click_element: 'HACIENDO CLIC', mouse_drag: 'ARRASTRANDO', scroll: 'DESPLAZANDO',
   type_text: 'ESCRIBIENDO', set_text: 'ESCRIBIENDO', key_press: 'PULSANDO TECLAS', open_application: 'ABRIENDO', wait: 'ESPERANDO',
+  read_text: 'LEYENDO EL TEXTO', click_text: 'HACIENDO CLIC', wait_for: 'ESPERANDO',
 };
 function renderPcStatus(s) {
   const box = $('#pc-status');

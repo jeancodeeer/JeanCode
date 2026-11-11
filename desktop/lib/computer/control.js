@@ -21,6 +21,12 @@ const SETTLE_MS = 350;      // espera tras una acción antes de observar el resu
 
 class Stopped extends Error { constructor(msg = 'tarea detenida por el usuario') { super(msg); this.stopped = true; } }
 
+/** Texto comparable: sin tildes, minúsculas, espacios simples (los modelos escriben "Guardar" o "guardar"). */
+const norm = (s) => String(s || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/\s+/g, ' ').trim();
+/** Para comparar con texto leído por OCR, que confunde 0/O y 1/l/I. */
+const fuzzy = (s) => norm(s).replace(/o/g, '0').replace(/[il|]/g, '1');
+const elLine = (e) => `${e.type} «${e.name}»${e.value ? ` = «${e.value}»` : ''}`;
+
 class ComputerControl extends EventEmitter {
   constructor({ logFile, ownPid = process.pid }) {
     super();
@@ -112,6 +118,9 @@ class ComputerControl extends EventEmitter {
     } else if (tool === 'click_element' && this.lastElements?.get(Math.trunc(Number(a.id)))) {
       const c = this.lastElements.get(Math.trunc(Number(a.id)));
       w = await this.driver.call('owner_at', { x: Math.round(c.x), y: Math.round(c.y) });
+    } else if (tool === 'click_text' && a.text) {
+      const hit = await this.findText(String(a.text), a.nth).catch(() => null);
+      w = await this.driver.call(hit ? 'owner_at' : 'foreground', hit ? { x: hit.x, y: hit.y } : {});
     } else {
       w = await this.driver.call('foreground');
     }
@@ -128,9 +137,10 @@ class ComputerControl extends EventEmitter {
 
   /** Resumen seguro de los argumentos para el registro: nunca el texto tecleado. */
   static summarize(name, a = {}) {
-    if (name === 'type_text' || name === 'set_text') return { chars: String(a.text ?? '').length, id: a.id };
+    if (name === 'type_text' || name === 'set_text') return { chars: String(a.text ?? '').length, id: a.id, name: a.name ? redact(String(a.name)).slice(0, 60) : undefined };
+    if (name === 'click_text' || name === 'wait_for') return { text: redact(String(a.text ?? '')).slice(0, 60) };
     if (name === 'open_application') return { target: redact(a.target) };
-    return Object.fromEntries(Object.entries(a).filter(([k]) => ['x', 'y', 'toX', 'toY', 'id', 'button', 'double', 'keys', 'clicks', 'title', 'ms'].includes(k)));
+    return Object.fromEntries(Object.entries(a).filter(([k]) => ['x', 'y', 'toX', 'toY', 'id', 'name', 'button', 'double', 'keys', 'clicks', 'title', 'ms', 'scope'].includes(k)));
   }
 
   /** Ejecuta una acción del catálogo en serie. Devuelve un resultado ya redactado y en coordenadas del modelo. */
@@ -187,6 +197,104 @@ class ComputerControl extends EventEmitter {
 
   async foreground() { const f = await this.driver.call('foreground'); return { process: f.process, title: redact(f.title), terminal: isTerminal(f) }; }
 
+  /** Inspección cruda + caché (centros físicos, lista para buscar por nombre y para comparar después). */
+  async inspectRaw(max = 150) {
+    const fg = await this.driver.call('foreground');
+    if (fg.pid === this.ownPid) throw new Error('la ventana activa es JeanCode: enfoca primero la aplicación (focus_window)');
+    const r = await this.driver.call('inspect', { max });
+    this.lastElements = new Map(r.elements.map((e) => [e.id, { x: e.rect.x + e.rect.w / 2, y: e.rect.y + e.rect.h / 2 }]));
+    this.lastRaw = { at: Date.now(), elements: r.elements };
+    this.snap = { key: `${fg.pid}|${fg.title}`, lines: new Set(r.elements.map((e) => elLine({ type: e.type, name: redact(e.name), value: e.password ? '' : redact(e.value) }))) };
+    return { fg, r };
+  }
+
+  /** Busca un control por su nombre (o el texto de su valor). Lanza con sugerencias si no lo encuentra. */
+  async elementByName(name, type) {
+    if (!this.lastRaw || Date.now() - this.lastRaw.at > 3000) await this.inspectRaw();
+    const want = norm(name);
+    const list = this.lastRaw.elements.filter((e) => !type || norm(e.type) === norm(type));
+    const score = (e) => {
+      const n = norm(e.name), id = norm(e.automationId);
+      if (n === want || id === want) return 3;
+      if (n.startsWith(want)) return 2;
+      if (n.includes(want) || (!e.password && norm(e.value).includes(want))) return 1;
+      return 0;
+    };
+    const ranked = list.map((e) => [score(e) + (e.enabled ? 0.5 : 0), e]).filter(([s]) => s >= 1).sort((x, y) => y[0] - x[0]);
+    // campos sin nombre propio: muchas apps ponen una etiqueta al lado ("Nombre:" [_____]); se toma el campo más cercano
+    const label = ranked.find(([, e]) => e.type === 'Text')
+      || this.lastRaw.elements.filter((e) => e.type === 'Text').map((e) => [score(e), e]).filter(([sc]) => sc >= 1).sort((x, y) => y[0] - x[0])[0];
+    const wantsField = !type || /^(edit|combobox|document)$/i.test(type);
+    if (wantsField && label && !ranked.some(([, e]) => /^(Edit|ComboBox|Document)$/.test(e.type))) {
+      const L = label[1].rect;
+      const field = this.lastRaw.elements
+        .filter((e) => /^(Edit|ComboBox|Document)$/.test(e.type) && e.rect)
+        .map((e) => {
+          const sameRow = Math.abs((e.rect.y + e.rect.h / 2) - (L.y + L.h / 2)) <= Math.max(L.h, e.rect.h) && e.rect.x >= L.x + L.w * 0.5;
+          const below = e.rect.y >= L.y + L.h * 0.5 && e.rect.y - (L.y + L.h) <= 80 && Math.abs(e.rect.x - L.x) <= 120;
+          const dist = Math.hypot(e.rect.x - (L.x + L.w), (e.rect.y + e.rect.h / 2) - (L.y + L.h / 2));
+          return { e, ok: sameRow || below, dist };
+        })
+        .filter((x) => x.ok).sort((x, y) => x.dist - y.dist)[0];
+      if (field) return field.e;
+    }
+    if (!ranked.length) {
+      const names = list.filter((e) => e.name).slice(0, 12).map((e) => `${e.type} «${redact(e.name)}»`).join(', ');
+      throw new Error(`no hay ningún control llamado «${name}» en la ventana activa. Algunos que sí hay: ${names || '(ninguno con nombre)'}`);
+    }
+    return ranked[0][1];
+  }
+
+  /** OCR de la ventana activa (o la pantalla) con caché corta. Devuelve líneas con rect físico. */
+  async ocr(scope = 'window', fresh = false) {
+    if (!fresh && this.lastText && this.lastText.scope === scope && Date.now() - this.lastText.at < 4000) return this.lastText;
+    const fg = await this.driver.call('foreground');
+    if (fg.pid === this.ownPid && scope === 'window') throw new Error('la ventana activa es JeanCode: enfoca primero la aplicación');
+    const r = await this.driver.call('ocr', scope === 'screen' ? { screen: true } : {}, 30000);
+    this.lastText = { at: Date.now(), scope, lines: r.lines, language: r.language, fg };
+    return this.lastText;
+  }
+
+  /** Punto físico donde está un texto visible (OCR). nth = cuál de las coincidencias (1 = la primera). */
+  async findText(text, nth = 1) {
+    const want = fuzzy(text);
+    if (!want) throw new Error('indica el texto a buscar');
+    const { lines } = await this.ocr('window');
+    const hits = [];
+    for (const l of lines) {
+      const t = fuzzy(l.text);
+      const i = t.indexOf(want);
+      if (i < 0) continue;
+      // posición aproximada del fragmento dentro de la línea (proporcional a los caracteres)
+      const frac = t.length ? (i + want.length / 2) / t.length : 0.5;
+      hits.push({ exact: t === want, x: Math.round(l.rect.x + l.rect.w * frac), y: Math.round(l.rect.y + l.rect.h / 2), line: l.text });
+    }
+    hits.sort((p, q) => Number(q.exact) - Number(p.exact) || p.y - q.y || p.x - q.x);
+    const k = Math.max(1, Math.trunc(Number(nth) || 1));
+    if (!hits[k - 1]) {
+      const sample = lines.slice(0, 15).map((l) => `«${redact(l.text).slice(0, 40)}»`).join(', ');
+      throw new Error(hits.length ? `solo hay ${hits.length} coincidencia(s) de «${text}»` : `no se ve el texto «${text}» en la ventana activa. Texto visible: ${sample || '(nada legible)'}`);
+    }
+    return hits[k - 1];
+  }
+
+  /** Qué cambió en la ventana tras una acción (si antes se inspeccionó): ayuda a verificar sin adivinar. */
+  async changes() {
+    if (!this.snap) return undefined;
+    try {
+      await new Promise((r) => setTimeout(r, SETTLE_MS));
+      const prev = this.snap;
+      const fg = await this.driver.call('foreground');
+      if (fg.pid === this.ownPid) return undefined;
+      if (`${fg.pid}|${fg.title}` !== prev.key) { this.snap = null; return { window: `la ventana activa ahora es «${redact(fg.title)}» (${fg.process}): vuelve a inspeccionar` }; }
+      await this.inspectRaw();
+      const added = [...this.snap.lines].filter((l) => !prev.lines.has(l));
+      const removed = [...prev.lines].filter((l) => !this.snap.lines.has(l));
+      if (!added.length && !removed.length) return { none: 'la ventana no cambió (¿la acción no tuvo efecto?)' };
+      return { appeared: added.slice(0, 8), gone: removed.slice(0, 8) };
+    } catch { return undefined; }
+  }
+
   async execute(name, a) {
     const d = this.driver;
     const num = (v, label) => { const n = Number(v); if (!Number.isFinite(n)) throw new Error(`${label} debe ser un número`); return n; };
@@ -197,10 +305,7 @@ class ComputerControl extends EventEmitter {
         return { jpeg: r.jpeg, width: r.width, height: r.height, foreground: { title: redact(r.foreground.title), process: r.foreground.process } };
       }
       case 'inspect_screen': {
-        const fg = await d.call('foreground');
-        if (fg.pid === this.ownPid) throw new Error('la ventana activa es JeanCode: enfoca primero la aplicación que quieres inspeccionar');
-        const r = await d.call('inspect', { max: Math.min(Number(a.max) || 150, 300) });
-        this.lastElements = new Map(r.elements.map((e) => [e.id, { x: e.rect.x + e.rect.w / 2, y: e.rect.y + e.rect.h / 2 }]));
+        const { fg, r } = await this.inspectRaw(Math.min(Number(a.max) || 150, 300));
         const elements = r.elements.map((e) => {
           const c = this.toModel(e.rect.x + e.rect.w / 2, e.rect.y + e.rect.h / 2);
           return { id: e.id, type: e.type, name: redact(e.name), value: e.password ? '(contraseña)' : redact(e.value), enabled: e.enabled, focused: e.focused, password: e.password, x: c.x, y: c.y, depth: e.depth };
@@ -212,7 +317,7 @@ class ComputerControl extends EventEmitter {
       case 'mouse_click': {
         const p = await this.guardPoint(num(a.x, 'x'), num(a.y, 'y'), 'hacer clic');
         await d.call('click', { ...p, button: ['left', 'right', 'middle'].includes(a.button) ? a.button : 'left', double: !!a.double });
-        return { after: await this.observeAfter() };
+        return { after: await this.observeAfter(), changes: await this.changes() };
       }
       case 'mouse_drag': {
         const p = await this.guardPoint(num(a.x, 'x'), num(a.y, 'y'), 'arrastrar');
@@ -229,25 +334,28 @@ class ComputerControl extends EventEmitter {
       case 'click_element': {
         const fg = await d.call('foreground');
         if (fg.pid === this.ownPid) throw new Error('la ventana activa es JeanCode');
+        if (a.id == null && a.name) a = { ...a, id: (await this.elementByName(String(a.name), a.type)).id };
         const c = this.lastElements?.get(Math.trunc(num(a.id, 'id')));
         if (!c) throw new Error(`el elemento ${a.id} no está en la última inspección: vuelve a usar inspect_screen`);
         const w = await d.call('owner_at', { x: Math.round(c.x), y: Math.round(c.y) });
         if (w.pid === this.ownPid) throw new Error('ese elemento queda debajo de la ventana de JeanCode');
         if (isTerminal(w)) this.takeTerminalApproval(`clic en una terminal (${w.process})`);
         const r = await d.call('click_element', { id: Math.trunc(num(a.id, 'id')), button: a.button, double: !!a.double });
-        return { clicked: redact(r.name), method: r.method, before: redact(fg.title), after: await this.observeAfter() };
+        this.lastText = null;
+        return { clicked: redact(r.name), method: r.method, before: redact(fg.title), after: await this.observeAfter(), changes: await this.changes() };
       }
       case 'set_text': {
         await this.guardKeyboard();
-        const r = await d.call('set_text', { id: Math.trunc(num(a.id, 'id')), text: String(a.text ?? '') });
-        return { field: redact(r.name), method: r.method, after: await this.observeAfter() };
+        const sid = a.id != null ? Math.trunc(num(a.id, 'id')) : a.name ? (await this.elementByName(String(a.name), a.type || 'Edit').catch(() => this.elementByName(String(a.name)))).id : num(a.id, 'id');
+        const r = await d.call('set_text', { id: sid, text: String(a.text ?? '') });
+        return { field: redact(r.name), method: r.method, after: await this.observeAfter(), changes: await this.changes() };
       }
       case 'type_text': {
         await this.guardKeyboard();
         const text = String(a.text ?? '');
         if (text.length > 5000) throw new Error('texto demasiado largo para teclear (máx. 5000): usa write_file para archivos');
         await d.call('type', { text }, 20000 + text.length * 30);
-        return { typed: text.length, after: await this.observeAfter() };
+        return { typed: text.length, after: await this.observeAfter(), changes: await this.changes() };
       }
       case 'key_press':
       case 'hotkey': {
@@ -256,7 +364,7 @@ class ComputerControl extends EventEmitter {
         if (!keys.length || keys.length > 4) throw new Error('indica de 1 a 4 teclas, p. ej. ["ctrl","s"]');
         const repeat = Math.max(1, Math.min(20, Math.trunc(Number(a.repeat) || 1)));
         for (let i = 0; i < repeat; i++) await d.call('keys', { keys });
-        return { keys, repeat, after: await this.observeAfter() };
+        return { keys, repeat, after: await this.observeAfter(), changes: await this.changes() };
       }
       case 'focus_window': return { focused: await d.call('focus', { title: String(a.title || '') }).then((f) => ({ title: redact(f.title), process: f.process })) };
       case 'open_application': {
@@ -264,6 +372,40 @@ class ComputerControl extends EventEmitter {
         if (!target) throw new Error('indica la aplicación o archivo a abrir');
         const r = await d.call('open', { target, args: Array.isArray(a.args) ? a.args.map(String) : undefined }, 30000);
         return { opened: redact(target), foreground: { title: redact(r.foreground.title), process: r.foreground.process } };
+      }
+      case 'read_text': {
+        // OCR: texto visible de cualquier app, aunque no exponga controles (lienzos, PDF, juegos, web)
+        const scope = a.scope === 'screen' ? 'screen' : 'window';
+        const r = await this.ocr(scope, true);
+        const lines = r.lines.map((l) => { const c = this.toModel(l.rect.x + l.rect.w / 2, l.rect.y + l.rect.h / 2); return { text: redact(l.text), x: c.x, y: c.y }; });
+        return { scope, language: r.language, window: { title: redact(r.fg.title), process: r.fg.process }, lines };
+      }
+      case 'click_text': {
+        const hit = await this.findText(String(a.text ?? ''), a.nth);
+        const m = this.toModel(hit.x, hit.y);
+        const p = await this.guardPoint(m.x, m.y, 'hacer clic');
+        await d.call('click', { ...p, button: ['left', 'right'].includes(a.button) ? a.button : 'left', double: !!a.double });
+        this.lastText = null;
+        return { clicked: redact(hit.line).slice(0, 80), at: m, after: await this.observeAfter(), changes: await this.changes() };
+      }
+      case 'wait_for': {
+        // espera hasta que aparezca un texto (en los controles o, si no, en pantalla con OCR)
+        const want = norm(a.text);
+        if (!want) throw new Error('indica el texto que esperas');
+        const until = Date.now() + Math.max(500, Math.min(30000, Math.trunc(Number(a.timeout_ms) || 10000)));
+        for (;;) {
+          const fg = await d.call('foreground');
+          if (fg.pid !== this.ownPid) {
+            const r = await d.call('inspect', { max: 200 }).catch(() => null);
+            const el = r?.elements.find((e) => norm(e.name).includes(want) || (!e.password && norm(e.value).includes(want)));
+            if (el) return { found: true, in: 'controles', element: elLine({ type: el.type, name: redact(el.name), value: el.password ? '' : redact(el.value) }), window: redact(fg.title) };
+            const o = await this.ocr('window', true).catch(() => null);
+            const line = o?.lines.find((l) => fuzzy(l.text).includes(fuzzy(a.text)));
+            if (line) return { found: true, in: 'pantalla', line: redact(line.text), window: redact(fg.title) };
+          }
+          if (Date.now() > until) return { found: false, window: redact(fg.title), note: `«${a.text}» no apareció a tiempo` };
+          await new Promise((r) => setTimeout(r, 700));
+        }
       }
       case 'wait': {
         const ms = Math.max(100, Math.min(15000, Math.trunc(num(a.ms ?? 1000, 'ms'))));

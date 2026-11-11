@@ -1,4 +1,4 @@
-# JeanCode - driver de control del equipo para Windows.
+﻿# JeanCode - driver de control del equipo para Windows.
 # Proceso persistente: lee una orden JSON por linea en stdin y responde una linea JSON en stdout.
 #   {"id":1,"cmd":"screenshot","args":{"maxWidth":1366}}  ->  {"id":1,"ok":true,"result":{...}}
 # Entrada real del sistema operativo: SendInput / SetCursorPos (user32) y UI Automation.
@@ -19,6 +19,7 @@ using System.Runtime.InteropServices;
 using System.Text;
 public static class JcNative {
   [StructLayout(LayoutKind.Sequential)] public struct POINT { public int X; public int Y; }
+  [StructLayout(LayoutKind.Sequential)] public struct RECT { public int Left; public int Top; public int Right; public int Bottom; }
   [StructLayout(LayoutKind.Sequential)] public struct MOUSEINPUT { public int dx; public int dy; public uint mouseData; public uint dwFlags; public uint time; public IntPtr dwExtraInfo; }
   [StructLayout(LayoutKind.Sequential)] public struct KEYBDINPUT { public ushort wVk; public ushort wScan; public uint dwFlags; public uint time; public IntPtr dwExtraInfo; }
   [StructLayout(LayoutKind.Explicit)] public struct InputUnion { [FieldOffset(0)] public MOUSEINPUT mi; [FieldOffset(0)] public KEYBDINPUT ki; }
@@ -29,6 +30,7 @@ public static class JcNative {
   [DllImport("user32.dll")] public static extern bool GetCursorPos(out POINT p);
   [DllImport("user32.dll", SetLastError = true)] public static extern uint SendInput(uint n, INPUT[] inputs, int size);
   [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
+  [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr hWnd, out RECT rect);
   [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern int GetWindowText(IntPtr h, StringBuilder s, int n);
   [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern int GetClassName(IntPtr h, StringBuilder s, int n);
   public static string ClassOf(IntPtr h) { StringBuilder s = new StringBuilder(256); GetClassName(h, s, 256); return s.ToString(); }
@@ -361,6 +363,71 @@ function Do-Open($a) {
   return @{ started = $target; foreground = (Foreground) }
 }
 
+# ---------------------------------------------------------------- OCR (Windows.Media.Ocr)
+# Lee el texto de CUALQUIER app, aunque no exponga sus controles (lienzos, juegos, PDFs, web).
+# Sirve a modelos sin visión: devuelve líneas con su posición. Se carga la primera vez que se usa.
+$global:Ocr = $null
+function Ocr-Init {
+  if ($global:Ocr) { return }
+  Add-Type -AssemblyName System.Runtime.WindowsRuntime
+  $null = [Windows.Media.Ocr.OcrEngine, Windows.Foundation, ContentType = WindowsRuntime]
+  $null = [Windows.Graphics.Imaging.BitmapDecoder, Windows.Graphics, ContentType = WindowsRuntime]
+  $null = [Windows.Graphics.Imaging.SoftwareBitmap, Windows.Graphics, ContentType = WindowsRuntime]
+  $asTask = ([System.WindowsRuntimeSystemExtensions].GetMethods() | Where-Object { $_.Name -eq 'AsTask' -and $_.GetParameters().Count -eq 1 -and $_.GetParameters()[0].ParameterType.Name -eq 'IAsyncOperation`1' })[0]
+  $engine = [Windows.Media.Ocr.OcrEngine]::TryCreateFromUserProfileLanguages()
+  if (-not $engine) { throw 'el OCR de Windows no está disponible (instala un idioma con reconocimiento de texto en Configuración → Idioma)' }
+  $global:Ocr = @{ asTask = $asTask; engine = $engine }
+}
+function Ocr-Await($op, [Type]$t) { $task = $global:Ocr.asTask.MakeGenericMethod($t).Invoke($null, @($op)); [void]$task.Wait(-1); return $task.Result }
+
+function Do-Ocr($a) {
+  Ocr-Init
+  $s = Screen-Info
+  # región: la ventana activa por defecto (menos ruido), o toda la pantalla / una región
+  $rx = $s.x; $ry = $s.y; $rw = $s.width; $rh = $s.height
+  if ($a.region) { $rx = [int]$a.region.x; $ry = [int]$a.region.y; $rw = [int]$a.region.w; $rh = [int]$a.region.h }
+  elseif (-not $a.screen) {
+    $wr = New-Object JcNative+RECT
+    if ([JcNative]::GetWindowRect([JcNative]::GetForegroundWindow(), [ref]$wr)) {
+      $rx = [Math]::Max($s.x, $wr.Left); $ry = [Math]::Max($s.y, $wr.Top)
+      $rw = [Math]::Min($s.x + $s.width, $wr.Right) - $rx; $rh = [Math]::Min($s.y + $s.height, $wr.Bottom) - $ry
+    }
+  }
+  if ($rw -lt 8 -or $rh -lt 8) { throw 'región vacía' }
+  # el OCR de Windows pierde palabras sueltas pequeñas (texto de botones): se amplía hasta x3,
+  # sin pasar de ~9 Mpx (rapidez) ni del tamaño máximo que acepta el motor
+  $maxDim = [int]$global:Ocr.engine.MaxImageDimension; if ($maxDim -le 0) { $maxDim = 10000 }
+  $k = [Math]::Min(3.0, [Math]::Sqrt(9000000.0 / ($rw * $rh)))
+  $k = [Math]::Min($k, $maxDim / [double][Math]::Max($rw, $rh))
+  $k = [Math]::Max(1.0, [Math]::Floor($k * 4) / 4)
+  $bmp = New-Object System.Drawing.Bitmap($rw, $rh, [System.Drawing.Imaging.PixelFormat]::Format24bppRgb)
+  $g = [System.Drawing.Graphics]::FromImage($bmp); $g.CopyFromScreen($rx, $ry, 0, 0, $bmp.Size); $g.Dispose()
+  if ($k -gt 1) {
+    $big = New-Object System.Drawing.Bitmap([int]($rw * $k), [int]($rh * $k), [System.Drawing.Imaging.PixelFormat]::Format24bppRgb)
+    $g2 = [System.Drawing.Graphics]::FromImage($big); $g2.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic
+    $g2.DrawImage($bmp, 0, 0, [int]($rw * $k), [int]($rh * $k)); $g2.Dispose(); $bmp.Dispose(); $bmp = $big
+  }
+  $ms = New-Object System.IO.MemoryStream
+  $bmp.Save($ms, [System.Drawing.Imaging.ImageFormat]::Png); $bmp.Dispose(); $ms.Position = 0
+  $ras = [System.IO.WindowsRuntimeStreamExtensions]::AsRandomAccessStream($ms)
+  $dec = Ocr-Await ([Windows.Graphics.Imaging.BitmapDecoder]::CreateAsync($ras)) ([Windows.Graphics.Imaging.BitmapDecoder])
+  $sb = Ocr-Await ($dec.GetSoftwareBitmapAsync()) ([Windows.Graphics.Imaging.SoftwareBitmap])
+  $res = Ocr-Await ($global:Ocr.engine.RecognizeAsync($sb)) ([Windows.Media.Ocr.OcrResult])
+  $ms.Dispose()
+  $lines = New-Object System.Collections.ArrayList
+  foreach ($ln in $res.Lines) {
+    $x1 = 1e9; $y1 = 1e9; $x2 = -1; $y2 = -1
+    foreach ($w in $ln.Words) {
+      $r = $w.BoundingRect
+      $x1 = [Math]::Min($x1, $r.X); $y1 = [Math]::Min($y1, $r.Y); $x2 = [Math]::Max($x2, $r.X + $r.Width); $y2 = [Math]::Max($y2, $r.Y + $r.Height)
+    }
+    if ($x2 -lt 0) { continue }
+    [void]$lines.Add(@{ text = [string]$ln.Text; rect = @{ x = [int]($rx + $x1 / $k); y = [int]($ry + $y1 / $k); w = [int](($x2 - $x1) / $k); h = [int](($y2 - $y1) / $k) } })
+    if ($lines.Count -ge 300) { break }
+  }
+  return @{ lines = $lines; language = [string]$global:Ocr.engine.RecognizerLanguage.LanguageTag; region = @{ x = $rx; y = $ry; w = $rw; h = $rh }; foreground = (Foreground) }
+}
+
 # ---------------------------------------------------------------- bucle
 $handlers = @{
   'ping' = { param($a) @{ pong = $true; screen = (Screen-Info) } }
@@ -385,6 +452,7 @@ $handlers = @{
   'windows' = { param($a) Do-Windows }
   'focus' = { param($a) Do-Focus $a }
   'open' = { param($a) Do-Open $a }
+  'ocr' = { param($a) Do-Ocr $a }
 }
 
 [Console]::Out.WriteLine((@{ id = 0; ok = $true; result = @{ ready = $true; screen = (Screen-Info) } } | ConvertTo-Json -Compress -Depth 4))

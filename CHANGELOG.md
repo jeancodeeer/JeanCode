@@ -4,6 +4,12 @@ JeanCode 1.0 reúne en una sola versión todo lo que se publicó por partes entr
 
 ## Próxima versión (en `main`, ya en la web)
 
+**Control de la PC más fiable para modelos pequeños**
+- `click_element` y `set_text` por **nombre** (sin tildes ni mayúsculas); los campos sin nombre se encuentran por su etiqueta vecina; si no existe, el error sugiere los controles que sí hay.
+- **OCR de Windows**: `read_text` lee el texto de cualquier app (aunque no exponga controles) y `click_text` hace clic sobre un texto visible; sin necesidad de un modelo con visión. Amplía la imagen hasta ×3 para leer palabras sueltas de botones.
+- `wait_for` espera a que aparezca un texto en vez de esperar a ciegas.
+- Cada acción informa qué **cambió** en la ventana (qué apareció y qué desapareció), para verificar sin adivinar.
+
 **100 skills y automatizaciones como en Claude Code**
 - **Catálogo de 100 skills** (Skills → Catálogo): Word, PDF, Excel y PowerPoint; TDD, depuración y planes; revisión de código; React, Next.js, Python, Go y Rust; APIs y bases de datos; DevOps; seguridad (Trail of Bits); IA y Hugging Face; análisis de datos. Elegidas de repositorios con licencia abierta y descargadas de GitHub al instalarlas, con sus scripts. Las 100 se comprobaron instalándolas.
 - **Hooks** como los de Claude Code: `session_start`, `user_prompt`, `pre_tool`, `post_tool`, `post_edit`, `stop` y `post_turn`, con filtro por herramienta, JSON por la entrada estándar, bloqueo con código de salida 2 o decisión en JSON. Hooks globales en Ajustes.

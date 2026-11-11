@@ -60,6 +60,37 @@ test('control del equipo (Windows real)', opts, async (t) => {
     assert.equal(await counter(), `Clics: ${Number(before.split(' ')[1]) + 2}`);
   });
 
+  await t.test('por nombre: click_element y set_text sin ids, y "changes" informa el efecto', async () => {
+    await c.act('inspect_screen', {}); // activa la comparación de cambios
+    const before = Number((await counter()).split(' ')[1]);
+    const r = await c.act('click_element', { name: 'sumar' }); // sin mayúscula: se normaliza
+    assert.equal(r.clicked, 'Sumar');
+    assert.ok(r.changes?.appeared?.some((l) => l.includes(`Clics: ${before + 1}`)), `changes: ${JSON.stringify(r.changes)}`);
+    assert.ok(r.changes?.gone?.some((l) => l.includes(`Clics: ${before}`)));
+    // campo sin nombre propio, con una etiqueta al lado ("Nombre:" [____]): se encuentra por la etiqueta
+    const s = await c.act('set_text', { name: 'Nombre', text: 'por etiqueta' });
+    assert.ok(s.changes?.appeared?.some((l) => l.includes('por etiqueta')), JSON.stringify(s.changes));
+    const edits = (await find('Edit')).r.elements.filter((e) => e.type === 'Edit' && !e.password);
+    assert.ok(edits.some((e) => e.value === 'por etiqueta'), 'el campo junto a la etiqueta tiene el texto');
+    await assert.rejects(c.act('click_element', { name: 'Botón que no existe' }), /no hay ningún control llamado .*Algunos que sí hay/);
+  });
+
+  await t.test('OCR: read_text lee la ventana, click_text pulsa por texto, wait_for espera', async () => {
+    await c.act('focus_window', { title: 'JeanCode prueba de control' });
+    const r = await c.act('read_text', {});
+    const all = r.lines.map((l) => l.text).join(' | ');
+    assert.match(all, /Sumar/, `OCR leyó: ${all}`);
+    assert.match(all, /Clics/);
+    const before = Number((await counter()).split(' ')[1]);
+    await c.act('click_text', { text: 'Sumar' });
+    assert.equal(await counter(), `Clics: ${before + 1}`, 'click_text pulsó el botón leído por OCR');
+    const w = await c.act('wait_for', { text: `Clics: ${before + 1}`, timeout_ms: 3000 });
+    assert.equal(w.found, true);
+    const miss = await c.act('wait_for', { text: 'texto que nunca aparece', timeout_ms: 800 });
+    assert.equal(miss.found, false);
+    await assert.rejects(c.act('click_text', { text: 'texto que nunca aparece' }), /no se ve el texto/);
+  });
+
   await t.test('teclado: escribir, teclas y atajos', async () => {
     const { el } = await find('Edit');
     await c.act('set_text', { id: el.id, text: '' });

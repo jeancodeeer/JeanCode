@@ -33,11 +33,16 @@ Modelo (Jean, OpenRouter, Ollama…)
 | `inspect_screen` | bajo | Lista los controles de la ventana activa: id, tipo, nombre, valor y posición. Funciona con modelos **sin visión**, como Jean. |
 | `list_windows`, `focus_window` | bajo | Ventanas abiertas; traer una al frente. |
 | `mouse_move`, `mouse_click`, `mouse_drag`, `scroll` | bajo | Ratón real. Las coordenadas son las de la captura y JeanCode las pasa a píxeles reales. |
-| `click_element`, `set_text` | bajo | Clic o texto en un control por su id: más fiable que las coordenadas. |
+| `click_element`, `set_text` | bajo | Clic o texto en un control **por su nombre** (`{"name": "Guardar"}`, sin importar tildes ni mayúsculas) o por su id. Los campos sin nombre se encuentran por la etiqueta que tienen al lado («Correo:» [____]). Si no existe, el error sugiere los controles que sí hay. |
+| `read_text` | bajo | Lee el texto visible de la ventana activa (o de la pantalla) con el **OCR de Windows**: sirve en apps que no exponen sus controles (lienzos, PDFs, juegos, webs) y con modelos sin visión. |
+| `click_text` | bajo | Clic sobre un texto visible leído por OCR (`nth` si aparece varias veces). |
+| `wait_for` | bajo | Espera (máx. 30 s) a que aparezca un texto, en los controles o en pantalla. |
 | `type_text` | bajo | Teclado real (Unicode). Se niega en campos de contraseña. |
 | `key_press` | medio / **alto** | Teclas y atajos. Los que llevan Win o F4 son de riesgo alto. |
 | `open_application` | medio / **alto** | Abre un programa, archivo o carpeta. Un shell o intérprete (cmd, PowerShell, Python, mshta…), o abrir algo con argumentos, es riesgo alto. |
 | `wait` | bajo | Espera a que la interfaz cambie. |
+
+**Verificación automática.** Si el agente inspeccionó la ventana antes, cada clic, tecla o texto devuelve `changes`: los controles que aparecieron y los que ya no están (p. ej. `aparece: Text «Clics: 2» | ya no está: Text «Clics: 1»`), o «la ventana no cambió». Así un modelo pequeño ve el efecto de su acción y no repite a ciegas.
 
 El agente también tiene, sin depender del control de pantalla:
 - `run_command` (la terminal de siempre).

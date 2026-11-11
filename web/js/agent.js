@@ -261,7 +261,7 @@ ${r}` : '';
     if (isMcpTool(tool)) return execMcp(tool, args, ask);
     if (COMPUTER_TOOL_NAMES.includes(tool)) {
       if (!ctx.computer || sub) return 'DENEGADO: el control del equipo no está activado para esta tarea (Ajustes → Control del equipo).';
-      if (readOnly && !['screenshot', 'inspect_screen', 'list_windows', 'wait'].includes(tool)) return 'DENEGADO: modo PLAN / solo lectura: solo puedes observar la pantalla.';
+      if (readOnly && !['screenshot', 'inspect_screen', 'list_windows', 'wait', 'read_text', 'wait_for'].includes(tool)) return 'DENEGADO: modo PLAN / solo lectura: solo puedes observar la pantalla.';
       if (!(await ctx.computer.permit(tool, args, riskOf(tool, args), describeAction(tool, args)))) return 'RECHAZADO por el usuario.';
       return ctx.computer.act(tool, args);
     }
@@ -462,7 +462,7 @@ ${r}` : '';
     }
     // Bucle: la MISMA llamada con el MISMO resultado una y otra vez (un error repetido, o una lectura
     // idéntica). Repetir un clic con éxito puede ser la tarea (pulsar 3 veces): eso no cuenta.
-    const OBSERVE = new Set([...READ_TOOLS, 'inspect_screen', 'list_windows', 'screenshot']);
+    const OBSERVE = new Set([...READ_TOOLS, 'inspect_screen', 'list_windows', 'screenshot', 'read_text']);
     for (let i = 0; i < calls.length; i++) {
       const res = typeof results[i] === 'object' && results[i] ? String(results[i].text ?? '') : String(results[i]);
       const failed = /^(ERROR|DENEGADO)/.test(res);

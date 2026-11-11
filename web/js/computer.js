@@ -17,11 +17,14 @@ const CATALOG = [
   ['focus_window', 'low', 'Trae al frente una ventana por parte de su título o proceso.', S({ title: str('texto del título o nombre del proceso') }, ['title']), (a) => `traer al frente «${a.title}»`],
   ['mouse_move', 'low', 'Mueve el ratón.', S(XY, ['x', 'y']), (a) => `mover el ratón a (${a.x}, ${a.y})`],
   ['mouse_click', 'low', 'Clic en coordenadas de la última captura.', S({ ...XY, button: { type: 'string', enum: ['left', 'right', 'middle'] }, double: { type: 'boolean' } }, ['x', 'y']), (a) => `${a.double ? 'doble ' : ''}clic${a.button && a.button !== 'left' ? ` ${a.button === 'right' ? 'derecho' : 'central'}` : ''} en (${a.x}, ${a.y})`],
-  ['click_element', 'low', 'Clic en un control por su id de inspect_screen (más fiable que coordenadas).', S({ id: int('id de inspect_screen'), button: { type: 'string', enum: ['left', 'right'] }, double: { type: 'boolean' } }, ['id']), (a) => `clic en el control ${a.id}`],
+  ['click_element', 'low', 'Clic en un control por su NOMBRE (p. ej. "Guardar") o por su id de inspect_screen. Lo más fiable.', S({ name: str('nombre visible del control'), id: int('id de inspect_screen (alternativa a name)'), type: str('opcional: Button, Edit, MenuItem…'), button: { type: 'string', enum: ['left', 'right'] }, double: { type: 'boolean' } }), (a) => `clic en ${a.name ? `«${a.name}»` : `el control ${a.id}`}`],
+  ['read_text', 'low', 'Lee el texto visible de la ventana activa (o scope "screen") con OCR, con posiciones. Para apps sin controles legibles.', S({ scope: { type: 'string', enum: ['window', 'screen'] } }), (a) => `leer el texto de ${a.scope === 'screen' ? 'la pantalla' : 'la ventana activa'}`],
+  ['click_text', 'low', 'Clic sobre un texto visible en pantalla (OCR), p. ej. un enlace o una opción. nth = cuál si hay varios.', S({ text: str('texto visible'), nth: int('1 = el primero'), button: { type: 'string', enum: ['left', 'right'] }, double: { type: 'boolean' } }, ['text']), (a) => `clic en el texto «${preview(a.text)}»`],
+  ['wait_for', 'low', 'Espera (máx. 30 s) a que aparezca un texto en la ventana activa: tras abrir algo o cargar.', S({ text: str('texto esperado'), timeout_ms: int('milisegundos (10000)') }, ['text']), (a) => `esperar a que aparezca «${preview(a.text)}»`],
   ['mouse_drag', 'low', 'Arrastra con el botón izquierdo de (x,y) a (toX,toY).', S({ ...XY, toX: int('x destino'), toY: int('y destino') }, ['x', 'y', 'toX', 'toY']), (a) => `arrastrar de (${a.x}, ${a.y}) a (${a.toX}, ${a.toY})`],
   ['scroll', 'low', 'Rueda del ratón: clicks positivos = arriba, negativos = abajo.', S({ clicks: int('-30..30'), x: int('opcional'), y: int('opcional'), horizontal: { type: 'boolean' } }, ['clicks']), (a) => `desplazar ${a.clicks}`],
   ['type_text', 'low', 'Escribe texto en el control con el foco (teclado real). Nunca contraseñas.', S({ text: str('texto') }, ['text']), (a) => `escribir ${String(a.text ?? '').length} caracteres: «${preview(a.text)}»`],
-  ['set_text', 'low', 'Pone el texto de un campo por su id de inspect_screen.', S({ id: int('id'), text: str('texto') }, ['id', 'text']), (a) => `escribir en el control ${a.id}: «${preview(a.text)}»`],
+  ['set_text', 'low', 'Pone el texto de un campo por su NOMBRE o su id de inspect_screen.', S({ name: str('nombre del campo'), id: int('id (alternativa a name)'), text: str('texto') }, ['text']), (a) => `escribir en ${a.name ? `«${a.name}»` : `el control ${a.id}`}: «${preview(a.text)}»`],
   ['key_press', 'medium', 'Pulsa una tecla o combinación, p. ej. ["enter"], ["ctrl","s"], ["alt","f4"].', S({ keys: { type: 'array', items: { type: 'string' } }, repeat: int('veces (1)') }, ['keys']), (a) => `pulsar ${keyLabel(a)}`],
   ['open_application', 'medium', 'Abre una aplicación, archivo o carpeta (p. ej. "notepad.exe", "wt", "explorer.exe", una ruta).', S({ target: str('programa, archivo o carpeta'), args: { type: 'array', items: { type: 'string' } } }, ['target']), (a) => `abrir «${a.target}»${a.args?.length ? ` ${a.args.join(' ')}` : ''}`],
   ['wait', 'low', 'Espera a que la interfaz cambie (ms, máx. 15000).', S({ ms: int('milisegundos') }), (a) => `esperar ${a.ms || 1000} ms`],
@@ -62,7 +65,7 @@ export function riskOf(tool, args = {}, env = {}) {
 }
 
 /** Acciones que entregan entrada a la ventana de destino. */
-export const INPUT_TOOLS = ['type_text', 'set_text', 'key_press', 'mouse_click', 'click_element', 'mouse_drag'];
+export const INPUT_TOOLS = ['type_text', 'set_text', 'key_press', 'mouse_click', 'click_element', 'click_text', 'mouse_drag'];
 
 /** Clave de una aprobación "en esta tarea": la acción EXACTA, nunca solo el nombre de la herramienta. */
 export const actionKey = (tool, args = {}) => `${tool}:${JSON.stringify(args, Object.keys(args).sort())}`;
@@ -116,7 +119,10 @@ export function computerDocs({ native, vision, screen }) {
 Pantalla: ${screen ? `${screen.modelWidth}×${screen.modelHeight}` : 'desconocida'} (coordenadas de la captura; la esquina superior izquierda es 0,0).
 ${vision ? 'Ves imágenes: screenshot te devuelve la pantalla.' : 'Tu modelo NO ve imágenes: no uses screenshot; observa con inspect_screen y list_windows.'}
 Método obligatorio, paso a paso: OBSERVA (inspect_screen${vision ? ' o screenshot' : ''}) → DECIDE → ACTÚA (una acción) → VERIFICA (el resultado trae la ventana activa; vuelve a observar si dudas).
-- Prefiere click_element/set_text con ids de inspect_screen antes que coordenadas. Tras abrir o cambiar de ventana, inspecciona de nuevo: los ids cambian.
+- Prefiere click_element y set_text por NOMBRE ({"name": "Guardar"}) antes que ids o coordenadas.
+- Si inspect_screen no muestra lo que buscas (lienzos, PDFs, juegos, páginas web raras), usa read_text y click_text: leen la pantalla con OCR.
+- Tras abrir algo o pulsar un botón que carga, usa wait_for con el texto que esperas en vez de esperar a ciegas.
+- El resultado de cada acción trae "changes": lo que apareció o desapareció en la ventana. Úsalo para verificar; si dice que no cambió nada, la acción no surtió efecto: no la repitas igual.
 - Para escribir: enfoca la ventana correcta, haz clic en el campo y luego type_text. Atajos con key_press (["ctrl","s"]).
 - Si algo no salió como esperabas, observa otra vez y corrige; no repitas a ciegas.
 - NUNCA escribas contraseñas, datos de pago ni códigos de verificación; si una ventana los pide, detente y pregúntale al usuario.
