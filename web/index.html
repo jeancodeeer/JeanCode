@@ -336,6 +336,14 @@
     </form>
     <p class="msg" id="ep-msg" role="status" aria-live="polite"></p>
     <p class="note" id="ep-provider-note"></p>
+    <h3 class="web-only">Relay para APIs que bloquean la web</h3>
+    <p class="note web-only">NVIDIA, DeepSeek, Mistral y otras rechazan llamadas desde páginas web. Si tienes un Jean-API-Generator conectado, se usa su relay solo. Si no, despliega tu propio relay gratis en Cloudflare (<a href="https://github.com/jeancodeeer/JeanCode/blob/main/relay/README.md" target="_blank" rel="noopener">guía de 3 pasos</a>) y ponlo aquí.</p>
+    <form id="relay-form" class="add-form web-only">
+      <input id="relay-url" type="text" inputmode="url" autocomplete="off" placeholder="https://jeancode-relay.tu-usuario.workers.dev" spellcheck="false">
+      <input id="relay-key" type="password" placeholder="RELAY_KEY" spellcheck="false" autocomplete="off">
+      <button class="btn" type="submit">Guardar relay</button>
+    </form>
+    <p class="msg web-only" id="relay-msg" role="status" aria-live="polite"></p>
   </section>
 
   <section data-pane="models" hidden>

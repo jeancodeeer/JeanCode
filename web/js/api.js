@@ -134,8 +134,11 @@ const nativeHttp = () => (isNativeApp() ? window.Capacitor?.Plugins?.CapacitorHt
 /** Router de un Jean-API-Generator configurado (URL del puerto 8899) que hace de relay. */
 export function relayBase() {
   const j = getEndpoints().find((e) => (e.provider || 'jean') === 'jean' && /-8899\.|:8899(\/|$)/.test(e.url));
-  if (!j) return null;
-  try { return { origin: new URL(j.url).origin, key: j.key }; } catch { return null; }
+  if (j) { try { return { origin: new URL(j.url).origin, key: j.key }; } catch { /* URL rara: se prueba el relay propio */ } }
+  // sin Codespace: un relay propio (p. ej. el Cloudflare Worker de relay/worker.js), configurado en Ajustes
+  const own = store.get('relay', null);
+  if (own?.url && own?.key) { try { return { origin: new URL(own.url).origin, key: own.key }; } catch { return null; } }
+  return null;
 }
 
 /** ¿Este endpoint puede verse bloqueado por CORS aquí? (solo web/app, solo proveedores remotos). */

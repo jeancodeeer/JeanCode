@@ -1,0 +1,8 @@
+name = "jeancode-relay"
+main = "worker.js"
+compatibility_date = "2025-09-01"
+
+# Secreto (no va aquí): npx wrangler secret put RELAY_KEY
+# Hosts propios opcionales, separados por comas:
+# [vars]
+# RELAY_HOSTS = "api.mi-servidor.com"

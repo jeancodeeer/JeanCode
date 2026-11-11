@@ -1574,6 +1574,7 @@ function renderSettings() {
   $('#style-select').value = store.get('style', 'normal');
   $('#rules').value = store.get('rules', '');
   $('#auto-diag').checked = store.get('autoDiag', true);
+  { const r = store.get('relay', null); $('#relay-url').value = r?.url || ''; $('#relay-key').value = r?.key || ''; }
   renderAllowList();
   renderFenix();
   renderPcSettings();
@@ -1602,6 +1603,24 @@ $('#allow-list').addEventListener('click', (e) => {
 $('#style-select').addEventListener('change', (e) => { store.set('style', e.target.value); toast('ESTILO: ' + e.target.selectedOptions[0].textContent.toUpperCase()); });
 $('#rules').addEventListener('change', (e) => store.set('rules', e.target.value));
 $('#auto-diag').addEventListener('change', (e) => store.set('autoDiag', e.target.checked));
+
+/* relay CORS propio (Cloudflare Worker de relay/worker.js): solo hace falta en la web y el móvil */
+if (desktop) $$('.web-only').forEach((el) => { el.hidden = true; });
+$('#relay-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const url = $('#relay-url').value.trim().replace(/\/+$/, '');
+  const key = $('#relay-key').value.trim();
+  const msg = $('#relay-msg');
+  if (!url && !key) { store.set('relay', null); msg.textContent = 'Relay propio quitado.'; return; }
+  if (!/^https:\/\//.test(url) || !key) { msg.textContent = 'Hace falta una URL https y la clave RELAY_KEY.'; return; }
+  try {
+    const r = await fetch(`${url}/health`);
+    if (!r.ok) throw new Error(String(r.status));
+    store.set('relay', { url, key });
+    msg.textContent = 'Relay guardado: las APIs que bloquean la web pasarán por él.';
+    await refreshModels();
+  } catch (err) { msg.textContent = `No responde ${url}/health (${err.message}). ¿Está desplegado?`; }
+});
 
 /* ------------------------------------------------------- control del equipo */
 const PC_TOOLS = new Set(['screenshot', 'inspect_screen', 'list_windows', 'focus_window', 'mouse_move', 'mouse_click', 'click_element',

@@ -523,3 +523,19 @@ test('CORS: proveedores que bloquean la web van por el relay del Generator; el r
   assert.equal(A.routeOf(jean, '/models').via, 'direct');
   A.saveEndpoints([]);
 });
+
+test('relay Cloudflare: clave obligatoria, solo hosts conocidos, preflight', async () => {
+  const W = (await import('../relay/worker.js')).default;
+  const env = { RELAY_KEY: 'clave-larga-123' };
+  const call = (path, init = {}) => W.fetch(new Request(`https://r.example${path}`, init), env);
+  assert.equal((await call('/relay/integrate.api.nvidia.com/v1/models')).status, 401);
+  assert.equal((await call('/relay/integrate.api.nvidia.com/v1/models', { headers: { 'X-Jean-Key': 'mala' } })).status, 401);
+  assert.equal((await call('/relay/evil.com/v1/models', { headers: { 'X-Jean-Key': 'clave-larga-123' } })).status, 403);
+  assert.equal((await call('/relay/169.254.169.254/latest', { headers: { 'X-Jean-Key': 'clave-larga-123' } })).status, 403);
+  assert.equal((await call('/otra', { headers: { 'X-Jean-Key': 'clave-larga-123' } })).status, 404);
+  const pre = await call('/relay/api.deepseek.com/v1/models', { method: 'OPTIONS', headers: { Origin: 'https://jeancodeeer.github.io' } });
+  assert.equal(pre.status, 204);
+  assert.match(pre.headers.get('Access-Control-Allow-Headers'), /x-jean-key/);
+  assert.equal(pre.headers.get('Access-Control-Allow-Origin'), 'https://jeancodeeer.github.io');
+  assert.equal((await W.fetch(new Request('https://r.example/relay/evil.com/x', { headers: { 'X-Jean-Key': 'k' } }), {})).status, 401, 'sin RELAY_KEY configurada no abre nada');
+});
