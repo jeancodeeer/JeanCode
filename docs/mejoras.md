@@ -5,7 +5,7 @@ Estado de cada mejora de la lista. **Hecho** = implementado y probado en la app;
 | # | Mejora | Estado | Dónde / cómo |
 |---|---|---|---|
 | 1 | Mostrar incertidumbre, fuente en afirmaciones fácticas | Hecho | Principios de respuesta en el prompt (`web/js/quality.js`) |
-| 2 | Verificar que las citas existan | Hecho | Cada enlace de una respuesta se comprueba: ✓ responde · ⚠ no responde |
+| 2 | Verificar que las citas existan | Hecho | Botón «Verificar enlaces» en cada respuesta: ✓ responde · ⚠ no responde (nunca hacia la red local, sin parámetros ni redirecciones) |
 | 3 | Avisos médicos/legales y derivación | Hecho | Principios de respuesta: una vez, sin sermón |
 | 4 | Cálculos con herramienta | Hecho / parcial | El prompt exige mostrar el cálculo; el agente lo ejecuta con `run_command` |
 | 5 | Fecha de corte | Hecho | Fecha de hoy en el prompt + aviso de datos que pueden estar desactualizados |

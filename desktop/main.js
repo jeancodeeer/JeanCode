@@ -92,7 +92,9 @@ ipcMain.handle('http', async (_e, req) => {
   // sin límite, un servidor colgado dejaba la interfaz esperando para siempre
   const timeout = Math.min(Math.max(Number(req.timeout) || 60000, 1000), 3600000);
   try {
-    const res = await fetch(req.url, { method, headers: req.headers, body: req.body, signal: AbortSignal.timeout(timeout) });
+    // noRedirect: comprobar un enlace sin seguir redirecciones (podrían llevar a la red local)
+    const res = await fetch(req.url, { method, headers: req.headers, body: req.body, signal: AbortSignal.timeout(timeout), redirect: req.noRedirect ? 'manual' : 'follow' });
+    if (req.noBody) { res.body?.cancel().catch(() => {}); return { status: res.status }; }
     return { status: res.status, body: await res.text() };
   } catch (e) {
     return { error: e.name === 'TimeoutError' ? 'sin respuesta a tiempo' : e.message };

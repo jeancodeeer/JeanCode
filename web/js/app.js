@@ -591,7 +591,8 @@ function addMessage(role, content, { reasoning = '', streaming = false, cls = ''
   row.className = `msg-row ${role} ${cls}`.trim();
   // cada respuesta dice qué modelo la escribió (y no cambia en silencio si el enrutador usa otro)
   const who = { user: 'TÚ', assistant: model ? `JEAN · ${model.toUpperCase()}` : 'JEAN', tool: 'HERRAMIENTA', error: 'ERROR', system: 'SISTEMA' }[role] || role.toUpperCase();
-  row.innerHTML = `<div class="who">${who}</div><div class="bubble"></div>`;
+  row.innerHTML = '<div class="who"></div><div class="bubble"></div>';
+  $('.who', row).textContent = who;
   el.appendChild(row);
   updateMessage(row, content, reasoning, streaming);
   if (role === 'user' && turn) addRewind(row, turn);
@@ -676,22 +677,34 @@ function decorateAssistant(row, t, index) {
         <button type="button" role="menuitem" data-msg="regen" data-how="Revisa tu respuesta anterior: corrige errores y señala lo que no sea seguro.">Revisar errores</button>
         ${(state.visible || []).filter((x) => modelKey(x) !== modelKey(currentModel())).slice(0, 5).map((x) => `<button type="button" role="menuitem" data-msg="regen" data-how="" data-model="${esc(modelKey(x))}">Con ${esc(modelLabel(x.id))}</button>`).join('')}
       </div></details>` : '')
+    + ($$('.bubble a[href^="http"]', row).length ? '<button type="button" data-msg="verify" title="Comprobar si los enlaces existen (solo dominio y ruta, nunca tu red local)">Verificar enlaces</button>' : '')
     + (n > 1 ? `<span class="alts"><button type="button" data-msg="alt" data-step="-1" aria-label="Versión anterior">‹</button><span class="mono">${(msg.alt ?? n - 1) + 1}/${n}</span><button type="button" data-msg="alt" data-step="1" aria-label="Versión siguiente">›</button></span>` : '');
   row.appendChild(bar);
-  verifyLinks(row);
 }
 
-/** Comprueba que los enlaces de una respuesta existan (los modelos los inventan): ✓ responde · ⚠ no responde. */
+/**
+ * Comprueba, cuando el usuario lo pide, que los enlaces de una respuesta existan (los modelos los inventan).
+ * Seguridad: los enlaces vienen del modelo (o de contenido que leyó), así que nunca se visitan solos, nunca
+ * hacia la red local o privada, y solo dominio + ruta (sin parámetros, que podrían llevar datos fuera).
+ */
 async function verifyLinks(row) {
   const links = [...$$('.bubble a[href^="http"]', row)].filter((a) => !a.nextElementSibling?.classList.contains('link-check')).slice(0, 10);
   await Promise.all(links.map(async (a) => {
     let ok = null;
+    const target = safeCheckUrl(a.href);
+    if (!target) {
+      const mark = document.createElement('span');
+      mark.className = 'link-check';
+      mark.textContent = '· no comprobado (red local)';
+      a.after(mark);
+      return;
+    }
     try {
       if (desktop?.http) {
-        const r = await desktop.http({ url: a.href, method: 'GET', headers: { 'User-Agent': 'JeanCode link check' }, timeout: 7000 });
+        const r = await desktop.http({ url: target, method: 'GET', headers: { 'User-Agent': 'JeanCode link check' }, timeout: 7000, noRedirect: true, noBody: true });
         ok = !r.error && (r.status < 400 || [401, 403, 405, 429].includes(r.status));
       } else {
-        await fetch(a.href, { method: 'GET', mode: 'no-cors', signal: AbortSignal.timeout(7000) });
+        await fetch(target, { method: 'GET', mode: 'no-cors', credentials: 'omit', redirect: 'manual', signal: AbortSignal.timeout(7000) });
         ok = true; // sin CORS solo se sabe que el servidor responde
       }
     } catch { ok = false; }
@@ -701,6 +714,19 @@ async function verifyLinks(row) {
     mark.title = ok ? 'El enlace responde' : 'Este enlace no responde: puede estar inventado o caído';
     a.after(mark);
   }));
+}
+
+/** URL comprobable: http(s) a un host público; solo origen + ruta. null si apunta a la red local o privada. */
+function safeCheckUrl(href) {
+  let u;
+  try { u = new URL(href); } catch { return null; }
+  if (!/^https?:$/.test(u.protocol) || u.username || u.password) return null;
+  const h = u.hostname.toLowerCase().replace(/^\[|\]$/g, '');
+  if (/^(localhost|.*\.localhost|.*\.local|.*\.internal|.*\.lan|.*\.home|.*\.corp)$/.test(h)) return null;
+  if (/^(0|10|127)\.|^169\.254\.|^192\.168\.|^172\.(1[6-9]|2\d|3[01])\.|^100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\./.test(h)) return null;
+  if (h.includes(':') || /^\d+$/.test(h) || /^0x/.test(h)) return null; // IPv6 y formas numéricas raras
+  if (!h.includes('.')) return null;
+  return `${u.protocol}//${u.host}${u.pathname}`;
 }
 
 async function regenerate(row, how, modelKeyWanted) {
@@ -741,6 +767,7 @@ document.addEventListener('click', async (e) => {
       const body = state.mode === 'agent' ? stripToolBlocks(msg.content) : msg.content;
       try { await navigator.clipboard.writeText(what === 'copy-md' ? body : markdownToText(body)); toast('COPIADO'); } catch { toast('NO SE PUDO COPIAR'); }
     }
+    if (what === 'verify') { act.disabled = true; act.textContent = 'Comprobando…'; await verifyLinks(row); act.remove(); return; }
     if (what === 'regen') { act.closest('details').open = false; regenerate(row, act.dataset.how, act.dataset.model); }
     if (what === 'alt' && msg.alts?.length) {
       const k = Math.min(msg.alts.length - 1, Math.max(0, (msg.alt ?? msg.alts.length - 1) + Number(act.dataset.step)));

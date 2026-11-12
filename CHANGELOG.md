@@ -6,7 +6,7 @@ JeanCode 1.0 reúne en una sola versión todo lo que se publicó por partes entr
 
 **Respuestas más honestas y una conversación más cómoda** (detalle por punto en `docs/mejoras.md`)
 - Principios de respuesta en cada envío: decir "no lo sé", no inventar citas ni enlaces, avisar de datos que pueden estar desactualizados (con la fecha de hoy), mostrar los cálculos, pedir una aclaración corta si la petición es ambigua, sin adulación ni sermones. **Franqueza** y **longitud** ajustables.
-- Los **enlaces** de cada respuesta se comprueban: ✓ responde · ⚠ no responde (suelen ser inventados).
+- **Verificar enlaces** en cada respuesta: ✓ responde · ⚠ no responde (suelen ser inventados). Solo al pulsarlo, nunca hacia la red local y sin enviar los parámetros de la URL.
 - Cada respuesta dice **qué modelo** la escribió. **Regenerar con…**: otra vez, más corta, más detallada, más sencilla, revisar errores o con otro modelo, y navegar entre versiones ‹ 1/3 ›.
 - **Copiar** como Markdown o texto; **tablas** desplazables con copiar como CSV o Markdown; código largo con AMPLIAR.
 - **Aviso de datos sensibles** antes de enviar a un modelo remoto (claves, tokens, contraseñas, tarjetas, IBAN).

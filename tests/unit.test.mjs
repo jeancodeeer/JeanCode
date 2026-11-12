@@ -688,3 +688,14 @@ test('calidad: datos sensibles, tablas, texto, enlaces, búsqueda y proxy con bu
   assert.equal(j.messages.length, 1);
   assert.ok(!JSON.stringify(j).includes('secreto'), 'sin historial interno del agente');
 });
+
+test('enlaces: la comprobación nunca apunta a la red local y no lleva parámetros', async () => {
+  const src = (await import('node:fs')).readFileSync(new URL('../web/js/app.js', import.meta.url), 'utf8');
+  const fn = src.slice(src.indexOf('function safeCheckUrl'), src.indexOf('async function regenerate'));
+  const safeCheckUrl = new Function(`${fn}; return safeCheckUrl;`)();
+  assert.equal(safeCheckUrl('https://example.com/docs/x?token=secreto#a'), 'https://example.com/docs/x', 'sin parámetros ni ancla');
+  for (const bad of ['http://localhost:8080/x', 'http://127.0.0.1/x', 'http://192.168.1.1/admin', 'http://10.0.0.5/', 'http://169.254.169.254/latest/meta-data',
+    'http://172.20.0.1/', 'http://[::1]/', 'http://router.local/', 'http://2130706433/', 'http://0x7f000001/', 'https://user:pw@example.com/', 'ftp://example.com/', 'http://intranet/']) {
+    assert.equal(safeCheckUrl(bad), null, bad);
+  }
+});
