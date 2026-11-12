@@ -5,7 +5,7 @@ export const BUILTIN = [
   { name: 'clear', desc: 'Vacía la conversación actual', modes: ['chat', 'code', 'agent'] },
   { name: 'compact', desc: 'Resume la conversación para liberar contexto', modes: ['chat', 'code', 'agent'] },
   { name: 'model', desc: 'Cambia de modelo: /model jean-marvel', modes: ['chat', 'code', 'agent'], arg: true },
-  { name: 'export', desc: 'Descarga la conversación en Markdown', modes: ['chat', 'code', 'agent'] },
+  { name: 'export', desc: 'Exporta la conversación: /export md · json · pdf', modes: ['chat', 'code', 'agent'] },
   { name: 'help', desc: 'Comandos y atajos de teclado', modes: ['chat', 'code', 'agent'] },
   { name: 'context', desc: 'Qué se envía al modelo: prompt, herramientas, historial y tokens', modes: ['chat', 'code', 'agent'] },
   { name: 'loop', desc: 'Repite un mensaje: /loop 10m revisa los tests · /loop stop', modes: ['chat', 'code', 'agent'], arg: true },

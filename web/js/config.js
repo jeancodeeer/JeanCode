@@ -29,5 +29,6 @@ export const CONFIG = {
   apiRepoUrl: `https://github.com/${owner}/Jean-API-Generator`,
   releasesApi: `https://api.github.com/repos/${owner}/${repo}/releases/latest`,
   releasesUrl: `https://github.com/${owner}/${repo}/releases/latest`,
+  changelogUrl: `https://raw.githubusercontent.com/${owner}/${repo}/main/CHANGELOG.md`,
   isDesktop: typeof window !== 'undefined' && !!window.jeancodeDesktop,
 };

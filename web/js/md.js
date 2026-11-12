@@ -15,8 +15,9 @@ function table(lines) {
   const cells = (l) => l.trim().replace(/^\||\|$/g, '').split('|').map((c) => inline(c.trim()));
   const head = cells(lines[0]);
   const rows = lines.slice(2).map(cells);
-  return `<table><thead><tr>${head.map((h) => `<th>${h}</th>`).join('')}</tr></thead><tbody>${
-    rows.map((r) => `<tr>${r.map((c) => `<td>${c}</td>`).join('')}</tr>`).join('')}</tbody></table>`;
+  // envoltorio desplazable (las tablas anchas no rompen la pantalla) y copiar como CSV o Markdown
+  return `<div class="table-wrap"><div class="tb-head"><button type="button" data-copy-table="csv">CSV</button><button type="button" data-copy-table="md">MD</button></div><table><thead><tr>${head.map((h) => `<th>${h}</th>`).join('')}</tr></thead><tbody>${
+    rows.map((r) => `<tr>${r.map((c) => `<td>${c}</td>`).join('')}</tr>`).join('')}</tbody></table></div>`;
 }
 
 function blocks(text) {
@@ -32,7 +33,7 @@ function blocks(text) {
       i++;
       while (i < lines.length && !/^\s*```\s*$/.test(lines[i])) body.push(lines[i++]);
       i++;
-      out.push(`<div class="codeblock"><div class="cb-head"><span>${esc(lang.toUpperCase())}</span><button type="button" data-copy>COPIAR</button></div><pre><code>${esc(body.join('\n'))}</code></pre></div>`);
+      out.push(`<div class="codeblock"><div class="cb-head"><span>${esc(lang.toUpperCase())}</span><span class="cb-acts">${body.length > 24 ? '<button type="button" data-expand>AMPLIAR</button>' : ''}<button type="button" data-copy>COPIAR</button></span></div><pre><code>${esc(body.join('\n'))}</code></pre></div>`);
       continue;
     }
     if (/^#{1,3}\s/.test(line)) {

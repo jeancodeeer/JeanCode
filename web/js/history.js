@@ -39,6 +39,8 @@ const tx = (mode, fn) => new Promise((resolve, reject) => {
 
 /** Copia para guardar: sin capturas viejas, sin el prompt del sistema (se regenera) y con resultados antiguos recortados. */
 export function compactThread(t) {
+  // las propiedades internas de la interfaz (_shown…) no se guardan
+  if (Object.keys(t).some((k) => k.startsWith('_'))) t = Object.fromEntries(Object.entries(t).filter(([k]) => !k.startsWith('_')));
   if (!Array.isArray(t.agentMessages)) return t;
   const n = t.agentMessages.length;
   const agentMessages = t.agentMessages.map((m, i) => {

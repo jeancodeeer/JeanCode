@@ -661,3 +661,30 @@ test('historial: al guardar se quitan capturas, el prompt del sistema y se recor
   assert.equal(t.agentMessages[0].content.length, 9000, 'no modifica la conversación en memoria');
   assert.ok(JSON.stringify(c).length < JSON.stringify(t).length / 2);
 });
+
+test('calidad: datos sensibles, tablas, texto, enlaces, búsqueda y proxy con buffering', async () => {
+  const Q = await import('../web/js/quality.js');
+  const kinds = (t) => Q.detectSensitive(t).map((x) => x.kind);
+  assert.deepEqual(kinds('mi clave es sk-proj-abcdefghijklmnopqrstu y ya'), ['clave de API']);
+  assert.ok(kinds('ghp_' + 'a'.repeat(36)).includes('token de GitHub'));
+  assert.ok(kinds('tarjeta 4111 1111 1111 1111').includes('número de tarjeta'));
+  assert.deepEqual(kinds('pedido 1234 5678 9012 3456'), [], 'sin Luhn no es tarjeta');
+  assert.ok(kinds('postgres://admin:secreta123@db.local/x').includes('cadena de conexión con contraseña'));
+  assert.ok(kinds('IBAN ES91 2100 0418 4502 0005 1332').includes('IBAN'));
+  assert.deepEqual(kinds('¿cómo hago un bucle for en JS?'), []);
+  assert.ok(!Q.detectSensitive('sk-proj-abcdefghijklmnopqrstu')[0].sample.includes('abcdefghij'), 'la muestra va enmascarada');
+  assert.equal(Q.rowsToCsv([['a', 'b,c'], ['x "y"', '1']]), 'a,"b,c"\n"x ""y""",1');
+  assert.deepEqual(Q.rowsToMarkdown([['A', 'B'], ['1', '2|3']]).split('\n'), ['| A | B |', '| --- | --- |', String.raw`| 1 | 2\|3 |`]);
+  assert.equal(Q.markdownToText('## T\n**n** y `c` [doc](https://x.dev)'), 'T\nn y c doc (https://x.dev)');
+  assert.deepEqual(Q.extractLinks('ver [a](https://a.dev/x) y https://b.dev/y. también https://a.dev/x'), ['https://a.dev/x', 'https://b.dev/y']);
+  const th = [{ id: 1, title: 'Bug de React', updated: 1, messages: [{ content: 'useEffect se ejecuta dos veces' }] }, { id: 2, title: 'Recetas', updated: 2, messages: [{ content: 'efecto' }] }];
+  assert.deepEqual(Q.searchThreads(th, 'react useeffect').map((r) => r.thread.id), [1]);
+  assert.match(Q.searchThreads(th, 'dos veces')[0].snippet, /dos veces/);
+  assert.equal(Q.searchThreads(th, '').length, 2);
+  assert.equal(Q.looksBuffered({ firstByteMs: 9000, totalMs: 9500, reads: 1, chars: 3000 }), true);
+  assert.equal(Q.looksBuffered({ firstByteMs: 400, totalMs: 9500, reads: 120, chars: 3000 }), false);
+  assert.match(Q.qualityPrompt({ directness: 'direct', length: 'short' }), /no lo sé[\s\S]*FRANQUEZA: muy directa[\s\S]*LONGITUD: respuestas cortas/);
+  const j = JSON.parse(Q.threadToJson({ title: 'T', mode: 'chat', messages: [{ role: 'user', content: 'hola' }], agentMessages: [{ role: 'system', content: 'secreto' }] }, '1.2.0'));
+  assert.equal(j.messages.length, 1);
+  assert.ok(!JSON.stringify(j).includes('secreto'), 'sin historial interno del agente');
+});

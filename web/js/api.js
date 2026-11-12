@@ -4,6 +4,7 @@
 import { store } from './store.js';
 import { supportsThinkToggle, wantsStreamUsage, providerOf, adapterOf } from './providers.js';
 import { learnCap, reportCaps } from './capabilities.js';
+import { looksBuffered } from './quality.js';
 
 const bridge = () => (typeof window !== 'undefined' ? window.jeancodeDesktop : null);
 
@@ -310,7 +311,12 @@ async function chatOnce({ ep, model, messages, signal, onDelta, onReasoning, onT
   let full = '';
   let usage = null;
   const calls = []; // acumuladas por índice mientras llegan en streaming
+  // detección de un proxy que almacena el streaming: los trozos llegan todos juntos al final
+  const t0 = Date.now();
+  const arrivals = [];
   const handleChunk = (json) => {
+    const now = Date.now();
+    if (!arrivals.length || now - arrivals[arrivals.length - 1] > 50) arrivals.push(now);
     // consumo: estándar OpenAI (usage) o llama-server (timings), normalmente en el último trozo
     if (json.usage?.prompt_tokens != null || json.usage?.completion_tokens != null) {
       usage = { prompt: json.usage.prompt_tokens || 0, completion: json.usage.completion_tokens || 0 };
@@ -341,6 +347,9 @@ async function chatOnce({ ep, model, messages, signal, onDelta, onReasoning, onT
     if (!chunks) throw new ApiError(`${providerOf(ep).name} terminó sin enviar una respuesta con formato OpenAI (streaming).`, -1, '', 'format');
     if (calls.length) onToolCalls?.(calls.filter(Boolean));
     if (usage) onUsage?.(usage);
+    if (typeof window !== 'undefined' && arrivals.length && looksBuffered({ firstByteMs: arrivals[0] - t0, totalMs: Date.now() - t0, reads: arrivals.length, chars: full.length })) {
+      window.dispatchEvent(new CustomEvent('jc:buffered', { detail: { where: providerOf(ep).name } }));
+    }
     return full;
   };
 

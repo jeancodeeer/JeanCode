@@ -15,6 +15,7 @@ import { capsOf, describeCaps, billingOf, fmtCtx } from './capabilities.js';
 import { normalizePolicy, describeAction, riskOf, actionKey, needsTerminalApproval, INPUT_TOOLS } from './computer.js';
 import { SLOTS, controlUrlFrom, hfSearch, hfFiles, control, gb } from './hf.js';
 import { initApps } from './apps.js';
+import { qualityPrompt, detectSensitive, rowsToCsv, rowsToMarkdown, markdownToText, extractLinks, searchThreads, threadToJson } from './quality.js';
 import { loadThreads, saveThreadsSoon, saveThreadsNow, wipeThreads } from './history.js';
 import { createHooks } from './hooks.js';
 import { initAutomations, parseInterval } from './automations.js';
@@ -57,7 +58,7 @@ const saveThreads = () => saveThreadsSoon(state.threads.slice(0, 200), state.cur
 const thread = () => state.threads.find((t) => t.id === state.current) || null;
 
 function newThread(mode = state.mode) {
-  const t = { id: crypto.randomUUID(), mode, title: 'NUEVA CONVERSACIÓN', messages: [], files: {}, changed: {}, updated: Date.now() };
+  const t = { id: crypto.randomUUID(), mode, title: 'NUEVA CONVERSACIÓN', messages: [], files: {}, changed: {}, updated: Date.now(), ...(mode === 'agent' && state.workspace ? { workspace: state.workspace } : {}) };
   state.threads.unshift(t);
   state.current = t.id;
   saveThreads();
@@ -190,6 +191,7 @@ async function refreshModels() {
     if (getEndpoints().length > before) return refreshModels();
   }
   results.forEach((r) => { if (r.status === 'fulfilled') state.models.push(...r.value); });
+  noticeModelChanges(eps, results);
   // Catálogos grandes (OpenRouter: cientos de modelos): solo cuentan los que el usuario fijó.
   // Así AUTO y el respaldo nunca eligen al azar entre cientos de modelos (ni de pago).
   state.bigCatalog = new Set(eps.filter((ep) => state.models.filter((m) => m.ep.id === ep.id).length > BIG_CATALOG).map((ep) => ep.id));
@@ -233,6 +235,27 @@ async function refreshModels() {
   applyRoute();
   if (failed.length && !reachable) toast(failed[0].reason.message);
   renderFenix();
+}
+
+/** Avisa si un proveedor añadió o retiró modelos (los cambios de versión no deberían pasar en silencio). */
+function noticeModelChanges(eps, results) {
+  const known = store.get('knownModels', {});
+  const notes = [];
+  eps.forEach((ep, i) => {
+    if (results[i].status !== 'fulfilled') return;
+    const ids = results[i].value.map((x) => x.id);
+    if (ids.length > BIG_CATALOG) return; // catálogos enormes (OpenRouter): cambian a diario
+    const prev = known[ep.id];
+    if (prev) {
+      const added = ids.filter((x) => !prev.includes(x));
+      const gone = prev.filter((x) => !ids.includes(x));
+      if (added.length) notes.push(`NUEVO EN ${providerOf(ep).name.toUpperCase()}: ${added.slice(0, 3).join(', ').toUpperCase()}`);
+      if (gone.length) notes.push(`YA NO ESTÁ: ${gone.slice(0, 3).join(', ').toUpperCase()}`);
+    }
+    known[ep.id] = ids;
+  });
+  store.set('knownModels', known);
+  if (notes.length) toast(notes.join(' · '));
 }
 
 /** Lo que necesita la petición que se va a enviar (para descartar modelos que no la aguantan). */
@@ -454,13 +477,37 @@ function renderThreads() {
   const box = $('#threads');
   const list = state.threads.filter((t) => t.mode === state.mode);
   if (!list.length) { box.innerHTML = '<p class="fine">Sin conversaciones todavía.</p>'; return; }
-  box.innerHTML = '<div class="t-group">RECIENTES</div>' + list.map((t) => `
+  const q = ($('#thread-search')?.value || '').trim();
+  const item = (t, snippet = '') => `
     <div class="thread ${t.id === state.current ? 'active' : ''}" data-id="${t.id}" role="button" tabindex="0">
-      <span class="t-title">${esc(t.title)}</span>
-      <button class="t-del" data-del="${t.id}" aria-label="Borrar conversación"><svg class="i"><use href="#i-close"/></svg></button>
-    </div>`).join('');
+      <span class="t-title">${t.pinned ? '★ ' : ''}${esc(t.title)}${t.workspace && state.mode === 'agent' ? `<span class="t-tag mono">${esc(t.workspace.split(/[\\/]/).pop())}</span>` : ''}${snippet ? `<span class="t-snip">${esc(snippet)}</span>` : ''}</span>
+      <span class="t-acts">
+        <button class="t-act" data-pin="${t.id}" aria-label="${t.pinned ? 'Quitar de fijadas' : 'Fijar'}" title="${t.pinned ? 'Quitar de fijadas' : 'Fijar arriba'}">${t.pinned ? '★' : '☆'}</button>
+        <button class="t-act" data-arch="${t.id}" aria-label="${t.archived ? 'Desarchivar' : 'Archivar'}" title="${t.archived ? 'Desarchivar' : 'Archivar'}">${t.archived ? '↥' : '↧'}</button>
+        <button class="t-del" data-del="${t.id}" aria-label="Borrar conversación"><svg class="i"><use href="#i-close"/></svg></button>
+      </span>
+    </div>`;
+  if (q) {
+    const found = searchThreads(list, q);
+    box.innerHTML = `<div class="t-group">${found.length} RESULTADO${found.length === 1 ? '' : 'S'}</div>` + (found.map((r) => item(r.thread, r.snippet)).join('') || '<p class="fine">Nada coincide.</p>');
+    return;
+  }
+  const pinned = list.filter((t) => t.pinned && !t.archived);
+  const recent = list.filter((t) => !t.pinned && !t.archived);
+  const archived = list.filter((t) => t.archived);
+  box.innerHTML = (pinned.length ? `<div class="t-group">FIJADAS</div>${pinned.map((t) => item(t)).join('')}` : '')
+    + (recent.length ? `<div class="t-group">RECIENTES</div>${recent.map((t) => item(t)).join('')}` : '')
+    + (archived.length ? `<details class="t-archived"><summary class="t-group">ARCHIVADAS · ${archived.length}</summary>${archived.map((t) => item(t)).join('')}</details>` : '');
 }
+$('#thread-search').addEventListener('input', () => renderThreads());
 $('#threads').addEventListener('click', (e) => {
+  const pin = e.target.closest('[data-pin]');
+  const arch = e.target.closest('[data-arch]');
+  if (pin || arch) {
+    const t = state.threads.find((x) => x.id === (pin || arch).dataset.pin || x.id === (pin || arch).dataset.arch);
+    if (t) { if (pin) t.pinned = !t.pinned; else t.archived = !t.archived; saveThreads(); renderThreads(); }
+    return;
+  }
   const del = e.target.closest('[data-del]');
   if (del) {
     state.threads = state.threads.filter((t) => t.id !== del.dataset.del);
@@ -472,6 +519,7 @@ $('#threads').addEventListener('click', (e) => {
   if (row) { openThread(row.dataset.id); $('#rail').classList.remove('open'); }
 });
 $('#new-thread').addEventListener('click', () => { state.current = null; openThread(null); input.focus(); });
+document.addEventListener('click', (e) => { if (e.target.closest('[data-news]')) openNews(); });
 
 function setMode(mode) {
   if (mode === 'agent' && !desktop) return;
@@ -497,17 +545,36 @@ function streamEl() {
   return { chat: $('#chat-stream'), code: $('#code-stream'), agent: $('#agent-stream') }[state.mode];
 }
 
-function openThread(id) {
+const reentryOffered = new Set(); // solo una vez por sesión
+const PAGE = 60; // mensajes que se pintan al abrir; los anteriores, bajo demanda (páginas largas y RAM)
+function openThread(id, { keepTop = false } = {}) {
   const t = state.threads.find((x) => x.id === id && x.mode === state.mode) || null;
   state.current = t?.id || null;
   $('#crumb-title').textContent = t?.title || 'NUEVA CONVERSACIÓN';
   const el = streamEl();
+  const prevHeight = el.scrollHeight, prevTop = el.scrollTop;
   $$('.msg-row', el).forEach((n) => n.remove());
   const empty = $('.empty', el);
   if (empty) empty.hidden = !!(t && t.messages.length);
-  if (t) for (const m of t.messages) {
-    const row = addMessage(m.role, m.content, { reasoning: m.reasoning, turn: m.turn });
-    if (m.usage) setUsage(row, m.usage);
+  if (t) {
+    const start = Math.max(0, t.messages.length - (t._shown || PAGE));
+    if (start > 0) {
+      const r = addMessage('system', '', { cls: 'older' });
+      $('.bubble', r).innerHTML = `<button class="btn ghost sm" type="button" data-older>Mostrar ${Math.min(PAGE, start)} mensajes anteriores (${start} ocultos)</button>`;
+    }
+    for (let i = start; i < t.messages.length; i++) {
+      const m = t.messages[i];
+      const row = addMessage(m.role, m.content, { reasoning: m.reasoning, turn: m.turn, model: m.model });
+      if (m.usage) setUsage(row, m.usage);
+      if (m.role === 'assistant') decorateAssistant(row, t, i);
+    }
+    // conversación retomada después de días: se ofrece un resumen de dónde quedó
+    if (t.messages.length >= 8 && Date.now() - (t.updated || 0) > 86400000 && !reentryOffered.has(t.id)) {
+      reentryOffered.add(t.id);
+      const r = addMessage('system', 'Retomas una conversación de hace días.');
+      $('.bubble', r).insertAdjacentHTML('beforeend', ' <button class="btn sm" type="button" data-reentry>Resumir dónde nos quedamos</button>');
+    }
+    if (keepTop) el.scrollTop = el.scrollHeight - prevHeight + prevTop;
   }
   if (state.mode === 'code') { state.file = null; renderFiles(); }
   if (state.mode === 'agent') renderTodos(t?.todos || []);
@@ -516,13 +583,14 @@ function openThread(id) {
 }
 
 /* ------------------------------------------------------------ mensajes */
-function addMessage(role, content, { reasoning = '', streaming = false, cls = '', turn = null } = {}) {
+function addMessage(role, content, { reasoning = '', streaming = false, cls = '', turn = null, model = '' } = {}) {
   const el = streamEl();
   const empty = $('.empty', el);
   if (empty) empty.hidden = true;
   const row = document.createElement('div');
   row.className = `msg-row ${role} ${cls}`.trim();
-  const who = { user: 'TÚ', assistant: 'JEAN', tool: 'HERRAMIENTA', error: 'ERROR', system: 'SISTEMA' }[role] || role.toUpperCase();
+  // cada respuesta dice qué modelo la escribió (y no cambia en silencio si el enrutador usa otro)
+  const who = { user: 'TÚ', assistant: model ? `JEAN · ${model.toUpperCase()}` : 'JEAN', tool: 'HERRAMIENTA', error: 'ERROR', system: 'SISTEMA' }[role] || role.toUpperCase();
   row.innerHTML = `<div class="who">${who}</div><div class="bubble"></div>`;
   el.appendChild(row);
   updateMessage(row, content, reasoning, streaming);
@@ -572,8 +640,80 @@ function renderRow(row) {
     b.innerHTML = renderMarkdown(shown, reasoning) || (streaming ? '' : '<p class="muted">(usando herramientas…)</p>');
   }
   b.classList.toggle('cursor', streaming);
+  // lectores de pantalla: no se anuncia cada trozo del streaming, solo el final (región #sr-live)
+  if (role === 'assistant') {
+    b.setAttribute('aria-busy', streaming ? 'true' : 'false');
+    if (!streaming && row._wasStreaming) announce('Respuesta de Jean terminada.');
+    row._wasStreaming = streaming;
+  }
   const el = row.parentElement;
   if (el && el.scrollHeight - el.scrollTop - el.clientHeight < 160) el.scrollTop = el.scrollHeight;
+}
+
+function announce(msg) {
+  const live = $('#sr-live');
+  if (!live) return;
+  live.textContent = '';
+  setTimeout(() => { live.textContent = msg; }, 60);
+}
+
+/** Barra de acciones de una respuesta: copiar (Markdown / texto), regenerar con…, variantes ‹ › y enlaces verificados. */
+function decorateAssistant(row, t, index) {
+  const msg = t.messages[index];
+  if (!msg || msg.role !== 'assistant') return;
+  row.dataset.index = String(index);
+  $('.msg-actions', row)?.remove();
+  const bar = document.createElement('div');
+  bar.className = 'msg-actions';
+  const n = msg.alts?.length || 0;
+  const canRegen = state.mode !== 'agent' && index === t.messages.length - 1;
+  bar.innerHTML = `<button type="button" data-msg="copy-md">Copiar</button><button type="button" data-msg="copy-text">Copiar texto</button>`
+    + (canRegen ? `<details class="menu regen"><summary>Regenerar</summary><div class="menu-list" role="menu">
+        <button type="button" role="menuitem" data-msg="regen" data-how="">Otra vez</button>
+        <button type="button" role="menuitem" data-msg="regen" data-how="Hazla más corta y directa.">Más corta</button>
+        <button type="button" role="menuitem" data-msg="regen" data-how="Hazla más completa y detallada, con ejemplos.">Más detallada</button>
+        <button type="button" role="menuitem" data-msg="regen" data-how="Explícalo de forma más sencilla, sin jerga.">Más sencilla</button>
+        <button type="button" role="menuitem" data-msg="regen" data-how="Revisa tu respuesta anterior: corrige errores y señala lo que no sea seguro.">Revisar errores</button>
+        ${(state.visible || []).filter((x) => modelKey(x) !== modelKey(currentModel())).slice(0, 5).map((x) => `<button type="button" role="menuitem" data-msg="regen" data-how="" data-model="${esc(modelKey(x))}">Con ${esc(modelLabel(x.id))}</button>`).join('')}
+      </div></details>` : '')
+    + (n > 1 ? `<span class="alts"><button type="button" data-msg="alt" data-step="-1" aria-label="Versión anterior">‹</button><span class="mono">${(msg.alt ?? n - 1) + 1}/${n}</span><button type="button" data-msg="alt" data-step="1" aria-label="Versión siguiente">›</button></span>` : '');
+  row.appendChild(bar);
+  verifyLinks(row);
+}
+
+/** Comprueba que los enlaces de una respuesta existan (los modelos los inventan): ✓ responde · ⚠ no responde. */
+async function verifyLinks(row) {
+  const links = [...$$('.bubble a[href^="http"]', row)].filter((a) => !a.nextElementSibling?.classList.contains('link-check')).slice(0, 10);
+  await Promise.all(links.map(async (a) => {
+    let ok = null;
+    try {
+      if (desktop?.http) {
+        const r = await desktop.http({ url: a.href, method: 'GET', headers: { 'User-Agent': 'JeanCode link check' }, timeout: 7000 });
+        ok = !r.error && (r.status < 400 || [401, 403, 405, 429].includes(r.status));
+      } else {
+        await fetch(a.href, { method: 'GET', mode: 'no-cors', signal: AbortSignal.timeout(7000) });
+        ok = true; // sin CORS solo se sabe que el servidor responde
+      }
+    } catch { ok = false; }
+    const mark = document.createElement('span');
+    mark.className = `link-check ${ok ? 'ok' : 'bad'}`;
+    mark.textContent = ok ? '✓' : '⚠ no responde';
+    mark.title = ok ? 'El enlace responde' : 'Este enlace no responde: puede estar inventado o caído';
+    a.after(mark);
+  }));
+}
+
+async function regenerate(row, how, modelKeyWanted) {
+  const t = thread();
+  const index = Number(row.dataset.index);
+  if (!t || state.abort || !Number.isFinite(index)) return;
+  const m = modelKeyWanted ? (state.visible || []).find((x) => modelKey(x) === modelKeyWanted) : currentModel();
+  if (!m) { toast('SIN MODELO DISPONIBLE'); return; }
+  state.abort = new AbortController();
+  busy(true);
+  try { await sendChat(t, m, { regen: { index, row, instruction: how } }); } catch (err) { if (err.name !== 'AbortError') showError(err); } finally {
+    state.abort = null; busy(false); t.updated = Date.now(); saveThreads(); updateContext();
+  }
 }
 
 function addToolLine(call, result, nested) {
@@ -590,6 +730,42 @@ function addToolLine(call, result, nested) {
 }
 
 document.addEventListener('click', async (e) => {
+  const act = e.target.closest('[data-msg]');
+  if (act) {
+    const row = act.closest('.msg-row');
+    const t = thread();
+    const msg = t?.messages[Number(row?.dataset.index)];
+    if (!msg) return;
+    const what = act.dataset.msg;
+    if (what === 'copy-md' || what === 'copy-text') {
+      const body = state.mode === 'agent' ? stripToolBlocks(msg.content) : msg.content;
+      try { await navigator.clipboard.writeText(what === 'copy-md' ? body : markdownToText(body)); toast('COPIADO'); } catch { toast('NO SE PUDO COPIAR'); }
+    }
+    if (what === 'regen') { act.closest('details').open = false; regenerate(row, act.dataset.how, act.dataset.model); }
+    if (what === 'alt' && msg.alts?.length) {
+      const k = Math.min(msg.alts.length - 1, Math.max(0, (msg.alt ?? msg.alts.length - 1) + Number(act.dataset.step)));
+      Object.assign(msg, { content: msg.alts[k].content, reasoning: msg.alts[k].reasoning, model: msg.alts[k].model, alt: k });
+      updateMessage(row, msg.content, msg.reasoning || '', false);
+      $('.who', row).textContent = msg.model ? `JEAN · ${msg.model.toUpperCase()}` : 'JEAN';
+      decorateAssistant(row, t, Number(row.dataset.index));
+      saveThreads();
+    }
+    return;
+  }
+  const tb = e.target.closest('[data-copy-table]');
+  if (tb) {
+    const rows = [...tb.closest('.table-wrap').querySelectorAll('tr')].map((r) => [...r.children].map((c) => c.textContent.trim()));
+    try { await navigator.clipboard.writeText(tb.dataset.copyTable === 'csv' ? rowsToCsv(rows) : rowsToMarkdown(rows)); toast(`TABLA COPIADA COMO ${tb.dataset.copyTable.toUpperCase()}`); } catch { toast('NO SE PUDO COPIAR'); }
+    return;
+  }
+  const exp = e.target.closest('[data-expand]');
+  if (exp) { const cb = exp.closest('.codeblock'); cb.classList.toggle('expanded'); exp.textContent = cb.classList.contains('expanded') ? 'REDUCIR' : 'AMPLIAR'; return; }
+  const more = e.target.closest('[data-older]');
+  if (more) { const t = thread(); if (t) { t._shown = (t._shown || PAGE) + PAGE; openThread(t.id, { keepTop: true }); } return; }
+  const re = e.target.closest('[data-reentry]');
+  if (re) { re.disabled = true; reentrySummary(thread(), re.closest('.msg-row')); return; }
+  const cont = e.target.closest('[data-continue]');
+  if (cont) { cont.closest('.msg-row').remove(); send('Continúa exactamente donde te quedaste, sin repetir lo que ya escribiste.'); return; }
   const copy = e.target.closest('[data-copy]');
   if (copy) {
     const code = copy.closest('.codeblock').querySelector('code').textContent;
@@ -642,7 +818,7 @@ function autosize() {
 }
 
 function updateHint() {
-  const base = '/ comandos · Esc detiene';
+  const base = '/ comandos · Ctrl+Shift+P acciones · Esc detiene';
   $('#hint').textContent = state.mode === 'agent'
     ? `${base} · @ archivos · Tab → ${state.agent === 'build' ? 'Plan' : 'Build'}`
     : base;
@@ -705,7 +881,23 @@ async function refreshPopup() {
   closePopup();
 }
 
-input.addEventListener('input', () => { autosize(); refreshPopup(); });
+input.addEventListener('input', () => { autosize(); refreshPopup(); estimateSend(); });
+
+/** Cuánto costará el próximo envío (tokens y, si el proveedor publica precio, dinero), antes de enviarlo. */
+function estimateSend() {
+  const box = $('#send-est');
+  if (!box) return;
+  const m = currentModel();
+  const t = thread();
+  const text = input.value.trim();
+  if (!m || !text) { box.textContent = ''; return; }
+  const msgs = (state.mode === 'agent' ? t?.agentMessages : t?.messages) || [];
+  const tokens = estimateTokens([...msgs, { content: text }]) + (state.mode === 'agent' ? 3000 : 600);
+  const price = capsOf(m.ep, m.id).price;
+  const cost = price ? tokens * price.prompt : 0;
+  box.textContent = `≈ ${fmtTok(tokens)} tokens${cost ? ` · ${fmtCost(cost)}` : ''}`;
+  box.title = 'Estimación del envío (historial + mensaje). La respuesta suma aparte.';
+}
 input.addEventListener('keydown', (e) => {
   const open = !$('#popup').hidden;
   if (open && (e.key === 'ArrowDown' || e.key === 'ArrowUp')) { e.preventDefault(); movePopup(e.key === 'ArrowDown' ? 1 : -1); return; }
@@ -721,6 +913,8 @@ input.addEventListener('blur', () => setTimeout(closePopup, 150));
 
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape' && state.abort && $('#popup').hidden && !document.querySelector('dialog[open]')) { stopEverything('detenida con Esc'); return; }
+  if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === 'p') { e.preventDefault(); openPalette(); return; }
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'f' && e.shiftKey) { e.preventDefault(); $('#rail').classList.add('open'); $('#thread-search').focus(); return; }
   if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') { e.preventDefault(); state.current = null; openThread(null); input.focus(); }
   if ((e.ctrlKey || e.metaKey) && ['1', '2', '3'].includes(e.key)) { e.preventDefault(); setMode(['chat', 'code', 'agent'][+e.key - 1]); }
 });
@@ -732,6 +926,67 @@ function stopEverything(reason) {
   if (desktop) {
     desktop.shell.cancel?.().catch(() => {});
     if (pc.active) desktop.computer.stop(reason).catch(() => {});
+  }
+}
+
+/** Paleta de comandos: todas las acciones y comandos en un solo sitio, con búsqueda. */
+function paletteItems() {
+  const t = thread();
+  const items = [
+    ['Nueva conversación', 'Ctrl+K', () => { state.current = null; openThread(null); input.focus(); }],
+    ['Buscar conversaciones', 'Ctrl+Shift+F', () => { $('#rail').classList.add('open'); $('#thread-search').focus(); }],
+    ['Modo Chat', 'Ctrl+1', () => setMode('chat')], ['Modo Code', 'Ctrl+2', () => setMode('code')],
+    ...(desktop ? [['Modo Agent', 'Ctrl+3', () => setMode('agent')]] : []),
+    ['Ajustes', '', () => openPanel('settings')], ['Skills', '', () => openPanel('skills')],
+    ...(desktop ? [['Automatizaciones', '', () => openPanel('automations')]] : []),
+    ['Novedades de JeanCode', '', () => openNews()],
+    ...(t ? [['Exportar a Markdown', '', () => exportThread(t, 'md')], ['Exportar a JSON', '', () => exportThread(t, 'json')], ['Exportar a PDF', '', () => exportThread(t, 'pdf')],
+      [t.pinned ? 'Quitar de fijadas' : 'Fijar esta conversación', '', () => { t.pinned = !t.pinned; saveThreads(); renderThreads(); }],
+      [t.archived ? 'Desarchivar' : 'Archivar esta conversación', '', () => { t.archived = !t.archived; saveThreads(); renderThreads(); }]] : []),
+    ...BUILTIN.filter((c) => c.modes.includes(state.mode) && (desktop || !c.modes.every((x) => x === 'agent'))).map((c) => [`/${c.name}`, c.desc, () => { input.value = `/${c.name} `; autosize(); input.focus(); }]),
+  ];
+  return items;
+}
+function openPalette() {
+  const d = $('#panel-palette');
+  const q = $('#palette-q');
+  const list = $('#palette-list');
+  let items = paletteItems();
+  let sel = 0;
+  const draw = () => {
+    const words = q.value.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').split(/\s+/).filter(Boolean);
+    items = paletteItems().filter(([label, hint]) => words.every((w) => `${label} ${hint}`.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').includes(w)));
+    sel = Math.min(sel, Math.max(0, items.length - 1));
+    list.innerHTML = items.map(([label, hint], i) => `<li role="option" data-i="${i}" class="${i === sel ? 'active' : ''}" aria-selected="${i === sel}"><span>${esc(label)}</span><span class="pp-desc mono">${esc(hint)}</span></li>`).join('') || '<li class="fine">Nada coincide.</li>';
+  };
+  const run = (i) => { const it = items[i]; if (!it) return; d.close(); it[2](); };
+  q.value = '';
+  q.oninput = () => { sel = 0; draw(); };
+  q.onkeydown = (e) => {
+    if (e.key === 'ArrowDown') { e.preventDefault(); sel = (sel + 1) % Math.max(1, items.length); draw(); }
+    if (e.key === 'ArrowUp') { e.preventDefault(); sel = (sel - 1 + items.length) % Math.max(1, items.length); draw(); }
+    if (e.key === 'Enter') { e.preventDefault(); run(sel); }
+  };
+  list.onclick = (e) => { const li = e.target.closest('li[data-i]'); if (li) run(Number(li.dataset.i)); };
+  draw();
+  d.showModal();
+  q.focus();
+}
+
+/** Novedades: el registro de cambios dentro de la app (se abre solo tras actualizar). */
+async function openNews() {
+  const d = $('#panel-news');
+  const box = $('#news-body');
+  box.innerHTML = '<p class="fine">Cargando…</p>';
+  d.showModal();
+  try {
+    const r = await fetch(CONFIG.changelogUrl, { signal: AbortSignal.timeout(8000) });
+    if (!r.ok) throw new Error(String(r.status));
+    const md = await r.text();
+    const parts = md.split(/\n(?=## )/).filter((p) => p.startsWith('## ')).slice(0, 2).join('\n');
+    box.innerHTML = renderMarkdown(parts || md.slice(0, 6000));
+  } catch {
+    box.innerHTML = `<p>No se pudo cargar el registro de cambios ahora. Está en <a href="${esc(CONFIG.repoUrl)}/blob/main/CHANGELOG.md" target="_blank" rel="noopener">GitHub</a>.</p>`;
   }
 }
 
@@ -767,14 +1022,26 @@ async function send(text) {
   state.decision = decision;
   if (state.mode === 'agent' && !state.workspace) { toast('ELIGE UNA CARPETA DE TRABAJO'); return; }
 
-  const t = thread() || newThread();
-  // Compactación transparente: nunca a escondidas. Al 85 % se pregunta y se muestra el resumen.
-  if (updateContext() >= 85 && t.messages.length > 4) {
+  // datos sensibles pegados por error (claves, tarjetas, contraseñas): se avisa ANTES de que salgan de la PC
+  const sensitive = billingOf(m.ep, m.id) === 'local' ? [] : detectSensitive(text);
+  if (sensitive.length) {
     const ok = await confirmDialog({
+      title: 'PARECE QUE VAS A ENVIAR DATOS SENSIBLES',
+      command: `${sensitive.map((x) => `· ${x.kind} (${x.sample})`).join('\n')}\n\nSe enviarían a ${providerOf(m.ep).name}. Quítalos del mensaje si no hace falta compartirlos.`,
+      allowAlways: true, alwaysLabel: 'ENVIAR IGUALMENTE',
+    });
+    if (!ok) { input.value = text; autosize(); input.focus(); return; }
+  }
+  const t = thread() || newThread();
+  // Compactación transparente: nunca a escondidas. Al 85 % se resume (sola, si así está en Ajustes) y se muestra el resumen.
+  if (updateContext() >= 85 && t.messages.length > 4) {
+    const auto = store.get('autoCompact', true);
+    const ok = auto || await confirmDialog({
       title: 'CONTEXTO AL 85 %',
       command: 'Se resumirá la conversación y verás el resumen antes de seguir. Las reglas fijadas y la memoria del proyecto (AGENTS.md) no se pierden: se envían siempre.',
     });
     if (ok) await compact(t);
+    if (ok && auto) addMessage('system', 'El contexto llegó al 85 %: la conversación se resumió sola (arriba lo que el modelo recuerda). Puedes desactivarlo en Ajustes → Comportamiento.');
   }
   if (!t.messages.length) {
     t.title = text.replace(/\s+/g, ' ').slice(0, 60).toUpperCase();
@@ -792,8 +1059,14 @@ async function send(text) {
     if (state.mode === 'agent') await sendAgent(t, m, text, turn);
     else await sendChat(t, m);
   } catch (err) {
-    if (err.name !== 'AbortError') showError(err);
-    else addMessage('system', 'Detenido.');
+    if (err.name !== 'AbortError') {
+      showError(err);
+      // la respuesta se cortó a mitad: se conserva lo recibido y se ofrece continuar
+      if (t.messages.at(-1)?.partial) {
+        const r = addMessage('system', 'La respuesta se cortó. Lo recibido se guardó.');
+        $('.bubble', r).insertAdjacentHTML('beforeend', ' <button class="btn sm" type="button" data-continue>Continuar la respuesta</button>');
+      }
+    } else addMessage('system', 'Detenido (lo generado hasta aquí se conserva).');
   } finally {
     state.abort = null;
     busy(false);
@@ -816,7 +1089,7 @@ async function runCommand({ name, args }) {
       if (!args) { toast('MODELOS: ' + state.models.map((x) => x.id).join(', ')); return null; }
       toast(selectModel(args) ? 'MODELO: ' + args.toUpperCase() : 'NO EXISTE ESE MODELO');
       return null;
-    case 'export': exportThread(t); return null;
+    case 'export': exportThread(t, ['json', 'pdf', 'md'].includes(args.toLowerCase()) ? args.toLowerCase() : 'md'); return null;
     case 'zip': $('#dl-zip').click(); return null;
     case 'compact': await compact(t); return null;
     case 'context': await showContext(t); return null;
@@ -977,7 +1250,7 @@ async function runAutomation(task) {
   const tools = [];
   // solo las herramientas de apps que el usuario permitió siempre (nadie puede aprobar las demás)
   const mcp = mcpAll.filter((x) => allowList.includes(`mcp:${x.name}`));
-  const sys = { workspace: task.folder, os, skills, mode: task.perm === 'edit' ? 'auto-edit' : 'plan', agent: task.perm === 'edit' ? 'build' : 'plan', memory, agents: [], style: 'concise', rules: store.get('rules', ''), mcp };
+  const sys = { workspace: task.folder, os, skills, mode: task.perm === 'edit' ? 'auto-edit' : 'plan', agent: task.perm === 'edit' ? 'build' : 'plan', memory, agents: [], style: 'concise', rules: store.get('rules', ''), mcp, quality: qualityBlock() };
   const messages = [{ role: 'system', content: agentSystem(sys) + '\n\nEJECUCIÓN PROGRAMADA SIN SUPERVISIÓN: nadie puede aprobar acciones ahora. Si algo necesita permiso, no insistas: explica al final qué quedó pendiente.' }, { role: 'user', content: task.prompt }];
   const ac = new AbortController();
   const ctx = {
@@ -994,6 +1267,21 @@ async function runAutomation(task) {
   t.messages.push({ role: 'assistant', content: `${stripToolBlocks(final) || final}${extra ? `\n\n---\n${extra}` : ''}` });
   t.updated = Date.now(); saveThreads(); renderThreads();
   return { ok: true, summary: (stripToolBlocks(final) || final).replace(/\s+/g, ' ').slice(0, 200), thread: t.id };
+}
+
+/** Resumen de reentrada: no sustituye la conversación, solo recuerda dónde quedó. */
+async function reentrySummary(t, row) {
+  const m = currentModel();
+  if (!t || !m || state.abort) return;
+  state.abort = new AbortController();
+  busy(true);
+  try {
+    const transcript = t.messages.map((x) => `${x.role.toUpperCase()}: ${typeof x.content === 'string' ? x.content : ''}`).join('\n\n').slice(-Math.min(60000, Math.round(contextWindow(m).limit * 2)));
+    const { text } = await routedChat(m, { signal: state.abort.signal, think: false, messages: [
+      { role: 'system', content: 'Resume en 3 a 6 viñetas breves en español dónde quedó esta conversación: objetivo, decisiones, lo último que se hizo y lo pendiente. Solo lo que esté en la conversación.' },
+      { role: 'user', content: transcript }] }, routeCtx());
+    $('.bubble', row).textContent = `DÓNDE NOS QUEDAMOS:\n${text.trim()}`;
+  } catch (err) { if (err.name !== 'AbortError') $('.bubble', row).textContent = 'No se pudo resumir: ' + err.message; } finally { state.abort = null; busy(false); }
 }
 
 async function compact(t) {
@@ -1026,10 +1314,25 @@ async function compact(t) {
   }
 }
 
-function exportThread(t) {
+function exportThread(t, format = 'md') {
   if (!t) { toast('NO HAY CONVERSACIÓN'); return; }
-  const md = `# ${t.title}\n\n` + t.messages.map((x) => `## ${x.role === 'user' ? 'Tú' : 'Jean'}\n\n${x.content}`).join('\n\n');
-  downloadBlob(new Blob([md], { type: 'text/markdown;charset=utf-8' }), `${t.title.toLowerCase().replace(/[^a-z0-9]+/g, '-').slice(0, 40) || 'conversacion'}.md`);
+  const name = t.title.toLowerCase().replace(/[^a-z0-9]+/g, '-').slice(0, 40) || 'conversacion';
+  const who = (x) => (x.role === 'user' ? 'Tú' : x.role === 'assistant' ? `Jean${x.model ? ` (${x.model})` : ''}` : 'Sistema');
+  if (format === 'json') { downloadBlob(new Blob([threadToJson(t, VERSION)], { type: 'application/json' }), `${name}.json`); return; }
+  if (format === 'pdf') {
+    // se imprime una copia limpia; el diálogo del sistema permite "Guardar como PDF"
+    const frame = document.createElement('iframe');
+    frame.style.cssText = 'position:fixed;width:0;height:0;border:0';
+    document.body.appendChild(frame);
+    const doc = frame.contentDocument;
+    doc.open();
+    doc.write(`<!doctype html><meta charset="utf-8"><title>${esc(t.title)}</title><style>body{font:14px/1.55 system-ui,sans-serif;max-width:720px;margin:24px auto;color:#111}h1{font-size:20px}h2{font-size:13px;letter-spacing:.06em;text-transform:uppercase;color:#555;margin:22px 0 6px}pre{white-space:pre-wrap;background:#f3f3f3;padding:10px;font-size:12px}table{border-collapse:collapse}td,th{border:1px solid #bbb;padding:4px 8px}.cb-head button,button{display:none}</style><h1>${esc(t.title)}</h1>${t.messages.map((x) => `<h2>${esc(who(x))}</h2>${x.role === 'assistant' ? renderMarkdown(x.content) : `<p>${esc(String(x.content)).replace(/\n/g, '<br>')}</p>`}`).join('')}`);
+    doc.close();
+    setTimeout(() => { frame.contentWindow.focus(); frame.contentWindow.print(); setTimeout(() => frame.remove(), 1000); }, 300);
+    return;
+  }
+  const md = `# ${t.title}\n\n` + t.messages.map((x) => `## ${who(x)}\n\n${x.content}`).join('\n\n');
+  downloadBlob(new Blob([md], { type: 'text/markdown;charset=utf-8' }), `${name}.md`);
 }
 
 /* ------------------------------------------------------------ chat / code */
@@ -1037,7 +1340,12 @@ function exportThread(t) {
 function extraSystem() {
   const style = STYLES[store.get('style', 'normal')] || '';
   const rules = String(store.get('rules', '')).trim();
-  return (style ? `\n\n${style}` : '') + (rules ? `\n\nREGLAS FIJADAS POR EL USUARIO (siempre vigentes):\n${rules}` : '');
+  return `\n\n${qualityBlock()}` + (style ? `\n\n${style}` : '') + (rules ? `\n\nREGLAS FIJADAS POR EL USUARIO (siempre vigentes):\n${rules}` : '');
+}
+
+/** Honestidad, franqueza y longitud elegidas en Ajustes, y la fecha de hoy (para saber qué puede estar desactualizado). */
+function qualityBlock() {
+  return `${qualityPrompt({ directness: store.get('directness', 'normal'), length: store.get('length', 'auto') })}\nFecha de hoy: ${new Date().toLocaleDateString('es', { year: 'numeric', month: 'long', day: 'numeric' })}.`;
 }
 
 function chatSystem(t) {
@@ -1049,14 +1357,26 @@ function chatSystem(t) {
 function agentSys({ os, skills, memory }) {
   return {
     workspace: state.workspace, os, skills, mode: state.perm, agent: state.agent, memory,
-    agents: state.agents || [], style: store.get('style', 'normal'), rules: store.get('rules', ''),
+    agents: state.agents || [], style: store.get('style', 'normal'), rules: store.get('rules', ''), quality: qualityBlock(),
   };
 }
 
-async function sendChat(t, m) {
-  const sys = chatSystem(t);
-  const history = t.messages.slice(-24).map(({ role, content }) => ({ role, content }));
-  const row = addMessage('assistant', '', { streaming: true });
+async function sendChat(t, m, { regen = null } = {}) {
+  const sys = chatSystem(t) + (regen?.instruction ? `\n\nPARA ESTA RESPUESTA: reescribe tu respuesta anterior a la última pregunta. ${regen.instruction}` : '');
+  const upto = regen ? t.messages.slice(0, regen.index) : t.messages;
+  const history = upto.slice(-24).map(({ role, content }) => ({ role, content }));
+  const row = regen ? regen.row : addMessage('assistant', '', { streaming: true, model: m.id });
+  if (regen) { $('.msg-actions', row)?.remove(); $('.who', row).textContent = `JEAN · ${m.id.toUpperCase()}`; updateMessage(row, '', '', true); }
+  let answeredBy = m.id;
+  let failed = false;
+  // espera visible: en horas punta o en CPU el primer token puede tardar
+  const started = Date.now();
+  const waiting = setInterval(() => {
+    if (text || reasoning) { clearInterval(waiting); return; }
+    const s = Math.round((Date.now() - started) / 1000);
+    if (s < 3) return;
+    $('.bubble', row).innerHTML = `<p class="muted mono">esperando al modelo… ${s} s${s >= 20 ? ' · si tarda mucho, elige un modelo más rápido arriba o AUTO' : ''}</p>`;
+  }, 1000);
   let text = '';
   let reasoning = '';
   let usage = null;
@@ -1076,15 +1396,35 @@ async function sendChat(t, m) {
       onDelta: (d) => { text += d; paint(); },
       onReasoning: (d) => { reasoning += d; paint(); },
       onUsage: (u) => { usage = u; },
-    }, routeCtx((to) => { $('.who', row).textContent = `JEAN · ${to.id.toUpperCase()}`; }));
+    }, routeCtx((to) => { answeredBy = to.id; $('.who', row).textContent = `JEAN · ${to.id.toUpperCase()}`; }));
     traceRow = r.trace;
+  } catch (err) {
+    failed = err.name !== 'AbortError';
+    throw err;
   } finally {
+    clearInterval(waiting);
     if (filesRaf) cancelAnimationFrame(filesRaf);
     updateMessage(row, text, reasoning, false);
     if (!text && !reasoning) row.remove(); // falló antes de responder: solo queda el mensaje de error
     else if (traceRow) attachTrace(row, traceRow);
     if (usage) { setUsage(row, usage); addUsage(t, usage, m); }
-    if (text) t.messages.push({ role: 'assistant', content: text, reasoning, usage: usage || undefined });
+    if (text) {
+      const entry = { role: 'assistant', content: text, reasoning, usage: usage || undefined, model: answeredBy, at: Date.now(), ...(failed ? { partial: true } : {}) };
+      if (regen) {
+        const old = t.messages[regen.index];
+        const alts = old.alts || [{ content: old.content, reasoning: old.reasoning, model: old.model, at: old.at }];
+        alts.push({ content: text, reasoning, model: answeredBy, at: entry.at });
+        t.messages[regen.index] = { ...old, ...entry, alts, alt: alts.length - 1 };
+        decorateAssistant(row, t, regen.index);
+      } else {
+        t.messages.push(entry);
+        decorateAssistant(row, t, t.messages.length - 1);
+      }
+    } else if (regen) {
+      const old = t.messages[regen.index];
+      updateMessage(row, old.content, old.reasoning || '', false);
+      decorateAssistant(row, t, regen.index);
+    }
     if (state.mode === 'code') applyFiles(t, base, text, true);
   }
 }
@@ -1325,7 +1665,7 @@ async function sendAgent(t, m, text, turn) {
   } finally {
     if (computer) await endComputer();
   }
-  t.messages.push({ role: 'assistant', content: stripToolBlocks(final) || final });
+  t.messages.push({ role: 'assistant', content: stripToolBlocks(final) || final, model: ctx.model, at: Date.now() });
   const post = await ctx.runHooks('post_turn');
   if (post) addMessage('tool', post.trim());
   // PLAN → BUILD: el plan se aprueba con un clic (y se puede editar antes en el campo de texto)
@@ -1648,6 +1988,9 @@ function renderSettings() {
   $('#style-select').value = store.get('style', 'normal');
   $('#rules').value = store.get('rules', '');
   $('#auto-diag').checked = store.get('autoDiag', true);
+  $('#directness-select').value = store.get('directness', 'normal');
+  $('#length-select').value = store.get('length', 'auto');
+  $('#auto-compact').checked = store.get('autoCompact', true);
   { const r = store.get('relay', null); $('#relay-url').value = r?.url || ''; $('#relay-key').value = r?.key || ''; }
   renderAllowList();
   renderFenix();
@@ -1677,6 +2020,9 @@ $('#allow-list').addEventListener('click', (e) => {
 $('#style-select').addEventListener('change', (e) => { store.set('style', e.target.value); toast('ESTILO: ' + e.target.selectedOptions[0].textContent.toUpperCase()); });
 $('#rules').addEventListener('change', (e) => store.set('rules', e.target.value));
 $('#auto-diag').addEventListener('change', (e) => store.set('autoDiag', e.target.checked));
+$('#directness-select').addEventListener('change', (e) => store.set('directness', e.target.value));
+$('#length-select').addEventListener('change', (e) => store.set('length', e.target.value));
+$('#auto-compact').addEventListener('change', (e) => store.set('autoCompact', e.target.checked));
 
 /* hooks globales (escritorio): <userData>/hooks.json */
 if (desktop?.hooks) {
@@ -2135,6 +2481,12 @@ if ('serviceWorker' in navigator && location.protocol.startsWith('http') && !des
     if (saved?.secrets?.hfToken) store.set('hfToken', saved.secrets.hfToken, false);
     try { localStorage.removeItem('jeancode.hfToken'); } catch { /* versiones anteriores lo dejaban en claro */ }
   }
+  // novedades: se abren una vez tras actualizar (no en la primera instalación)
+  const seen = store.get('seenVersion', null);
+  if (seen && seen !== VERSION) setTimeout(openNews, 1500);
+  store.set('seenVersion', VERSION);
+  let bufWarned = false;
+  window.addEventListener('jc:buffered', (e) => { if (!bufWarned) { bufWarned = true; toast(`LA RESPUESTA LLEGÓ DE GOLPE: UN PROXY ESTÁ ALMACENANDO EL STREAMING (${e.detail.where}). DESACTIVA SU BUFFERING`); } });
   let warned = false;
   state.threads = await loadThreads(() => { if (!warned) { warned = true; toast('NO SE PUDO GUARDAR EL HISTORIAL: REVISA EL ESPACIO DEL DISCO'); } });
   window.addEventListener('pagehide', () => { saveThreadsNow(state.threads.slice(0, 200)); });

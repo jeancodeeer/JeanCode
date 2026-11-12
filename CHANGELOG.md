@@ -4,6 +4,17 @@ JeanCode 1.0 reúne en una sola versión todo lo que se publicó por partes entr
 
 ## Próxima versión (en `main`, ya en la web)
 
+**Respuestas más honestas y una conversación más cómoda** (detalle por punto en `docs/mejoras.md`)
+- Principios de respuesta en cada envío: decir "no lo sé", no inventar citas ni enlaces, avisar de datos que pueden estar desactualizados (con la fecha de hoy), mostrar los cálculos, pedir una aclaración corta si la petición es ambigua, sin adulación ni sermones. **Franqueza** y **longitud** ajustables.
+- Los **enlaces** de cada respuesta se comprueban: ✓ responde · ⚠ no responde (suelen ser inventados).
+- Cada respuesta dice **qué modelo** la escribió. **Regenerar con…**: otra vez, más corta, más detallada, más sencilla, revisar errores o con otro modelo, y navegar entre versiones ‹ 1/3 ›.
+- **Copiar** como Markdown o texto; **tablas** desplazables con copiar como CSV o Markdown; código largo con AMPLIAR.
+- **Aviso de datos sensibles** antes de enviar a un modelo remoto (claves, tokens, contraseñas, tarjetas, IBAN).
+- **Respuesta cortada**: se conserva lo recibido y se ofrece continuar. **Espera visible** cuando el modelo tarda.
+- **Historial**: búsqueda de texto completo, fijar y archivar; las conversaciones largas pintan los 60 últimos mensajes; resumen de reentrada al retomar una conversación de hace días.
+- **Paleta de comandos** (Ctrl+Shift+P), exportar a **Markdown, JSON o PDF**, estimación de tokens y coste antes de enviar, compactación automática al 85 %.
+- **Novedades** dentro de la app, aviso cuando un proveedor añade o retira modelos, aviso si un proxy almacena el streaming, mensaje claro en navegadores antiguos y anuncio para lectores de pantalla al terminar cada respuesta.
+
 **Optimización (medida)**
 - **Historial en IndexedDB** en lugar de localStorage. Antes cada mensaje reescribía todas las conversaciones (con 60 conversaciones del agente, 11 MB por guardado) y, al pasar el límite de ~5 MB del navegador, el historial dejaba de guardarse sin avisar. Ahora cada conversación se guarda aparte, solo si cambió, agrupando los guardados seguidos: 3,7 ms por guardado y 50 guardados durante una respuesta = 1 escritura. Las capturas de pantalla viejas y el prompt del sistema no se guardan y los resultados antiguos de herramientas se recortan. La migración desde localStorage es automática y, si algo falla al guardar, se avisa.
 - **Arranque del escritorio**: el SDK de MCP se cargaba al abrir la app (0,5 s en caliente, 3,8 s en frío) aunque no usaras ninguna app conectada; ahora se carga la primera vez que se usa (14 ms). Las apps conectadas se activan 3 s después de abrir, sin competir con el arranque.
