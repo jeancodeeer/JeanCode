@@ -689,13 +689,16 @@ test('calidad: datos sensibles, tablas, texto, enlaces, búsqueda y proxy con bu
   assert.ok(!JSON.stringify(j).includes('secreto'), 'sin historial interno del agente');
 });
 
-test('enlaces: la comprobación nunca apunta a la red local y no lleva parámetros', async () => {
-  const src = (await import('node:fs')).readFileSync(new URL('../web/js/app.js', import.meta.url), 'utf8');
-  const fn = src.slice(src.indexOf('function safeCheckUrl'), src.indexOf('async function regenerate'));
-  const safeCheckUrl = new Function(`${fn}; return safeCheckUrl;`)();
-  assert.equal(safeCheckUrl('https://example.com/docs/x?token=secreto#a'), 'https://example.com/docs/x', 'sin parámetros ni ancla');
-  for (const bad of ['http://localhost:8080/x', 'http://127.0.0.1/x', 'http://192.168.1.1/admin', 'http://10.0.0.5/', 'http://169.254.169.254/latest/meta-data',
-    'http://172.20.0.1/', 'http://[::1]/', 'http://router.local/', 'http://2130706433/', 'http://0x7f000001/', 'https://user:pw@example.com/', 'ftp://example.com/', 'http://intranet/']) {
-    assert.equal(safeCheckUrl(bad), null, bad);
+test('enlaces: DNS validado, nada de red local aunque el nombre parezca público', async () => {
+  const L = require('../desktop/lib/linkcheck.js');
+  for (const ip of ['127.0.0.1', '10.1.2.3', '192.168.0.1', '172.16.5.5', '169.254.169.254', '100.64.0.1', '0.0.0.0', '::1', 'fd00::1', 'fe80::1', '::ffff:127.0.0.1', '224.0.0.1']) assert.equal(L.isPublicIp(ip), false, ip);
+  for (const ip of ['8.8.8.8', '93.184.216.34', '2606:4700:4700::1111']) assert.equal(L.isPublicIp(ip), true, ip);
+  // nombres que RESUELVEN a la red local: el texto engaña, el DNS no
+  for (const href of ['http://localtest.me:8080/x', 'http://localhost./x', 'http://127.0.0.1/', 'http://[::1]/']) {
+    const r = await L.checkLink(href, { timeout: 3000 });
+    assert.equal(r.ok, false, href);
+    assert.ok(r.local || /no existe/.test(r.reason), `${href}: ${JSON.stringify(r)}`);
   }
+  assert.equal((await L.checkLink('ftp://example.com/')).ok, false);
+  assert.equal((await L.checkLink('https://u:p@example.com/')).ok, false);
 });

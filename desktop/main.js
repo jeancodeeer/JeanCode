@@ -5,6 +5,7 @@ const fs = require('node:fs/promises');
 const tools = require('./lib/tools');
 const { McpManager } = require('./lib/mcp');
 const diagnostics = require('./lib/diagnostics');
+const { checkLink } = require('./lib/linkcheck');
 const skillsLib = require('./lib/skills');
 const { ComputerControl } = require('./lib/computer/control');
 
@@ -100,6 +101,9 @@ ipcMain.handle('http', async (_e, req) => {
     return { error: e.name === 'TimeoutError' ? 'sin respuesta a tiempo' : e.message };
   }
 });
+
+// comprobar enlaces de una respuesta: DNS resuelto y validado aquí, nunca hacia la red local
+ipcMain.handle('link:check', (_e, href) => checkLink(href));
 
 ipcMain.on('stream:start', async (e, id, req) => {
   const wc = e.sender;

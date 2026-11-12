@@ -19,6 +19,7 @@ contextBridge.exposeInMainWorld('jeancodeDesktop', {
   },
   abort(id) { ipcRenderer.send('stream:abort', id); streams.delete(id); },
   config: { load: call('config:load'), save: call('config:save') },
+  checkLink: call('link:check'),
   fs: {
     pickFolder: call('fs:pickFolder'),
     list: call('fs:list'),
