@@ -1,7 +1,7 @@
 {
   "name": "jeancode-desktop",
   "productName": "JeanCode",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "repository": "github:jeancodeeer/JeanCode",
   "description": "JeanCode — agente de programación de escritorio para los modelos Jean (trae tu propia jean-api).",
   "main": "main.js",

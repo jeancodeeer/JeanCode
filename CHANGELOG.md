@@ -2,7 +2,7 @@
 
 JeanCode 1.0 reúne en una sola versión todo lo que se publicó por partes entre la 0.1 y la 0.4. Las releases antiguas se retiraron de GitHub para que solo quede una descarga oficial. Su código sigue completo en las etiquetas de git (`v0.1.0` … `v0.4.2`), así que cualquier build anterior se puede reconstruir con `git checkout vX.Y.Z && cd desktop && npm ci && npm run dist`.
 
-## Próxima versión (en `main`, ya en la web)
+## 1.2.0 — 12 de noviembre de 2026
 
 **Respuestas más honestas y una conversación más cómoda** (detalle por punto en `docs/mejoras.md`)
 - Principios de respuesta en cada envío: decir "no lo sé", no inventar citas ni enlaces, avisar de datos que pueden estar desactualizados (con la fecha de hoy), mostrar los cálculos, pedir una aclaración corta si la petición es ambigua, sin adulación ni sermones. **Franqueza** y **longitud** ajustables.
