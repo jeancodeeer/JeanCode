@@ -43,6 +43,25 @@ Sin servidor, sin cuenta, sin telemetría. Tu modelo, tus claves, tu máquina.
 
 <br>
 
+## 01b — DÓNDE ENCAJA Y DÓNDE NO
+
+Ya hay agentes de programación excelentes ([OpenCode](https://github.com/sst/opencode), [Cline](https://github.com/cline/cline), [Claude Code](https://github.com/anthropics/claude-code), [Aider](https://github.com/Aider-AI/aider)). Viven en una terminal o dentro de un editor. JeanCode es el que tiene **ventana propia y ningún servidor en el medio**, y por eso parte de otra pregunta: *¿y si la IA con la que programas respondiera solo ante ti?*
+
+| SI NECESITAS… | JEANCODE |
+|---|---|
+| que tus claves y tu código no pasen por servidores ajenos | No hay backend ni telemetría. Las claves van en el llavero del sistema. Un aviso te frena antes de pegar un secreto a un modelo remoto. |
+| usar el modelo que sea más barato o mejor esta semana | 28 proveedores, Ollama, LM Studio y llama.cpp en un solo selector; cambias a mitad de conversación; respaldo automático si uno falla. |
+| una sola herramienta en tu laptop, tu celular y una PC prestada | Escritorio (Windows, macOS, Linux), web instalable y apps de Android/iOS comparten interfaz e historial. |
+| ver qué se le envía de verdad al modelo | `/context` imprime el prompt exacto y cuánto pesa cada parte en tokens. |
+| deshacer a un agente que se pasó | **Volver aquí** restaura archivos *y* conversación a cualquier mensaje. |
+| una IA que te diga cuándo no sabe | Se le indica no inventar fuentes, los enlaces se pueden verificar a demanda y cada respuesta dice qué modelo la escribió. |
+
+**Límites, sin adornos**
+- El **Agent** y el control de la PC necesitan la app de escritorio; el control de la PC es **solo Windows** y rinde mejor con un modelo potente (un modelo local pequeño puede perder el hilo en tareas largas de pantalla).
+- La app de Android va firmada con clave de depuración y la de iOS **sin firmar** (se instala con AltStore o Sideloadly).
+- La [API Jean](https://github.com/jeancodeeer/Jean-API-Generator) gratuita corre en CPU: unos 8 tokens/s, y su Codespace se duerme tras 30 minutos sin uso. Es un servidor personal, no un servicio alojado. Para trabajo pesado conecta cualquier otra API.
+- Las comparaciones de arriba hablan de dónde vive cada herramienta, no de cuál escribe mejor código: eso depende del modelo que conectes.
+
 ## 02 — EMPIEZA EN UN MINUTO
 
 | TIENES | HAZ ESTO |

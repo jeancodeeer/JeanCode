@@ -43,6 +43,25 @@ No server, no account, no telemetry. Your model, your keys, your machine.
 
 <br>
 
+## 01b — WHERE IT FITS, AND WHERE IT DOESN'T
+
+There are excellent coding agents already ([OpenCode](https://github.com/sst/opencode), [Cline](https://github.com/cline/cline), [Claude Code](https://github.com/anthropics/claude-code), [Aider](https://github.com/Aider-AI/aider)). They live in a terminal or inside an editor. JeanCode is the one with **a window of its own and no server in the middle**, so it is built around a different question: *what if the AI you code with answered only to you?*
+
+| IF YOU NEED… | JEANCODE |
+|---|---|
+| to keep your keys and code off someone else's servers | There is no backend and no telemetry. Keys sit in your OS keychain. A warning stops you before you paste a secret to a remote model. |
+| to use whatever model is cheapest or best this week | 28 providers, Ollama, LM Studio and llama.cpp in one picker; switch mid-conversation; automatic fallback when one fails. |
+| one tool on your laptop, your phone and a borrowed PC | Desktop (Windows, macOS, Linux), an installable web app and Android/iOS builds share the same interface and history. |
+| to see what the model is really being sent | `/context` prints the exact prompt and what each part costs in tokens. |
+| to undo an agent that went too far | **Back to here** restores files *and* the conversation to any message. |
+| AI that tells you when it doesn't know | Answers are told not to invent sources, links can be checked on demand, and every reply names the model that wrote it. |
+
+**Honest limits**
+- The **Agent** and computer control need the desktop app; computer control is **Windows only** and works best with a capable model (small local models can lose the thread on long screen tasks).
+- The Android build is signed with a debug key and the iOS build is **unsigned** (install with AltStore or Sideloadly).
+- The free [Jean API](https://github.com/jeancodeeer/Jean-API-Generator) runs on CPU: about 8 tokens/s, and its Codespace sleeps after 30 idle minutes. It is a personal server, not a hosted service. For heavier work connect any other API.
+- Comparisons above are about where each tool lives, not about which writes better code: that depends on the model you plug in.
+
 ## 02 — QUICK START
 
 | YOU HAVE | DO THIS |
