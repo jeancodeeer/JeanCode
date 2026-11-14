@@ -2,7 +2,7 @@
   "name": "jeancode-mobile",
   "private": true,
   "description": "JeanCode para iOS y Android: la web de JeanCode empaquetada con Capacitor.",
-  "license": "AGPL-3.0-only",
+  "license": "MIT",
   "scripts": {
     "copy-web": "node scripts/copy-web.mjs",
     "icons": "node scripts/icons.mjs && capacitor-assets generate --iconBackgroundColor #000000 --splashBackgroundColor #000000",

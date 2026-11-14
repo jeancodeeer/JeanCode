@@ -2,6 +2,12 @@
 
 JeanCode 1.0 reúne en una sola versión todo lo que se publicó por partes entre la 0.1 y la 0.4. Las releases antiguas se retiraron de GitHub para que solo quede una descarga oficial. Su código sigue completo en las etiquetas de git (`v0.1.0` … `v0.4.2`), así que cualquier build anterior se puede reconstruir con `git checkout vX.Y.Z && cd desktop && npm ci && npm run dist`.
 
+## Próxima versión (en `main`, ya en la web)
+
+- **Licencia MIT** (antes AGPL-3.0): se puede usar, modificar y distribuir también en proyectos comerciales, conservando el aviso de copyright.
+- **¿No tienes API?** en tres pasos con un botón para crear tu Codespace; la URL acepta el nombre del Codespace o cualquier URL suya y usa el router.
+- GIF de demostración en el README, plantillas de issues, guía para contribuir y Discussions.
+
 ## 1.2.0 — 12 de noviembre de 2026
 
 **Respuestas más honestas y una conversación más cómoda** (detalle por punto en `docs/mejoras.md`)

@@ -23,4 +23,4 @@ Lee [AGENTS.md](AGENTS.md): son las reglas del proyecto (rutas siempre dentro de
 
 Busca los issues con la etiqueta [`good first issue`](https://github.com/jeancodeeer/JeanCode/labels/good%20first%20issue). Las traducciones de la interfaz y las pruebas en macOS/Linux son especialmente bienvenidas.
 
-Al contribuir aceptas publicar tu aportación bajo la licencia del proyecto ([AGPL-3.0](LICENSE)).
+Al contribuir aceptas publicar tu aportación bajo la licencia del proyecto ([MIT](LICENSE)).

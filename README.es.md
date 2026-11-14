@@ -198,7 +198,7 @@ Sin backend, sin base de datos, sin analítica. Los mensajes van directo de tu e
 
 ## 10 — LICENCIA
 
-[GNU AGPL-3.0](LICENSE). Puedes usarlo, estudiarlo, modificarlo y compartirlo. Si distribuyes una versión modificada, o la ofreces como servicio en red, debes publicar su código con la misma licencia.
+[MIT](LICENSE). Úsalo, modifícalo y distribúyelo, también en proyectos comerciales; solo conserva el aviso de copyright.
 
 <div align="center">
 
