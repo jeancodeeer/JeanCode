@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Preguntas y opiniones (Discussions)
+    url: https://github.com/jeancodeeer/JeanCode/discussions
+    about: Dudas de uso, ideas a medio cocinar o contarnos cómo lo usas.
+  - name: Problemas de seguridad
+    url: https://github.com/jeancodeeer/JeanCode/blob/main/SECURITY.md
+    about: No abras un issue público: sigue la política de seguridad.

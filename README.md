@@ -24,8 +24,13 @@ No server, no account, no telemetry. Your model, your keys, your machine.
 ```
 
 <p align="center">
-  <img src="docs/screenshots/chat.png" alt="JeanCode chat with Jean Grey on Ollama" width="100%">
-  <br><sub>Chat mode — real answer from Jean Grey running locally on Ollama (CPU, no cloud).</sub>
+  <img src="docs/screenshots/demo.gif" alt="JeanCode tour: chat with streaming, regenerate shorter with versions, command palette, MCP apps catalog and skills" width="100%">
+  <br><sub>10-second tour of the real desktop app: answer, <b>Regenerate → shorter</b> with versions ‹ 2/2 ›, command palette, MCP apps and skills. Answers come from a demo model so the clip is reproducible.</sub>
+</p>
+
+<p align="center">
+  <img src="docs/screenshots/chat.png" alt="JeanCode chat with Jean Grey on Ollama" width="70%">
+  <br><sub>And a real answer from Jean Grey running locally on Ollama (CPU, no cloud).</sub>
 </p>
 
 <br>

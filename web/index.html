@@ -59,7 +59,7 @@
       <p class="note" id="splash-provider-note"></p>
       <label class="field">
         <span class="label">URL base</span>
-        <input id="splash-url" type="text" autocomplete="off" placeholder="https://tu-codespace-8899.app.github.dev/v1" spellcheck="false" inputmode="url">
+        <input id="splash-url" type="text" autocomplete="off" placeholder="nombre de tu Codespace o https://…/v1" spellcheck="false" inputmode="url">
       </label>
       <label class="field">
         <span class="label">Clave</span>
@@ -77,12 +77,19 @@
     <details class="fold">
       <summary>¿No tienes API?</summary>
       <div class="fold-body">
-        <p>Créala gratis en tu propio Codespace con Jean-API-Generator y usa como secreto <code>JEAN_API_KEY</code> una clave nueva:</p>
-        <span class="input-row">
-          <input id="gen-key" type="text" readonly placeholder="pulsa Generar" spellcheck="false" aria-label="Clave generada">
-          <button type="button" class="btn" id="gen-btn">Generar</button>
-        </span>
-        <a class="link-out" id="api-repo-link" href="https://github.com/jeancodeeer/Jean-API-Generator" target="_blank" rel="noopener">Abrir Jean-API-Generator</a>
+        <p>Tu propia API gratis, en tu cuenta de GitHub, en tres pasos (sin tarjeta):</p>
+        <ol class="steps">
+          <li><strong>Genera una clave</strong> y guárdala:
+            <span class="input-row">
+              <input id="gen-key" type="text" readonly placeholder="pulsa Generar" spellcheck="false" aria-label="Clave generada">
+              <button type="button" class="btn" id="gen-btn">Generar</button>
+            </span>
+          </li>
+          <li><strong>Añádela como secreto</strong> <code>JEAN_API_KEY</code> en <a class="link-out" href="https://github.com/settings/codespaces" target="_blank" rel="noopener">tus secretos de Codespaces</a>, con acceso a <code>Jean-API-Generator</code>.</li>
+          <li><strong>Crea tu Codespace</strong> y espera 2–4 minutos: <a class="btn" id="api-codespace-link" href="https://codespaces.new/jeancodeeer/Jean-API-Generator" target="_blank" rel="noopener">Crear mi Codespace</a></li>
+        </ol>
+        <p class="note">Luego pega arriba el <strong>nombre de tu Codespace</strong> o cualquier URL suya: JeanCode encuentra el router solo. Es un servidor personal en CPU (~8 tokens/s) que se duerme tras 30 minutos sin uso.</p>
+        <a class="link-out" id="api-repo-link" href="https://github.com/jeancodeeer/Jean-API-Generator" target="_blank" rel="noopener">Cómo funciona Jean-API-Generator</a>
       </div>
     </details>
     <p class="fine">La URL y la clave se quedan en este equipo. JeanCode no tiene servidor propio. <span id="splash-version"></span></p>

@@ -196,11 +196,32 @@ function incompatibleFormat(u) {
  * Corrige lo seguro (barra final, ruta de petición pegada, proveedor que no corresponde al host, la
  * capa OpenAI de Gemini/Ollama/Anthropic) y rechaza lo que fallaría o expondría la clave.
  */
+/**
+ * Jean-API-Generator: acepta el nombre del Codespace, la URL del editor (…github.dev) o la de cualquier
+ * puerto de modelo, y devuelve la URL del router (puerto 8899, que trae todos los modelos). null si no aplica.
+ */
+export function jeanRouterUrl(input) {
+  const raw = String(input || '').trim().replace(/\/+$/, '');
+  if (/^[a-z0-9][a-z0-9-]{4,}[a-z0-9]$/i.test(raw) && !raw.includes('.')) return `https://${raw.toLowerCase()}-8899.app.github.dev/v1`;
+  let u;
+  try { u = new URL(/^https?:\/\//i.test(raw) ? raw : `https://${raw}`); } catch { return null; }
+  const editor = u.hostname.match(/^([a-z0-9-]+)\.github\.dev$/i);
+  if (editor && !/\.app\.github\.dev$/i.test(u.hostname)) return `https://${editor[1].toLowerCase()}-8899.app.github.dev/v1`;
+  const port = u.hostname.match(/^([a-z0-9-]+)-(8888|8889|8890)\.app\.github\.dev$/i);
+  if (port) return `https://${port[1].toLowerCase()}-8899.app.github.dev/v1`;
+  return null;
+}
+
 export function validateEndpoint({ url, key, provider }, { existing = [], desktop = false, pageProtocol = (typeof location !== 'undefined' ? location.protocol : 'https:') } = {}) {
   const errors = [];
   const warnings = [];
   let clean = normalizeUrl(url);
   let prov = providerById(provider);
+  // tu Codespace en cualquier forma (nombre, URL del editor o de un puerto de modelo) -> router 8899
+  if (prov.id === 'jean') {
+    const r = jeanRouterUrl(url);
+    if (r && normalizeUrl(r) !== clean) { warnings.push('Se usa el router de tu Codespace (puerto 8899): trae todos sus modelos.'); clean = normalizeUrl(r); }
+  }
   const k = String(key ?? '').trim();
   let u;
   try { u = new URL(clean); } catch { errors.push('La URL no es válida. Ejemplo: https://tu-servidor/v1'); }

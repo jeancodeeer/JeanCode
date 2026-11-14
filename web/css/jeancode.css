@@ -527,3 +527,8 @@ kbd { font: 600 11px/1 var(--mono); border: 1px solid var(--line-3); padding: 2p
 .panel.palette .popup-list li { display: flex; justify-content: space-between; gap: var(--s3); padding: var(--s2) var(--s4); cursor: pointer; color: var(--smoke); }
 .panel.palette .popup-list li.active, .panel.palette .popup-list li:hover { background: var(--raise-2); color: var(--ink); }
 @media (hover: none) { .thread .t-acts, .msg-actions { opacity: 1; } }
+
+/* ¿No tienes API? en tres pasos */
+.fold-body ol.steps { margin: var(--s2) 0 var(--s3); padding-left: 1.2em; display: grid; gap: var(--s3); }
+.fold-body ol.steps .input-row { margin-top: var(--s2); }
+.fold-body ol.steps .btn { margin-top: var(--s2); display: inline-flex; }

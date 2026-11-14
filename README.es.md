@@ -24,8 +24,13 @@ Sin servidor, sin cuenta, sin telemetría. Tu modelo, tus claves, tu máquina.
 ```
 
 <p align="center">
-  <img src="docs/screenshots/chat.png" alt="JeanCode chat with Jean Grey on Ollama" width="100%">
-  <br><sub>Modo chat — respuesta real de Jean Grey ejecutándose en local con Ollama (CPU, sin nube).</sub>
+  <img src="docs/screenshots/demo.gif" alt="Recorrido por JeanCode: chat con streaming, regenerar más corta con versiones, paleta de comandos, catálogo de apps MCP y skills" width="100%">
+  <br><sub>10 segundos por la app de escritorio real: respuesta, <b>Regenerar → más corta</b> con versiones ‹ 2/2 ›, paleta de comandos, apps MCP y skills. Las respuestas salen de un modelo de demostración para que el vídeo sea reproducible.</sub>
+</p>
+
+<p align="center">
+  <img src="docs/screenshots/chat.png" alt="Chat de JeanCode con Jean Grey en Ollama" width="70%">
+  <br><sub>Y una respuesta real de Jean Grey ejecutándose en local con Ollama (CPU, sin nube).</sub>
 </p>
 
 <br>

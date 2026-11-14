@@ -1,0 +1,24 @@
+name: Algo no funciona / Something is broken
+description: Un fallo de JeanCode (web, escritorio o móvil)
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: "Gracias por avisar. **Nunca pegues claves ni tokens aquí.** Usa `/doctor` en la app y copia su resultado: no contiene claves."
+  - type: textarea
+    id: what
+    attributes: { label: Qué pasó y qué esperabas, placeholder: "Al pulsar X pasa Y; esperaba Z" }
+    validations: { required: true }
+  - type: dropdown
+    id: where
+    attributes: { label: Dónde, options: [Web, Escritorio Windows, Escritorio macOS, Escritorio Linux, Android, iOS] }
+    validations: { required: true }
+  - type: input
+    id: version
+    attributes: { label: Versión, placeholder: "1.2.0 (Más → Sobre)" }
+  - type: input
+    id: provider
+    attributes: { label: Proveedor y modelo, placeholder: "Ollama · qwen2.5-coder:7b / OpenRouter · …" }
+  - type: textarea
+    id: doctor
+    attributes: { label: Resultado de /doctor (opcional), render: text }

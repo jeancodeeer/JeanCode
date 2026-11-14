@@ -702,3 +702,16 @@ test('enlaces: DNS validado, nada de red local aunque el nombre parezca público
   assert.equal((await L.checkLink('ftp://example.com/')).ok, false);
   assert.equal((await L.checkLink('https://u:p@example.com/')).ok, false);
 });
+
+test('Jean API: el nombre del Codespace o cualquier URL suya lleva al router 8899', () => {
+  assert.equal(R.jeanRouterUrl('jeancode-api-7vrvr96vw54x3wpq5'), 'https://jeancode-api-7vrvr96vw54x3wpq5-8899.app.github.dev/v1');
+  assert.equal(R.jeanRouterUrl('https://Fluffy-Space-abc123.github.dev/'), 'https://fluffy-space-abc123-8899.app.github.dev/v1', 'URL del editor');
+  assert.equal(R.jeanRouterUrl('https://my-cs-8888.app.github.dev/v1'), 'https://my-cs-8899.app.github.dev/v1', 'puerto de Grey');
+  assert.equal(R.jeanRouterUrl('my-cs-8890.app.github.dev'), 'https://my-cs-8899.app.github.dev/v1', 'sin https');
+  assert.equal(R.jeanRouterUrl('https://my-cs-8899.app.github.dev/v1'), null, 'ya es el router');
+  assert.equal(R.jeanRouterUrl('https://api.groq.com/openai/v1'), null);
+  const v = R.validateEndpoint({ url: 'jeancode-api-7vrvr96vw54x3wpq5', key: 'k', provider: 'jean' });
+  assert.equal(v.ok, true, JSON.stringify(v.errors));
+  assert.equal(v.url, 'https://jeancode-api-7vrvr96vw54x3wpq5-8899.app.github.dev/v1');
+  assert.ok(v.warnings.some((w) => /router/.test(w)));
+});

@@ -70,6 +70,7 @@ function showSplash() {
   $('#splash').hidden = false;
   $('#app').hidden = true;
   $('#api-repo-link').href = CONFIG.apiRepoUrl;
+  $('#api-codespace-link').href = `https://codespaces.new/${CONFIG.owner}/Jean-API-Generator`;
 }
 
 async function enterApp() {

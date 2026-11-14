@@ -1,0 +1,14 @@
+name: Idea o mejora / Feature request
+description: Algo que JeanCode debería hacer
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes: { label: Qué problema tienes, description: "Cuéntalo como un momento concreto: «cuando hago X, me falta Y»." }
+    validations: { required: true }
+  - type: textarea
+    id: idea
+    attributes: { label: Qué te gustaría que pasara }
+  - type: textarea
+    id: alternatives
+    attributes: { label: Qué usas hoy para resolverlo (otra herramienta, un truco…) }
