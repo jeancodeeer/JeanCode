@@ -2,6 +2,17 @@
 
 JeanCode 1.0 reúne en una sola versión todo lo que se publicó por partes entre la 0.1 y la 0.4. Las releases antiguas se retiraron de GitHub para que solo quede una descarga oficial. Su código sigue completo en las etiquetas de git (`v0.1.0` … `v0.4.2`), así que cualquier build anterior se puede reconstruir con `git checkout vX.Y.Z && cd desktop && npm ci && npm run dist`.
 
+## 1.2.2 — 15 de noviembre de 2026
+
+Versión de emergencia.
+
+**El puente para APIs que rechazan la web vuelve a funcionar en todos los casos**
+- Si el puerto 8899 de tu PC está ocupado, `launch.py` de Jean-API-Generator pone su router en el 9899 (o el siguiente libre). JeanCode no reconocía esa URL como tu Jean-API-Generator y las APIs que rechazan llamadas desde la web (NVIDIA, SambaNova, Z.ai) fallaban en la web y en el móvil. Ahora también se reconocen esos puertos, en el relay y en el panel de Hugging Face.
+- Comprobado en vivo: con tu Jean-API-Generator configurado, JeanCode web llega a Z.ai, NVIDIA y SambaNova por su relay; sin él, el navegador las bloquea.
+
+**Sin Codespaces**
+- Jean-API-Generator ya no depende de GitHub Codespaces: corre en Kaggle (GPU gratis) o en tu PC con `python3 launch.py`. Los textos de JeanCode (inicio, ayuda, errores, panel de Hugging Face, Fénix) ahora hablan de Kaggle o de tu propio servidor. Las URLs antiguas de Codespace se siguen reconociendo.
+
 ## 1.2.1 — 15 de noviembre de 2026
 
 **Tu propia API, ahora con GPU gratis en Kaggle**

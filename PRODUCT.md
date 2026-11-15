@@ -12,7 +12,7 @@ web
 
 ## Users
 
-Programadores y vibecoders hispanohablantes que prefieren una interfaz gráfica antes que una terminal para trabajar con modelos de lenguaje. Llegan con su propia API (un Codespace de Jean-API-Generator, un proveedor como OpenAI/OpenRouter/Groq, o modelos locales con Ollama/LM Studio) y quieren chatear, generar proyectos descargables o dejar que un agente trabaje en una carpeta de su PC. Usan la web en el móvil con frecuencia *(confirmado por mis capturas desde un iPhone)*.
+Programadores y vibecoders hispanohablantes que prefieren una interfaz gráfica antes que una terminal para trabajar con modelos de lenguaje. Llegan con su propia API (su Jean-API-Generator en Kaggle o en su PC, un proveedor como OpenAI/OpenRouter/Groq, o modelos locales con Ollama/LM Studio) y quieren chatear, generar proyectos descargables o dejar que un agente trabaje en una carpeta de su PC. Usan la web en el móvil con frecuencia *(confirmado por mis capturas desde un iPhone)*.
 
 ## Product Purpose
 
@@ -21,14 +21,14 @@ JeanCode es el cliente de los modelos Jean (Grey, Marvel, Fénix) y de otras API
 ## Positioning
 
 - Sin servidor ni cuenta: cada usuario trae su API; JeanCode no ve sus datos ni sus claves.
-- Puente directo con Jean-API-Generator: detecta sus puertos, carga modelos de Hugging Face en el Codespace y se conecta a Fénix.
+- Puente directo con Jean-API-Generator: detecta sus puertos, carga modelos de Hugging Face en él y se conecta a Fénix.
 - Corrige quejas concretas de Claude Code y OpenCode (compactación transparente, consumo visible, checkpoints que cubren comandos, permisos por comando exacto, interfaz sin CDN).
 
 ## Operating Context
 
 - Web en GitHub Pages (https://jeancodeeer.github.io/JeanCode/), instalable como PWA y usable sin conexión.
 - Escritorio Electron (Windows, macOS, Linux) desde GitHub Releases.
-- Los modelos Jean corren en CPU (Codespace de 16 GB): las respuestas son lentas; el interruptor RAZONAR existe por eso.
+- Los modelos Jean corren en las GPU gratis de Kaggle o en la máquina del usuario (en CPU son lentos; el interruptor RAZONAR existe por eso).
 
 ## Capabilities and Constraints
 

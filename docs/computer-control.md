@@ -62,7 +62,7 @@ Observa (`inspect_screen` o `screenshot`), decide, hace **una** acción y verifi
 | Alto: atajos con Win/Alt+F4, abrir shells o con argumentos, **teclear en una terminal**, borrar archivos, comandos destructivos | pregunta **siempre** | no |
 
 - Los comandos de terminal y la escritura de archivos siguen el modo de permisos del agente. Un comando destructivo (`rm -rf`, `git reset --hard`, `reg delete`, `shutdown`…) pregunta aunque esté en tu lista de permitidos.
-- Enviar una captura a un proveedor externo pide permiso, salvo que lo permitas en Ajustes. Con modelos locales o con tu Codespace, la captura no sale de tus equipos.
+- Enviar una captura a un proveedor externo pide permiso, salvo que lo permitas en Ajustes. Con modelos locales o con tu propio Jean-API-Generator, la captura no va a terceros.
 - En modo PLAN el agente solo puede observar.
 
 ## Protecciones

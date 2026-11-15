@@ -60,7 +60,7 @@
       <p class="note" id="splash-provider-note"></p>
       <label class="field">
         <span class="label">URL base</span>
-        <input id="splash-url" type="text" autocomplete="off" placeholder="nombre de tu Codespace o https://…/v1" spellcheck="false" inputmode="url">
+        <input id="splash-url" type="text" autocomplete="off" placeholder="https://….trycloudflare.com/v1 o la URL de tu servidor" spellcheck="false" inputmode="url">
       </label>
       <label class="field">
         <span class="label">Clave</span>
@@ -308,10 +308,10 @@
     </section>
     <section data-info="api" hidden>
       <ol>
-        <li>Crea un Codespace desde <a href="https://github.com/jeancodeeer/Jean-API-Generator" target="_blank" rel="noopener">Jean-API-Generator</a>.</li>
-        <li>Agrega el secreto <code>JEAN_API_KEY</code> (puedes generarla en la pantalla de inicio).</li>
-        <li>Inicia el Codespace y deja públicos los puertos 8888 (Grey) y 8889 (Marvel).</li>
-        <li>Pega en JeanCode la URL del puerto terminada en <code>/v1</code> y tu clave.</li>
+        <li>Abre el notebook de <a href="https://github.com/jeancodeeer/Jean-API-Generator" target="_blank" rel="noopener">Jean-API-Generator</a> en tu cuenta de Kaggle (GPU gratis, sin tarjeta), o en tu PC con Linux/WSL ejecuta <code>python3 launch.py</code>.</li>
+        <li>En Kaggle: Settings → GPU T4 x2 e Internet On; si quieres una clave fija, agrega el secreto <code>JEAN_API_KEY</code> (puedes generarla en la pantalla de inicio).</li>
+        <li>Run All (o el comando) y espera 3–6 minutos: imprime la URL y la clave.</li>
+        <li>Pega en JeanCode la URL terminada en <code>/v1</code> y tu clave.</li>
       </ol>
     </section>
     <section data-info="desktop" hidden>
@@ -340,7 +340,7 @@
   </div>
 
   <section data-pane="conn">
-    <p class="note">Tu Jean-API-Generator y cualquier otra API. Para el tuyo basta la URL que imprime el notebook de Kaggle (o el puerto 8899 de un Codespace): trae todos sus modelos, incluidos los que cargues desde Hugging Face.</p>
+    <p class="note">Tu Jean-API-Generator y cualquier otra API. Para el tuyo basta la URL que imprime el notebook de Kaggle (o la de <code>launch.py</code> en tu PC): trae todos sus modelos, incluidos los que cargues desde Hugging Face.</p>
     <ul class="rows" id="endpoint-list"></ul>
     <form id="endpoint-form" class="add-form">
       <select id="ep-provider" aria-label="Proveedor"></select>
@@ -368,7 +368,7 @@
     <label class="check"><input type="checkbox" id="allow-paid"> Permitir modelos de pago en AUTO y en el respaldo automático</label>
     <p class="note">Sin esta casilla, JeanCode nunca pasa solo a un modelo que cobra: solo si tú lo eliges o lo pones en tu cadena.</p>
     <h3>Fénix</h3>
-    <p class="note">El modelo más capaz (27B). En un Codespace de 16 GB corre solo, en el puerto 8890: actívalo con <code>.\jean-api.ps1 fenix-mode</code> y búscalo aquí. Responde más lento.</p>
+    <p class="note">El modelo más capaz (27B). En Kaggle cabe en las dos GPU: pon <code>MODELOS = "fenix"</code> en el notebook (o <code>JEAN_MODELS=fenix</code> con <code>launch.py</code>) y búscalo aquí. Responde más lento.</p>
     <div class="row gap"><button class="btn" type="button" id="fenix-find">Buscar Fénix</button><span class="mono fenix-status" id="fenix-status">—</span></div>
     <h3>Modelos de esta PC</h3>
     <p class="note">Ollama, LM Studio, llama.cpp, vLLM, Jan o un Jean local. Nada sale de tu equipo.</p>
@@ -445,7 +445,7 @@
     <label class="check pc-gap"><input type="checkbox" id="pc-minimize"> Minimizar JeanCode mientras controla (vuelve para pedir permisos)</label>
     <label class="field"><span class="label">Capturas a proveedores externos</span>
       <select id="pc-shots"><option value="ask">Preguntar antes de enviar cada captura</option><option value="allow">Permitir</option></select></label>
-    <p class="note">Con modelos locales o tu Codespace las capturas no salen de tus equipos. JeanCode nunca aparece en las capturas.</p>
+    <p class="note">Con modelos locales o tu propio servidor las capturas no van a terceros. JeanCode nunca aparece en las capturas.</p>
     <h3>Registro de acciones</h3>
     <pre class="route-log" id="pc-log"></pre>
     <div class="row gap"><button class="btn" type="button" id="pc-log-refresh">Actualizar</button><button class="btn" type="button" id="pc-log-copy">Copiar registro</button></div>
@@ -541,19 +541,19 @@
 
 <dialog class="panel wide" id="panel-hf">
   <div class="panel-head"><h2>Modelos de Hugging Face</h2><button class="icon-btn" data-close aria-label="Cerrar"><svg class="i"><use href="#i-close"/></svg></button></div>
-  <p class="note">Busca un modelo GGUF y cárgalo en un puerto de tu Codespace de Jean-API-Generator.</p>
+  <p class="note">Busca un modelo GGUF y cárgalo en un puerto de tu Jean-API-Generator (Kaggle o tu servidor).</p>
   <div class="hf-grid">
     <label class="field">
       <span class="label">Token de Hugging Face (opcional)</span>
       <input id="hf-token" type="password" placeholder="hf_… solo para modelos privados" spellcheck="false" autocomplete="off">
     </label>
     <label class="field">
-      <span class="label">Control de tu Codespace</span>
+      <span class="label">Control de tu Jean-API-Generator</span>
       <input id="hf-control" type="url" placeholder="https://….trycloudflare.com" spellcheck="false">
     </label>
   </div>
-  <p class="note" id="hf-control-note">El token se queda en este equipo y solo viaja a tu Codespace al descargar.</p>
-  <h3>Tu Codespace</h3>
+  <p class="note" id="hf-control-note">El token se queda en este equipo y solo viaja a tu Jean-API-Generator al descargar.</p>
+  <h3>Tu servidor</h3>
   <ul class="rows" id="hf-slots"><li>Pulsa Actualizar para ver qué sirve cada puerto.</li></ul>
   <div class="row gap"><button class="btn" type="button" id="hf-refresh">Actualizar</button><span class="mono note" id="hf-res"></span></div>
   <h3>Buscar</h3>
@@ -567,7 +567,7 @@
     <ul class="hf-files" id="hf-files"></ul>
     <div class="row gap wrap">
       <select id="hf-slot" aria-label="Puerto"></select>
-      <button class="btn primary" type="button" id="hf-load" disabled>Cargar en mi Codespace</button>
+      <button class="btn primary" type="button" id="hf-load" disabled>Cargar en mi servidor</button>
     </div>
     <div class="hf-progress" id="hf-progress" hidden><i id="hf-bar"></i></div>
     <p class="mono note" id="hf-job"></p>

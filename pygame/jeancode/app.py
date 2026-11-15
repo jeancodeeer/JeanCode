@@ -12,7 +12,7 @@ from jeancode import chat as C
 from jeancode import net, providers
 from jeancode.store import Store
 
-VERSION = "1.2.1"
+VERSION = "1.2.2"
 
 NIGHT = (0, 0, 0)
 RAISE = (11, 11, 11)

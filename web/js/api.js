@@ -105,10 +105,10 @@ export function explain(status, body, ep) {
   const detail = serverMessage(body);
   const tail = detail ? ` Detalle: ${detail}` : '';
   if (status === 401 || kindOf(status, detail) === 'auth') return `${p.name} rechazó la clave (${status}). ${jean ? 'Revisa tu JEAN_API_KEY.' : `Revisa la clave (${p.keyHint}).`}`;
-  if (status === 403) return jean ? 'Acceso denegado (403). ¿El puerto del Codespace está como público? (jean-api.ps1 start lo hace)' : `${p.name} denegó el acceso (403): la clave no tiene permiso para ese modelo o recurso.${tail}`;
+  if (status === 403) return jean ? 'Acceso denegado (403). Revisa que la URL sea la que imprimió tu Jean-API-Generator.' : `${p.name} denegó el acceso (403): la clave no tiene permiso para ese modelo o recurso.${tail}`;
   if (status === 404) return jean && !detail ? 'No se encontró la ruta (404). La URL debe terminar en /v1.' : `No encontrado (404): la URL o el modelo no existen en ${p.name}.${tail}`;
   if (status === 429) return `${p.name} limitó las peticiones (429): espera un poco o usa otro modelo.${tail}`;
-  if (status === 503 && jean) return detail ? `Jean no está listo (503): ${detail}` : 'El modelo todavía está cargando (503). Espera 2–4 minutos tras despertar el Codespace.';
+  if (status === 503 && jean) return detail ? `Jean no está listo (503): ${detail}` : 'El modelo todavía está cargando (503). Espera 2–5 minutos tras arrancarlo.';
   if (status >= 500) return `${p.name} tuvo un error interno (${status}). Suele ser temporal.${tail}`;
   return `${p.name} respondió ${status}.${tail}`;
 }
@@ -117,7 +117,7 @@ function networkHint(ep) {
   const p = providerOf(ep);
   if (p.id === 'jean') return /\.trycloudflare\.com/i.test(ep.url)
     ? 'No se pudo conectar con tu notebook de Kaggle: la sesión terminó o se reinició. Pulsa Run All otra vez y pega la URL nueva.'
-    : 'No se pudo conectar. Puede que el Codespace esté dormido, que el puerto no sea público o que la URL esté mal.';
+    : 'No se pudo conectar con tu Jean-API-Generator. ¿Sigue corriendo? Si lo reiniciaste, la URL pudo cambiar.';
   if (p.local) return `No se pudo conectar con ${p.name}. ¿Está abierto en esta PC?`;
   return `No se pudo conectar con ${p.name}. Revisa la URL y tu conexión.`;
 }
@@ -210,7 +210,7 @@ async function request(ep, path, init = {}) {
     if (e.name === 'TimeoutError') throw new ApiError(`${providerOf(ep).name} no respondió a tiempo.`, 0, '', 'timeout');
     // fallo de red de un proveedor remoto desde la web: casi siempre CORS. Si hay relay o red nativa, se reintenta por ahí.
     if (rt.via === 'direct' && !init.retried && markCorsBlocked(ep)) return request(ep, path, { ...init, retried: true });
-    throw new ApiError(rt.via === 'relay' ? 'No se pudo conectar con el relay de tu Jean-API-Generator: ¿el Codespace está despierto y el puerto 8899 es público?'
+    throw new ApiError(rt.via === 'relay' ? 'No se pudo conectar con el relay de tu Jean-API-Generator: ¿sigue corriendo y la URL es la última que imprimió?'
       : corsExposed(ep) ? `${networkHint(ep)} Si la URL es correcta, puede ser esto: ${corsHint(ep)}` : networkHint(ep), 0);
   }
   if (!res.ok) { const body = await res.text().catch(() => ''); throw new ApiError(explain(res.status, body, ep), res.status, serverMessage(body)); }
@@ -403,7 +403,7 @@ async function chatOnce({ ep, model, messages, signal, onDelta, onReasoning, onT
     if (e instanceof ApiError) throw e;
     if (signal?.aborted) throw new DOMException('aborted', 'AbortError');
     if (ctl.signal.reason?.name === 'TimeoutError') throw new ApiError(`${providerOf(ep).name} no empezó a responder a tiempo.`, 0, '', 'timeout');
-    throw new ApiError(rt.via === 'relay' ? 'No se pudo conectar con el relay de tu Jean-API-Generator: ¿el Codespace está despierto y el puerto 8899 es público?'
+    throw new ApiError(rt.via === 'relay' ? 'No se pudo conectar con el relay de tu Jean-API-Generator: ¿sigue corriendo y la URL es la última que imprimió?'
       : corsExposed(ep) ? `${networkHint(ep)} Si la URL es correcta, puede ser esto: ${corsHint(ep)}` : networkHint(ep), 0);
   } finally {
     clearTimeout(timer);
@@ -437,6 +437,8 @@ async function chatOnce({ ep, model, messages, signal, onDelta, onReasoning, onT
 // (todos los modelos en una URL) en :8899.
 const JEAN_PORTS = ['8899', '8888', '8889', '8890'];
 export const ROUTER_PORT = '8899';
+/** launch.py usa el 8899; si está ocupado, pasa al 9899 y sigue (9900, 9901...). */
+const FALLBACK_ROUTER_PORT = /:(9899|99\d\d)(?=\/|$)/;
 
 /** URLs de los otros puertos del mismo servidor (Codespaces "-8888.app.github.dev" o host:8888). */
 export function siblingUrls(url) {
@@ -453,9 +455,11 @@ export function siblingUrls(url) {
   return out;
 }
 
-/** true si la URL es el router de un Jean-API-Generator: el túnel de Kaggle (….trycloudflare.com) o el puerto 8899. */
+/** true si la URL es el router de un Jean-API-Generator: el túnel de Kaggle (….trycloudflare.com), el puerto 8899
+ * o el de respaldo de launch.py (9899 en adelante) cuando el 8899 estaba ocupado. */
 export const isRouterUrl = (url) => /^https:\/\/[a-z0-9-]+\.trycloudflare\.com(\/|$)/i.test(String(url))
-  || new RegExp(`[-:]${ROUTER_PORT}(\\.app\\.github\\.dev)?(?=/|$)`).test(String(url));
+  || new RegExp(`[-:]${ROUTER_PORT}(\\.app\\.github\\.dev)?(?=/|$)`).test(String(url))
+  || FALLBACK_ROUTER_PORT.test(String(url));
 
 /**
  * Completa la conexión a un Jean-API-Generator. Si el router (:8899) responde, basta con él: una URL,
