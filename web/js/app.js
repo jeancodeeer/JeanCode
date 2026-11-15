@@ -390,7 +390,7 @@ function renderFenix() {
   const box = $('#fenix-status');
   if (!box) return;
   const f = state.models.find((m) => /fenix/i.test(m.id));
-  box.textContent = f ? `Conectado: ${f.id} en ${f.ep.url}` : 'No encontrado. Actívalo en tu Codespace y pulsa Buscar Fénix.';
+  box.textContent = f ? `Conectado: ${f.id} en ${f.ep.url}` : 'No encontrado. Sírvelo con MODELOS = "fenix" en Kaggle (o JEAN_MODELS=fenix) y pulsa Buscar Fénix.';
   box.classList.toggle('ok', !!f);
 }
 
@@ -1820,13 +1820,13 @@ const ctl = (path, body) => {
   const ep = jeanEndpoint();
   if (!ep) throw new Error('Conecta primero tu Jean-API-Generator.');
   const base = $('#hf-control').value.trim().replace(/\/+$/, '');
-  if (!base) throw new Error('Falta la URL del control (puerto 8899 de tu Codespace).');
+  if (!base) throw new Error('Falta la URL de tu Jean-API-Generator (la que imprime el notebook o launch.py).');
   return control(base, ep.key, path, body);
 };
 
 async function refreshSlots() {
   const list = $('#hf-slots');
-  list.innerHTML = '<li>Consultando tu Codespace…</li>';
+  list.innerHTML = '<li>Consultando tu servidor…</li>';
   try {
     const st = await ctl('/status');
     hf.ram = st.ram_available || 0;

@@ -221,7 +221,7 @@ export function validateEndpoint({ url, key, provider }, { existing = [], deskto
   // tu Codespace en cualquier forma (nombre, URL del editor o de un puerto de modelo) -> router 8899
   if (prov.id === 'jean') {
     const r = jeanRouterUrl(url);
-    if (r && normalizeUrl(r) !== clean) { warnings.push('Se usa el router de tu Codespace (puerto 8899): trae todos sus modelos.'); clean = normalizeUrl(r); }
+    if (r && normalizeUrl(r) !== clean) { warnings.push('Se usa el router de tu Jean-API-Generator (puerto 8899): trae todos sus modelos.'); clean = normalizeUrl(r); }
   }
   const k = String(key ?? '').trim();
   let u;

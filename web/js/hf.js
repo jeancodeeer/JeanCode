@@ -1,4 +1,4 @@
-// Hugging Face → tu Codespace: búsqueda de modelos GGUF en el Hub y control del
+// Hugging Face → tu Jean-API-Generator: búsqueda de modelos GGUF en el Hub y control del
 // servidor de Jean-API-Generator (puerto 8899) para cargarlos en un puerto de modelo.
 import { normalizeUrl } from './api.js';
 
@@ -61,14 +61,14 @@ export async function control(base, key, path, body) {
   let status, text;
   if (b?.http) {
     const r = await b.http({ url: base + path, method, headers, body: body ? JSON.stringify(body) : undefined });
-    if (r.error) throw new Error('No se pudo conectar con el control (puerto 8899 público y Codespace encendido).');
+    if (r.error) throw new Error('No se pudo conectar con tu Jean-API-Generator: ¿sigue corriendo?');
     status = r.status; text = r.body;
   } else {
     let res;
     try {
       res = await fetch(base + path, { method, headers, body: body ? JSON.stringify(body) : undefined });
     } catch {
-      throw new Error('No se pudo conectar con el control: el puerto 8899 debe ser público y el Codespace estar encendido.');
+      throw new Error('No se pudo conectar con tu Jean-API-Generator: ¿sigue corriendo y la URL es la última que imprimió?');
     }
     status = res.status; text = await res.text();
   }
