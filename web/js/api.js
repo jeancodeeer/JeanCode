@@ -437,6 +437,8 @@ async function chatOnce({ ep, model, messages, signal, onDelta, onReasoning, onT
 // (todos los modelos en una URL) en :8899.
 const JEAN_PORTS = ['8899', '8888', '8889', '8890'];
 export const ROUTER_PORT = '8899';
+/** launch.py usa el 8899; si está ocupado, pasa al 9899 y sigue (9900, 9901...). */
+const FALLBACK_ROUTER_PORT = /:(9899|99\d\d)(?=\/|$)/;
 
 /** URLs de los otros puertos del mismo servidor (Codespaces "-8888.app.github.dev" o host:8888). */
 export function siblingUrls(url) {
@@ -453,9 +455,11 @@ export function siblingUrls(url) {
   return out;
 }
 
-/** true si la URL es el router de un Jean-API-Generator: el túnel de Kaggle (….trycloudflare.com) o el puerto 8899. */
+/** true si la URL es el router de un Jean-API-Generator: el túnel de Kaggle (….trycloudflare.com), el puerto 8899
+ * o el de respaldo de launch.py (9899 en adelante) cuando el 8899 estaba ocupado. */
 export const isRouterUrl = (url) => /^https:\/\/[a-z0-9-]+\.trycloudflare\.com(\/|$)/i.test(String(url))
-  || new RegExp(`[-:]${ROUTER_PORT}(\\.app\\.github\\.dev)?(?=/|$)`).test(String(url));
+  || new RegExp(`[-:]${ROUTER_PORT}(\\.app\\.github\\.dev)?(?=/|$)`).test(String(url))
+  || FALLBACK_ROUTER_PORT.test(String(url));
 
 /**
  * Completa la conexión a un Jean-API-Generator. Si el router (:8899) responde, basta con él: una URL,

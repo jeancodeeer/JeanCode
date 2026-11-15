@@ -164,6 +164,9 @@ test('api: errores por proveedor y router del Codespace', () => {
   assert.equal(A.serverMessage('<html>bad gateway</html>'), '');
   assert.equal(A.isRouterUrl('https://c-8899.app.github.dev/v1'), true);
   assert.equal(A.isRouterUrl('http://localhost:8899/v1'), true);
+  assert.equal(A.isRouterUrl('http://127.0.0.1:9899/v1'), true, 'puerto de respaldo de launch.py');
+  assert.equal(A.isRouterUrl('http://127.0.0.1:9900/v1'), true);
+  assert.equal(A.isRouterUrl('http://127.0.0.1:9898/v1'), false);
   assert.equal(A.isRouterUrl('https://c-8888.app.github.dev/v1'), false);
   assert.ok(A.siblingUrls('https://c-8888.app.github.dev/v1').includes('https://c-8899.app.github.dev/v1'));
   assert.equal(A.sameServer('https://c-8899.app.github.dev/v1', 'https://c-8890.app.github.dev/v1'), true);
@@ -173,6 +176,7 @@ test('hf: el panel de Hugging Face encuentra el control también desde el router
   assert.equal(H.controlUrlFrom('https://c-8899.app.github.dev/v1'), 'https://c-8899.app.github.dev');
   assert.equal(H.controlUrlFrom('https://c-8888.app.github.dev/v1'), 'https://c-8899.app.github.dev');
   assert.equal(H.controlUrlFrom('http://localhost:8899/v1'), 'http://localhost:8899');
+  assert.equal(H.controlUrlFrom('http://127.0.0.1:9899/v1'), 'http://127.0.0.1:9899');
 });
 
 /* ------------------------------------------------------------ fase 3: capacidades, decisión, coste */
