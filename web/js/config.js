@@ -19,7 +19,7 @@ const { owner, repo } = detectRepo();
 // Para usar uno: guarda el archivo en web/assets/ (SVG o PNG cuadrado) y pon su ruta,
 // por ejemplo  logo: 'assets/logo.svg'. También reemplaza web/favicon.svg.
 export const BRAND = {
-  logo: null,
+  logo: 'favicon.svg',
 };
 
 export const CONFIG = {
@@ -27,6 +27,8 @@ export const CONFIG = {
   repo,
   repoUrl: `https://github.com/${owner}/${repo}`,
   apiRepoUrl: `https://github.com/${owner}/Jean-API-Generator`,
+  // abre el notebook de Jean-API-Generator en Kaggle (GPU gratis, cuenta del propio usuario)
+  kaggleUrl: `https://www.kaggle.com/kernels/welcome?src=https://github.com/${owner}/Jean-API-Generator/blob/main/kaggle/jean-api.ipynb`,
   releasesApi: `https://api.github.com/repos/${owner}/${repo}/releases/latest`,
   releasesUrl: `https://github.com/${owner}/${repo}/releases/latest`,
   changelogUrl: `https://raw.githubusercontent.com/${owner}/${repo}/main/CHANGELOG.md`,

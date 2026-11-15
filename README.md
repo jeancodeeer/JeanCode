@@ -7,7 +7,7 @@
 # JeanCode — the open-source AI coding agent that brings its own model
 
 **Chat · generate whole projects · run an agent that edits code, runs commands, checks its own errors and can operate your PC.**<br>
-Any OpenAI-compatible model: **Ollama, llama.cpp, LM Studio, OpenRouter, NVIDIA NIM, Groq, DeepSeek** and 28 cloud providers — or your own **free** Jean API on GitHub Codespaces.
+Any OpenAI-compatible model: **Ollama, llama.cpp, LM Studio, OpenRouter, NVIDIA NIM, Groq, DeepSeek** and 28 cloud providers — or your own **free** Jean API on Kaggle's free GPUs.
 
 [![OPEN](https://img.shields.io/badge/OPEN-JEANCODE_WEB-000000?style=for-the-badge&labelColor=ffffff)](https://jeancodeeer.github.io/JeanCode/)
 [![DOWNLOAD](https://img.shields.io/badge/DOWNLOAD-WIN_%7C_MAC_%7C_LINUX-ffffff?style=for-the-badge&labelColor=000000)](https://github.com/jeancodeeer/JeanCode/releases/latest)
@@ -38,7 +38,7 @@ No server, no account, no telemetry. Your model, your keys, your machine.
 ## 01 — WHY JEANCODE
 
 - **Bring any model.** 28 cloud providers built in (OpenAI, Anthropic, Gemini, OpenRouter, Groq, NVIDIA NIM, DeepSeek, Mistral, xAI, Together, Fireworks, Cerebras, SambaNova, DeepInfra, Moonshot/Kimi, Z.ai/GLM, Qwen, MiniMax, Cohere and more) plus **Ollama, LM Studio, LiteLLM, llama.cpp, vLLM, Jan, KoboldCpp** on your own PC. Switch models mid-conversation.
-- **Free path that actually works.** Point it at [Jean-API-Generator](https://github.com/jeancodeeer/Jean-API-Generator) and you get your own OpenAI-compatible API on a free GitHub Codespace — no card, no quota from us.
+- **Free path that actually works.** Point it at [Jean-API-Generator](https://github.com/jeancodeeer/Jean-API-Generator) and you get your own OpenAI-compatible API on your own free Kaggle account, with GPU — no card, no quota from us.
 - **A real agent, not a chat box.** Reads, searches and edits your files, runs terminal commands with your permission, launches parallel subagents, loads skills, keeps a task list, and **rewinds** files and conversation to any message.
 - **It checks its own work.** After every edit the agent gets the file's syntax errors (JS, JSON, Python, PowerShell, Bash, Go) and fixes them before moving on — like an LSP, without running anything from your repo.
 - **It connects to your apps.** Gmail, Drive, Calendar, Docs, Sheets, GitHub, Notion, Linear, Jira, Figma, Supabase and 30 more through **MCP**, the same standard Claude Code uses — one click and you authorize in your browser; every action asks first. [How it works](docs/apps.md).
@@ -64,7 +64,7 @@ There are excellent coding agents already ([OpenCode](https://github.com/sst/ope
 **Honest limits**
 - The **Agent** and computer control need the desktop app; computer control is **Windows only** and works best with a capable model (small local models can lose the thread on long screen tasks).
 - The Android build is signed with a debug key and the iOS build is **unsigned** (install with AltStore or Sideloadly).
-- The free [Jean API](https://github.com/jeancodeeer/Jean-API-Generator) runs on CPU: about 8 tokens/s, and its Codespace sleeps after 30 idle minutes. It is a personal server, not a hosted service. For heavier work connect any other API.
+- The free [Jean API](https://github.com/jeancodeeer/Jean-API-Generator) runs on your Kaggle account's free T4 GPUs (about 30 hours a week, renewed weekly); a session lasts up to 12 hours and gives a new URL each time. It is a personal server, not a hosted service. For heavier work connect any other API.
 - Comparisons above are about where each tool lives, not about which writes better code: that depends on the model you plug in.
 
 ## 02 — QUICK START
@@ -73,7 +73,7 @@ There are excellent coding agents already ([OpenCode](https://github.com/sst/ope
 |---|---|
 | **Ollama / LM Studio** on your PC | Install the [desktop app](https://github.com/jeancodeeer/JeanCode/releases/latest) → **Use this PC's models**. One click, no keys. |
 | **An API key** (OpenRouter, Groq, NVIDIA…) | Open [JeanCode web](https://jeancodeeer.github.io/JeanCode/) → pick the provider → paste the key. The URL is filled in for you. |
-| **Nothing yet** | Create your free API with [Jean-API-Generator](https://github.com/jeancodeeer/Jean-API-Generator) (one Codespace, ~5 min), then paste its `…-8899.app.github.dev/v1` URL. |
+| **Nothing yet** | Create your free API with [Jean-API-Generator](https://github.com/jeancodeeer/Jean-API-Generator) (open the notebook in your Kaggle, Run All, ~5 min), then paste the URL it prints. |
 
 | PLATFORM | GET IT | MODES |
 |---|---|---|
@@ -164,7 +164,7 @@ Built from the most common complaints about Claude Code and OpenCode (issue trac
 
 Every connection is validated before use (bad URL, http from an https page, key in the URL, duplicates, wrong provider for that host — fixed for you). **AUTO** picks a model per mode and skips connections that are down; you choose what happens when a model fails (show the error, same model elsewhere, or any other model). Each answer carries its route, without keys. **Hugging Face** in the side menu loads any GGUF from the Hub into your Codespace with a progress bar.
 
-**APIs that block browsers (CORS).** Some providers (NVIDIA NIM, SambaNova, DeepSeek, Mistral, xAI, Scaleway) refuse calls from web pages. JeanCode handles it without any third-party server: on the web it sends those calls through the **relay of your own Jean-API-Generator** (`/relay/` on port 8899, streaming kept, only to a fixed list of known providers); in the phone apps it falls back to the phone's native networking when there is no relay. An unknown provider that fails from the browser is detected and remembered. The desktop app is never affected.
+**APIs that block browsers (CORS).** Some providers (NVIDIA NIM, SambaNova, Z.ai) refuse calls from web pages (checked live on 2026-11-14). JeanCode handles it without any third-party server: on the web it sends those calls through the **relay of your own Jean-API-Generator** (`/relay/` on its router, streaming kept, only to a fixed list of known providers); in the phone apps it falls back to the phone's native networking when there is no relay. An unknown provider that fails from the browser is detected and remembered. The desktop app is never affected.
 
 The repository contains **no URLs and no keys**. In the browser they stay in local storage; in the desktop app the key is encrypted with the OS keychain.
 

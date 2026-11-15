@@ -70,7 +70,7 @@ function showSplash() {
   $('#splash').hidden = false;
   $('#app').hidden = true;
   $('#api-repo-link').href = CONFIG.apiRepoUrl;
-  $('#api-codespace-link').href = `https://codespaces.new/${CONFIG.owner}/Jean-API-Generator`;
+  $('#api-kaggle-link').href = CONFIG.kaggleUrl;
 }
 
 async function enterApp() {
@@ -119,7 +119,7 @@ function wireProvider(select, urlInput, keyInput, note) {
   const apply = () => {
     const p = providerById(select.value);
     urlInput.value = p.url;
-    urlInput.placeholder = p.id === 'jean' ? 'https://tu-codespace-8899.app.github.dev/v1' : (p.url || 'https://tu-servidor/v1');
+    urlInput.placeholder = p.id === 'jean' ? 'https://….trycloudflare.com/v1' : (p.url || 'https://tu-servidor/v1');
     keyInput.placeholder = p.keyHint;
     const parts = [];
     if (p.note) parts.push(esc(p.note));

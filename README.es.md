@@ -7,7 +7,7 @@
 # JeanCode — el agente de programación con IA, abierto, que trae su propio modelo
 
 **Chatea · genera proyectos completos · usa un agente que edita código, ejecuta comandos, revisa sus propios errores y puede manejar tu PC.**<br>
-Cualquier modelo compatible con OpenAI: **Ollama, llama.cpp, LM Studio, OpenRouter, NVIDIA NIM, Groq, DeepSeek** y 28 proveedores en la nube — o tu propia API Jean **gratis** en GitHub Codespaces.
+Cualquier modelo compatible con OpenAI: **Ollama, llama.cpp, LM Studio, OpenRouter, NVIDIA NIM, Groq, DeepSeek** y 28 proveedores en la nube — o tu propia API Jean **gratis** en las GPU gratuitas de Kaggle.
 
 [![ABRIR](https://img.shields.io/badge/ABRIR-JEANCODE_WEB-000000?style=for-the-badge&labelColor=ffffff)](https://jeancodeeer.github.io/JeanCode/)
 [![DESCARGAR](https://img.shields.io/badge/DESCARGAR-WIN_%7C_MAC_%7C_LINUX-ffffff?style=for-the-badge&labelColor=000000)](https://github.com/jeancodeeer/JeanCode/releases/latest)
@@ -38,7 +38,7 @@ Sin servidor, sin cuenta, sin telemetría. Tu modelo, tus claves, tu máquina.
 ## 01 — POR QUÉ JEANCODE
 
 - **Usa el modelo que quieras.** 28 proveedores en la nube ya configurados (OpenAI, Anthropic, Gemini, OpenRouter, Groq, NVIDIA NIM, DeepSeek, Mistral, xAI, Together, Fireworks, Cerebras, SambaNova, DeepInfra, Moonshot/Kimi, Z.ai/GLM, Qwen, MiniMax, Cohere y más) y además **Ollama, LM Studio, LiteLLM, llama.cpp, vLLM, Jan y KoboldCpp** en tu propia PC. Cambia de modelo a mitad de conversación.
-- **Un camino gratis que funciona.** Conéctalo a [Jean-API-Generator](https://github.com/jeancodeeer/Jean-API-Generator) y tienes tu propia API compatible con OpenAI en un Codespace gratuito de GitHub: sin tarjeta y sin cuotas nuestras.
+- **Un camino gratis que funciona.** Conéctalo a [Jean-API-Generator](https://github.com/jeancodeeer/Jean-API-Generator) y tienes tu propia API compatible con OpenAI en tu cuenta gratuita de Kaggle, con GPU: sin tarjeta y sin cuotas nuestras.
 - **Un agente de verdad, no una caja de chat.** Lee, busca y edita tus archivos, ejecuta comandos con tu permiso, lanza subagentes en paralelo, carga skills, mantiene una lista de tareas y **vuelve atrás** archivos y conversación a cualquier mensaje.
 - **Revisa su propio trabajo.** Tras cada edición recibe los errores de sintaxis del archivo (JS, JSON, Python, PowerShell, Bash, Go) y los corrige antes de seguir, como un LSP, sin ejecutar nada de tu repositorio.
 - **Se conecta con tus apps.** Gmail, Drive, Calendar, Docs, Sheets, GitHub, Notion, Linear, Jira, Figma, Supabase y 30 más mediante **MCP**, el mismo estándar que usa Claude Code: un clic y autorizas en el navegador; cada acción pide permiso. [Cómo funciona](docs/apps.md).
@@ -64,7 +64,7 @@ Ya hay agentes de programación excelentes ([OpenCode](https://github.com/sst/op
 **Límites, sin adornos**
 - El **Agent** y el control de la PC necesitan la app de escritorio; el control de la PC es **solo Windows** y rinde mejor con un modelo potente (un modelo local pequeño puede perder el hilo en tareas largas de pantalla).
 - La app de Android va firmada con clave de depuración y la de iOS **sin firmar** (se instala con AltStore o Sideloadly).
-- La [API Jean](https://github.com/jeancodeeer/Jean-API-Generator) gratuita corre en CPU: unos 8 tokens/s, y su Codespace se duerme tras 30 minutos sin uso. Es un servidor personal, no un servicio alojado. Para trabajo pesado conecta cualquier otra API.
+- La [API Jean](https://github.com/jeancodeeer/Jean-API-Generator) gratuita corre en las GPU T4 gratuitas de tu cuenta de Kaggle (unas 30 horas a la semana, renovadas cada semana); una sesión dura hasta 12 horas y da una URL nueva cada vez. Es un servidor personal, no un servicio alojado. Para trabajo pesado conecta cualquier otra API.
 - Las comparaciones de arriba hablan de dónde vive cada herramienta, no de cuál escribe mejor código: eso depende del modelo que conectes.
 
 ## 02 — EMPIEZA EN UN MINUTO
@@ -73,7 +73,7 @@ Ya hay agentes de programación excelentes ([OpenCode](https://github.com/sst/op
 |---|---|
 | **Ollama / LM Studio** en tu PC | Instala la [app de escritorio](https://github.com/jeancodeeer/JeanCode/releases/latest) → **Usar los modelos de esta PC**. Un clic, sin claves. |
 | **Una clave de API** (OpenRouter, Groq, NVIDIA…) | Abre [JeanCode web](https://jeancodeeer.github.io/JeanCode/) → elige el proveedor → pega la clave. La URL se completa sola. |
-| **Nada todavía** | Crea tu API gratis con [Jean-API-Generator](https://github.com/jeancodeeer/Jean-API-Generator) (un Codespace, ~5 min) y pega su URL `…-8899.app.github.dev/v1`. |
+| **Nada todavía** | Crea tu API gratis con [Jean-API-Generator](https://github.com/jeancodeeer/Jean-API-Generator) (abres el notebook en tu Kaggle y pulsas Run All, ~5 min) y pegas la URL que imprime. |
 
 | PLATAFORMA | CÓMO CONSEGUIRLA | MODOS |
 |---|---|---|
@@ -164,7 +164,7 @@ Construido a partir de las quejas más comunes sobre Claude Code y OpenCode (iss
 
 Cada conexión se valida antes de usarla (URL mal escrita, http desde una página https, clave en la URL, duplicados, proveedor que no corresponde a ese host: se corrige solo). **AUTO** elige un modelo por modo y salta las conexiones caídas; tú decides qué pasa cuando un modelo falla (mostrar el error, el mismo modelo por otra conexión o cualquier otro modelo). Cada respuesta lleva su ruta, sin claves. **Hugging Face**, en el menú lateral, carga cualquier GGUF del Hub en tu Codespace con barra de progreso.
 
-**APIs que bloquean el navegador (CORS).** Algunos proveedores (NVIDIA NIM, SambaNova, DeepSeek, Mistral, xAI, Scaleway) rechazan las llamadas desde páginas web. JeanCode lo resuelve sin servidores de terceros: en la web envía esas llamadas por el **relay de tu propio Jean-API-Generator** (`/relay/` en el puerto 8899, con streaming, solo hacia una lista fija de proveedores conocidos); en las apps del móvil, si no hay relay, usa la red nativa del teléfono. Un proveedor desconocido que falla desde el navegador se detecta y se recuerda. En el escritorio no hace falta nada de esto.
+**APIs que bloquean el navegador (CORS).** Algunos proveedores (NVIDIA NIM, SambaNova, Z.ai) rechazan las llamadas desde páginas web (comprobado en vivo el 2026-11-14). JeanCode lo resuelve sin servidores de terceros: en la web envía esas llamadas por el **relay de tu propio Jean-API-Generator** (`/relay/` en su router, con streaming, solo hacia una lista fija de proveedores conocidos); en las apps del móvil, si no hay relay, usa la red nativa del teléfono. Un proveedor desconocido que falla desde el navegador se detecta y se recuerda. En el escritorio no hace falta nada de esto.
 
 El repositorio **no contiene URLs ni claves**. En el navegador se guardan en el almacenamiento local; en el escritorio la clave se cifra con el llavero del sistema.
 

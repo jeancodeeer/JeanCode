@@ -37,7 +37,8 @@ export function redact(text) {
 export function where(ep) {
   try {
     const u = new URL(ep.url);
-    const host = u.host.replace(/^[a-z0-9-]+-(\d{4,5})\.app\.github\.dev$/i, '…-$1.app.github.dev');
+    const host = u.host.replace(/^[a-z0-9-]+-(\d{4,5})\.app\.github\.dev$/i, '…-$1.app.github.dev')
+      .replace(/^[a-z0-9-]+\.trycloudflare\.com$/i, '….trycloudflare.com');
     return `${host}${u.pathname}`;
   } catch { return '(url inválida)'; }
 }

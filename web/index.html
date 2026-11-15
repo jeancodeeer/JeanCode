@@ -9,6 +9,7 @@
 <meta property="og:description" content="Chat, código y agente para los modelos Jean y otras APIs. Trae tu propia API.">
 <meta name="theme-color" content="#000000">
 <link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="icons/icon-192.png">
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="stylesheet" href="css/fonts.css">
 <link rel="stylesheet" href="css/jeancode.css">
@@ -77,7 +78,7 @@
     <details class="fold">
       <summary>¿No tienes API?</summary>
       <div class="fold-body">
-        <p>Tu propia API gratis, en tu cuenta de GitHub, en tres pasos (sin tarjeta):</p>
+        <p>Tu propia API gratis, con GPU, en tu cuenta de Kaggle (sin tarjeta):</p>
         <ol class="steps">
           <li><strong>Genera una clave</strong> y guárdala:
             <span class="input-row">
@@ -85,10 +86,11 @@
               <button type="button" class="btn" id="gen-btn">Generar</button>
             </span>
           </li>
-          <li><strong>Añádela como secreto</strong> <code>JEAN_API_KEY</code> en <a class="link-out" href="https://github.com/settings/codespaces" target="_blank" rel="noopener">tus secretos de Codespaces</a>, con acceso a <code>Jean-API-Generator</code>.</li>
-          <li><strong>Crea tu Codespace</strong> y espera 2–4 minutos: <a class="btn" id="api-codespace-link" href="https://codespaces.new/jeancodeeer/Jean-API-Generator" target="_blank" rel="noopener">Crear mi Codespace</a></li>
+          <li><strong>Abre el notebook en Kaggle</strong> (con tu teléfono verificado en Kaggle): <a class="btn" id="api-kaggle-link" href="https://www.kaggle.com/kernels/welcome?src=https://github.com/jeancodeeer/Jean-API-Generator/blob/main/kaggle/jean-api.ipynb" target="_blank" rel="noopener">Abrir en Kaggle</a></li>
+          <li>En el notebook: <strong>Settings → Accelerator → GPU T4 x2</strong>, y en <strong>Add-ons → Secrets</strong> añade <code>JEAN_API_KEY</code> con tu clave.</li>
+          <li>Pulsa <strong>Run All</strong> y espera 3–6 minutos.</li>
         </ol>
-        <p class="note">Luego pega arriba el <strong>nombre de tu Codespace</strong> o cualquier URL suya: JeanCode encuentra el router solo. Es un servidor personal en CPU (~8 tokens/s) que se duerme tras 30 minutos sin uso.</p>
+        <p class="note">Luego pega arriba la <strong>URL que imprime el notebook</strong>. Cada sesión dura hasta 12 horas y tu cuota de GPU (unas 30 h) se renueva cada semana; al volver a pulsar Run All la URL cambia.</p>
         <a class="link-out" id="api-repo-link" href="https://github.com/jeancodeeer/Jean-API-Generator" target="_blank" rel="noopener">Cómo funciona Jean-API-Generator</a>
       </div>
     </details>
@@ -338,7 +340,7 @@
   </div>
 
   <section data-pane="conn">
-    <p class="note">Tu Jean-API-Generator y cualquier otra API. Para un Codespace basta la URL del <strong>router</strong> (puerto 8899): trae todos sus modelos, incluidos los que cargues desde Hugging Face.</p>
+    <p class="note">Tu Jean-API-Generator y cualquier otra API. Para el tuyo basta la URL que imprime el notebook de Kaggle (o el puerto 8899 de un Codespace): trae todos sus modelos, incluidos los que cargues desde Hugging Face.</p>
     <ul class="rows" id="endpoint-list"></ul>
     <form id="endpoint-form" class="add-form">
       <select id="ep-provider" aria-label="Proveedor"></select>
@@ -349,7 +351,7 @@
     <p class="msg" id="ep-msg" role="status" aria-live="polite"></p>
     <p class="note" id="ep-provider-note"></p>
     <h3 class="web-only">Relay para APIs que bloquean la web</h3>
-    <p class="note web-only">NVIDIA, DeepSeek, Mistral y otras rechazan llamadas desde páginas web. Si tienes un Jean-API-Generator conectado, se usa su relay solo. Si no, despliega tu propio relay gratis en Cloudflare (<a href="https://github.com/jeancodeeer/JeanCode/blob/main/relay/README.md" target="_blank" rel="noopener">guía de 3 pasos</a>) y ponlo aquí.</p>
+    <p class="note web-only">NVIDIA, SambaNova y Z.ai rechazan llamadas desde páginas web. Si tienes un Jean-API-Generator conectado, se usa su relay solo. Si no, despliega tu propio relay gratis en Cloudflare (<a href="https://github.com/jeancodeeer/JeanCode/blob/main/relay/README.md" target="_blank" rel="noopener">guía de 3 pasos</a>) y ponlo aquí.</p>
     <form id="relay-form" class="add-form web-only">
       <input id="relay-url" type="text" inputmode="url" autocomplete="off" placeholder="https://jeancode-relay.tu-usuario.workers.dev" spellcheck="false">
       <input id="relay-key" type="password" placeholder="RELAY_KEY" spellcheck="false" autocomplete="off">
@@ -547,7 +549,7 @@
     </label>
     <label class="field">
       <span class="label">Control de tu Codespace</span>
-      <input id="hf-control" type="url" placeholder="https://tu-codespace-8899.app.github.dev" spellcheck="false">
+      <input id="hf-control" type="url" placeholder="https://….trycloudflare.com" spellcheck="false">
     </label>
   </div>
   <p class="note" id="hf-control-note">El token se queda en este equipo y solo viaja a tu Codespace al descargar.</p>
