@@ -2,7 +2,7 @@
 
 <!-- impeccable:product-schema 1 -->
 
-> Escrito sin entrevista: el usuario pidió trabajar de forma autónoma sin pedir aprobación por cada detalle (2026-11-09). Lo marcado *(inferido)* sale del código y de sus mensajes, no de una confirmación explícita.
+> Escrito sin entrevista: pedí que se trabajara de forma autónoma, sin pedirme aprobación por cada detalle (2026-11-09). Lo marcado *(inferido)* sale del código y de mis mensajes, no de una confirmación explícita mía.
 
 ## Platform
 
@@ -12,7 +12,7 @@ web
 
 ## Users
 
-Programadores y vibecoders hispanohablantes que prefieren una interfaz gráfica antes que una terminal para trabajar con modelos de lenguaje. Llegan con su propia API (un Codespace de Jean-API-Generator, un proveedor como OpenAI/OpenRouter/Groq, o modelos locales con Ollama/LM Studio) y quieren chatear, generar proyectos descargables o dejar que un agente trabaje en una carpeta de su PC. Usan la web en el móvil con frecuencia *(confirmado por capturas del usuario desde un iPhone)*.
+Programadores y vibecoders hispanohablantes que prefieren una interfaz gráfica antes que una terminal para trabajar con modelos de lenguaje. Llegan con su propia API (un Codespace de Jean-API-Generator, un proveedor como OpenAI/OpenRouter/Groq, o modelos locales con Ollama/LM Studio) y quieren chatear, generar proyectos descargables o dejar que un agente trabaje en una carpeta de su PC. Usan la web en el móvil con frecuencia *(confirmado por mis capturas desde un iPhone)*.
 
 ## Product Purpose
 
@@ -35,18 +35,18 @@ JeanCode es el cliente de los modelos Jean (Grey, Marvel, Fénix) y de otras API
 - Ninguna URL ni clave en el repositorio; todo se guarda en el equipo del usuario (en escritorio, cifrado con el llavero del sistema).
 - `web/` es la única interfaz; `desktop/` la copia. Cualquier rediseño vale para las dos.
 - Funcionalidades que no se pueden perder: splash de conexión con proveedores y modelos locales, selector de modelos agrupado, CHAT/CODE/AGENT, comandos `/`, menciones `@`, medidor de contexto, RAZONAR, panel de Hugging Face, sección Fénix, ajustes (conexiones, modelos locales, estilo, reglas fijadas, comandos permitidos), skills, descargas, info del repo, ayuda.
-- Logo pendiente: hay huecos marcados hasta que el usuario suba uno (`BRAND.logo` en `web/js/config.js`).
+- Logo pendiente: hay huecos marcados hasta que suba uno (`BRAND.logo` en `web/js/config.js`).
 
 ## Brand Commitments
 
-- Nombre: **JeanCode** (estilizado así; el usuario rechazó «jeancode» en minúsculas).
-- Dirección visual pedida explícitamente por el usuario: estética **OPIUM** (oscura, experimental, industrial, rebelde, vanguardista) + **neobrutalismo** (geometrías contundentes, contrastes marcados) + **minimalismo funcional** (menos ruido, mejor jerarquía). Fondo negro con títulos y detalles blancos. Tipografías **IBM Plex** «inspiradas en Yeezy». No debe parecer una plantilla SaaS genérica.
-- El usuario dijo que le gusta el **relleno con ruido** del wordmark y el **grano de fondo**.
-- El usuario dijo que el diseño actual es **demasiado cargado y abrumador**, y que en el móvil se desborda.
+- Nombre: **JeanCode** (estilizado así; rechacé «jeancode» en minúsculas).
+- Dirección visual que pedí explícitamente: estética **OPIUM** (oscura, experimental, industrial, rebelde, vanguardista) + **neobrutalismo** (geometrías contundentes, contrastes marcados) + **minimalismo funcional** (menos ruido, mejor jerarquía). Fondo negro con títulos y detalles blancos. Tipografías **IBM Plex** «inspiradas en Yeezy». No debe parecer una plantilla SaaS genérica.
+- Me gusta el **relleno con ruido** del wordmark y el **grano de fondo**.
+- El diseño actual me parece **demasiado cargado y abrumador**, y en el móvil se desborda.
 
 ## Evidence on Hand
 
-- Capturas del usuario: splash en escritorio (título desbordado, superado) y en iPhone (formulario desbordado hacia la derecha, marco cortado).
+- Mis capturas: splash en escritorio (título desbordado, superado) y en iPhone (formulario desbordado hacia la derecha, marco cortado).
 - No hay testimonios, clientes, métricas de uso ni logo: no inventarlos.
 
 ## Product Principles
