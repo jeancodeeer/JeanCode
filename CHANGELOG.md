@@ -20,6 +20,10 @@ JeanCode 1.0 reúne en una sola versión todo lo que se publicó por partes entr
 - Los avisos salen arriba, bajo la barra: abajo tapaban la caja de escribir en el móvil.
 - Las cuatro pestañas de Ajustes caben en un móvil; el historial vacío queda alineado.
 
+**JeanCode en Python + pygame** (nuevo)
+- Un cliente de chat en una ventana de pygame: `pip install pygame-ce` y `python jeancode_pygame.py`. Los mismos 33 proveedores que la web, respuestas en streaming, lista de modelos (F3), historial (F4) y bloques de código. Se descarga como `JeanCode-1.2.1-pygame.zip`.
+- El mismo código corre dentro de **PyKernel** (el kernel cuyo sistema operativo es Python, sobre MicroPython) con el comando `jeancode`. PyKernel aún no tiene red: las peticiones salen por el segundo puerto serie hacia `bridge.py`, que corre en el PC anfitrión y hace la conexión HTTPS.
+
 **Antes, en `main`**
 - **Licencia MIT** (antes AGPL-3.0): se puede usar, modificar y distribuir también en proyectos comerciales, conservando el aviso de copyright.
 - GIF de demostración en el README, plantillas de issues, guía para contribuir y Discussions.
