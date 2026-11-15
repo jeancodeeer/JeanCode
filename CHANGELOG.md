@@ -2,10 +2,10 @@
 
 JeanCode 1.0 reúne en una sola versión todo lo que se publicó por partes entre la 0.1 y la 0.4. Las releases antiguas se retiraron de GitHub para que solo quede una descarga oficial. Su código sigue completo en las etiquetas de git (`v0.1.0` … `v0.4.2`), así que cualquier build anterior se puede reconstruir con `git checkout vX.Y.Z && cd desktop && npm ci && npm run dist`.
 
-## 1.2.1 — sin publicar
+## 1.2.1 — 15 de noviembre de 2026
 
 **Tu propia API, ahora con GPU gratis en Kaggle**
-- **¿No tienes API?** abre el notebook de Jean-API-Generator en **tu** cuenta de Kaggle (sin tarjeta, solo teléfono verificado): GPU T4 x2, unas 30 horas a la semana que se renuevan cada semana. La clave va en los Secrets de Kaggle.
+- **¿No tienes API?** abre el notebook de Jean-API-Generator en **tu** cuenta de Kaggle (sin tarjeta, solo teléfono verificado): GPU T4 x2, unas 30 horas a la semana que se renuevan cada semana. Pulsa Run All y listo: si no guardas una clave en los Secrets de Kaggle, el notebook crea una para esa sesión y la muestra una sola vez.
 - JeanCode reconoce la URL del notebook (`….trycloudflare.com`) como el router de tu Jean-API-Generator: relay, panel de Hugging Face y todos los modelos con una sola URL. Si la sesión de Kaggle termina, el aviso dice que pulses Run All y pegues la URL nueva.
 
 **APIs bien configuradas (comprobadas en vivo el 14 de noviembre)**
