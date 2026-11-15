@@ -81,6 +81,7 @@ Ya hay agentes de programación excelentes ([OpenCode](https://github.com/sst/op
 | **Android** | `JeanCode-x.y.z-android.apk` de la [última release](https://github.com/jeancodeeer/JeanCode/releases/latest) | CHAT · CODE |
 | **iOS / iPadOS** | `JeanCode-x.y.z-ios-unsigned.ipa`: se instala con [AltStore](https://altstore.io) o [Sideloadly](https://sideloadly.io) usando tu propio Apple ID | CHAT · CODE |
 | **Windows · macOS · Linux** | `.exe` · `.dmg` · `.AppImage` de la [última release](https://github.com/jeancodeeer/JeanCode/releases/latest) | CHAT · CODE · **AGENT** · control del equipo |
+| **Python + pygame** (cualquier sistema, y PyKernel) | `JeanCode-x.y.z-pygame.zip` de la [última release](https://github.com/jeancodeeer/JeanCode/releases/latest) → `pip install pygame-ce` → `python jeancode_pygame.py`. Ver [pygame/README.md](pygame/README.md) | CHAT |
 
 Las apps del móvil son la misma web compilada con Capacitor. El APK de Android va firmado con una clave de depuración (permite «instalar apps desconocidas»); la de iOS va sin firmar porque publicar en la App Store exige una cuenta de desarrollador de Apple de pago.
 
@@ -176,6 +177,8 @@ El repositorio **no contiene URLs ni claves**. En el navegador se guardan en el 
 python -m http.server 8000 --directory web        # web: cualquier servidor estático
 cd desktop && npm install && npm start            # escritorio (Electron)
 node --test tests/unit.test.mjs                   # pruebas unitarias
+python pygame/jeancode_pygame.py                  # cliente pygame (pip install pygame-ce)
+python -m unittest discover -s pygame/tests       # sus pruebas
 node --test --test-concurrency=1 tests/computer/control.test.mjs   # pruebas reales de control del equipo (Windows)
 ```
 
@@ -183,6 +186,7 @@ node --test --test-concurrency=1 tests/computer/control.test.mjs   # pruebas rea
 web/        HTML/CSS/módulos ES sin paso de build (GitHub Pages + PWA)
 mobile/     web/ empaquetada con Capacitor para iOS y Android (cd mobile && npm install && npm run android|ios)
 desktop/    Electron; usa web/ como interfaz · lib/ = archivos, terminal, diagnósticos, control del equipo
+pygame/     cliente en Python + pygame: el mismo código en CPython y en PyKernel (MicroPython)
 skills/     skills de ejemplo     docs/     control del equipo, capturas
 ```
 

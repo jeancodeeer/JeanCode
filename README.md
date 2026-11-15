@@ -80,6 +80,7 @@ There are excellent coding agents already ([OpenCode](https://github.com/sst/ope
 | **Web** (any phone or computer) | [jeancodeeer.github.io/JeanCode](https://jeancodeeer.github.io/JeanCode/) — installable PWA, works offline | CHAT · CODE |
 | **Android** | `JeanCode-x.y.z-android.apk` from the [latest release](https://github.com/jeancodeeer/JeanCode/releases/latest) | CHAT · CODE |
 | **iOS / iPadOS** | `JeanCode-x.y.z-ios-unsigned.ipa` — install with [AltStore](https://altstore.io) or [Sideloadly](https://sideloadly.io) using your own Apple ID | CHAT · CODE |
+| **Python + pygame** (any OS, and PyKernel) | `JeanCode-x.y.z-pygame.zip` from the [latest release](https://github.com/jeancodeeer/JeanCode/releases/latest) → `pip install pygame-ce` → `python jeancode_pygame.py`. See [pygame/README.md](pygame/README.md) | CHAT |
 | **Windows · macOS · Linux** | `.exe` · `.dmg` · `.AppImage` from the [latest release](https://github.com/jeancodeeer/JeanCode/releases/latest) | CHAT · CODE · **AGENT** · computer control |
 
 The phone apps are the same web app compiled with Capacitor. The Android APK is signed with a debug key (allow "install unknown apps"); the iOS build is unsigned because App Store distribution needs a paid Apple developer account.
@@ -176,6 +177,8 @@ The repository contains **no URLs and no keys**. In the browser they stay in loc
 python -m http.server 8000 --directory web        # web: any static server
 cd desktop && npm install && npm start            # desktop (Electron)
 node --test tests/unit.test.mjs                   # unit tests
+python pygame/jeancode_pygame.py                  # pygame client (pip install pygame-ce)
+python -m unittest discover -s pygame/tests       # its tests
 node --test --test-concurrency=1 tests/computer/control.test.mjs   # real computer-control tests (Windows)
 ```
 
@@ -183,6 +186,7 @@ node --test --test-concurrency=1 tests/computer/control.test.mjs   # real comput
 web/        plain HTML/CSS/ES modules, no build step (GitHub Pages + PWA)
 mobile/     Capacitor wrapper of web/ for iOS and Android (cd mobile && npm install && npm run android|ios)
 desktop/    Electron; reuses web/ as its UI · lib/ = files, terminal, diagnostics, computer control
+pygame/     Python + pygame client: the same code on CPython and on PyKernel (MicroPython)
 skills/     example skills        docs/     computer control, screenshots
 ```
 

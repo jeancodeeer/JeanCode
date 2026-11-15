@@ -19,6 +19,10 @@ const sources = {
     get: (s) => s.match(/const CACHE = 'jeancode-([^']+)'/)?.[1],
     set: (s, v) => s.replace(/const CACHE = 'jeancode-[^']+'/, `const CACHE = 'jeancode-${v}'`),
   },
+  'pygame/jeancode/app.py': {
+    get: (s) => s.match(/VERSION = "([^"]+)"/)?.[1],
+    set: (s, v) => s.replace(/VERSION = "[^"]+"/, `VERSION = "${v}"`),
+  },
   'desktop/package.json': {
     get: (s) => JSON.parse(s).version,
     set: (s, v) => s.replace(/("version":\s*")[^"]+(")/, `$1${v}$2`),
