@@ -715,3 +715,25 @@ test('Jean API: el nombre del Codespace o cualquier URL suya lleva al router 889
   assert.equal(v.url, 'https://jeancode-api-7vrvr96vw54x3wpq5-8899.app.github.dev/v1');
   assert.ok(v.warnings.some((w) => /router/.test(w)));
 });
+
+test('Jean API en Kaggle: el túnel es el router y el registro no muestra la URL', async () => {
+  const A = await import('../web/js/api.js');
+  const H = await import('../web/js/hf.js');
+  const R = await import('../web/js/router.js');
+  const url = 'https://brave-lion-1234.trycloudflare.com/v1';
+  assert.equal(A.isRouterUrl(url), true, 'el túnel apunta al router');
+  assert.equal(A.isRouterUrl('https://api.groq.com/openai/v1'), false);
+  assert.equal(H.controlUrlFrom(url), 'https://brave-lion-1234.trycloudflare.com', 'control = el propio túnel');
+  assert.equal(R.where({ url }), '….trycloudflare.com/v1');
+  const v = R.validateEndpoint({ url, key: 'k', provider: 'jean' });
+  assert.equal(v.ok, true, JSON.stringify(v.errors));
+});
+
+test('proveedores: CORS según lo comprobado en vivo y cabecera de Anthropic', async () => {
+  const P = await import('../web/js/providers.js');
+  const by = (id) => P.providerById(id);
+  for (const id of ['deepseek', 'mistral', 'xai', 'scaleway', 'anthropic']) assert.equal(by(id).browser, true, id);
+  for (const id of ['zai', 'nvidia', 'sambanova']) assert.equal(by(id).browser, false, id);
+  assert.equal(P.adapterOf({ provider: 'anthropic' }).headers()['anthropic-dangerous-direct-browser-access'], 'true');
+  assert.deepEqual(P.adapterOf({ provider: 'groq' }).headers(), {}, 'nadie más recibe esa cabecera');
+});

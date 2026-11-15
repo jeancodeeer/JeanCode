@@ -115,7 +115,9 @@ export function explain(status, body, ep) {
 
 function networkHint(ep) {
   const p = providerOf(ep);
-  if (p.id === 'jean') return 'No se pudo conectar. Puede que el Codespace esté dormido, que el puerto no sea público o que la URL esté mal.';
+  if (p.id === 'jean') return /\.trycloudflare\.com/i.test(ep.url)
+    ? 'No se pudo conectar con tu notebook de Kaggle: la sesión terminó o se reinició. Pulsa Run All otra vez y pega la URL nueva.'
+    : 'No se pudo conectar. Puede que el Codespace esté dormido, que el puerto no sea público o que la URL esté mal.';
   if (p.local) return `No se pudo conectar con ${p.name}. ¿Está abierto en esta PC?`;
   return `No se pudo conectar con ${p.name}. Revisa la URL y tu conexión.`;
 }
@@ -134,7 +136,7 @@ const nativeHttp = () => (isNativeApp() ? window.Capacitor?.Plugins?.CapacitorHt
 
 /** Router de un Jean-API-Generator configurado (URL del puerto 8899) que hace de relay. */
 export function relayBase() {
-  const j = getEndpoints().find((e) => (e.provider || 'jean') === 'jean' && /-8899\.|:8899(\/|$)/.test(e.url));
+  const j = getEndpoints().find((e) => (e.provider || 'jean') === 'jean' && isRouterUrl(e.url));
   if (j) { try { return { origin: new URL(j.url).origin, key: j.key }; } catch { /* URL rara: se prueba el relay propio */ } }
   // sin Codespace: un relay propio (p. ej. el Cloudflare Worker de relay/worker.js), configurado en Ajustes
   const own = store.get('relay', null);
@@ -451,8 +453,9 @@ export function siblingUrls(url) {
   return out;
 }
 
-/** true si la URL es el router (:8899) de un Jean-API-Generator. */
-export const isRouterUrl = (url) => new RegExp(`[-:]${ROUTER_PORT}(\\.app\\.github\\.dev)?(?=/|$)`).test(String(url));
+/** true si la URL es el router de un Jean-API-Generator: el túnel de Kaggle (….trycloudflare.com) o el puerto 8899. */
+export const isRouterUrl = (url) => /^https:\/\/[a-z0-9-]+\.trycloudflare\.com(\/|$)/i.test(String(url))
+  || new RegExp(`[-:]${ROUTER_PORT}(\\.app\\.github\\.dev)?(?=/|$)`).test(String(url));
 
 /**
  * Completa la conexión a un Jean-API-Generator. Si el router (:8899) responde, basta con él: una URL,

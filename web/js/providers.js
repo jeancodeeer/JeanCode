@@ -72,23 +72,27 @@ const JEAN_ADAPTER = {
 
 const USAGE = { usageInStream: true };
 
+/** Anthropic solo responde a una página web si se le pide expresamente (la clave es la del propio usuario). */
+const ANTHROPIC_ADAPTER = { headers: () => ({ 'anthropic-dangerous-direct-browser-access': 'true' }) };
+
+// URLs y CORS comprobados en vivo (GET /models sin clave → 200/401 JSON; preflight OPTIONS desde github.io).
+// browser: true = la web y el móvil llaman directo; false = necesitan el relay o la app de escritorio.
 export const PROVIDERS = [
-  { id: 'jean', name: 'Jean-API-Generator', url: '', keyHint: 'tu JEAN_API_KEY', keyUrl: 'https://github.com/jeancodeeer/Jean-API-Generator', browser: true, billing: 'own', adapter: JEAN_ADAPTER, note: 'Tu propio Codespace con Grey, Marvel y Fénix. Usa la URL del puerto 8899 (router).' },
+  { id: 'jean', name: 'Jean-API-Generator', url: '', keyHint: 'tu JEAN_API_KEY', keyUrl: 'https://github.com/jeancodeeer/Jean-API-Generator', browser: true, billing: 'own', adapter: JEAN_ADAPTER, note: 'Tu propia API gratis en Kaggle (GPU) o en un Codespace. Pega la URL que te da el notebook.' },
   { id: 'openai', name: 'OpenAI', url: 'https://api.openai.com/v1', keyHint: 'sk-…', keyUrl: 'https://platform.openai.com/api-keys', browser: true, billing: 'paid', adapter: USAGE },
-  { id: 'anthropic', name: 'Anthropic', url: 'https://api.anthropic.com/v1', keyHint: 'sk-ant-…', keyUrl: 'https://console.anthropic.com/settings/keys', browser: false, billing: 'paid', note: 'Usa su capa compatible con OpenAI. En la web puede bloquearse: usa el escritorio.' },
-  { id: 'gemini', name: 'Google Gemini', url: 'https://generativelanguage.googleapis.com/v1beta/openai', keyHint: 'AIza…', keyUrl: 'https://aistudio.google.com/apikey', browser: true, billing: 'paid' },
+  { id: 'anthropic', name: 'Anthropic', url: 'https://api.anthropic.com/v1', keyHint: 'sk-ant-…', keyUrl: 'https://console.anthropic.com/settings/keys', browser: true, billing: 'paid', adapter: ANTHROPIC_ADAPTER, note: 'Usa su capa compatible con OpenAI.' },
+  { id: 'gemini', name: 'Google Gemini', url: 'https://generativelanguage.googleapis.com/v1beta/openai', keyHint: 'AIza…', keyUrl: 'https://aistudio.google.com/apikey', browser: true, billing: 'paid', note: 'Tiene plan gratis con límites (Google AI Studio).' },
   { id: 'openrouter', name: 'OpenRouter', url: 'https://openrouter.ai/api/v1', keyHint: 'sk-or-…', keyUrl: 'https://openrouter.ai/keys', browser: true, billing: 'paid', adapter: OPENROUTER_ADAPTER, note: 'Cientos de modelos con una sola clave. Informa precio y contexto de cada uno.' },
-  { id: 'groq', name: 'Groq', url: 'https://api.groq.com/openai/v1', keyHint: 'gsk_…', keyUrl: 'https://console.groq.com/keys', browser: true, billing: 'paid', adapter: USAGE },
-  { id: 'huggingface', name: 'Hugging Face (Inference Providers)', url: 'https://router.huggingface.co/v1', keyHint: 'hf_…', keyUrl: 'https://huggingface.co/settings/tokens', browser: true, billing: 'paid', adapter: USAGE },
-  { id: 'deepseek', name: 'DeepSeek', url: 'https://api.deepseek.com/v1', keyHint: 'sk-…', keyUrl: 'https://platform.deepseek.com/api_keys', browser: false, billing: 'paid', adapter: USAGE },
-  { id: 'mistral', name: 'Mistral', url: 'https://api.mistral.ai/v1', keyHint: 'clave de Mistral', keyUrl: 'https://console.mistral.ai/api-keys', browser: false, billing: 'paid', adapter: USAGE },
-  { id: 'xai', name: 'xAI (Grok)', url: 'https://api.x.ai/v1', keyHint: 'xai-…', keyUrl: 'https://console.x.ai', browser: false, billing: 'paid', adapter: USAGE },
+  { id: 'groq', name: 'Groq', url: 'https://api.groq.com/openai/v1', keyHint: 'gsk_…', keyUrl: 'https://console.groq.com/keys', browser: true, billing: 'paid', adapter: USAGE, note: 'Tiene plan gratis con límites por minuto y por día.' },
+  { id: 'huggingface', name: 'Hugging Face (Inference Providers)', url: 'https://router.huggingface.co/v1', keyHint: 'hf_…', keyUrl: 'https://huggingface.co/settings/tokens', browser: true, billing: 'paid', adapter: USAGE, note: 'Las cuentas gratis traen un pequeño crédito mensual.' },
+  { id: 'deepseek', name: 'DeepSeek', url: 'https://api.deepseek.com/v1', keyHint: 'sk-…', keyUrl: 'https://platform.deepseek.com/api_keys', browser: true, billing: 'paid', adapter: USAGE },
+  { id: 'mistral', name: 'Mistral', url: 'https://api.mistral.ai/v1', keyHint: 'clave de Mistral', keyUrl: 'https://console.mistral.ai/api-keys', browser: true, billing: 'paid', adapter: USAGE, note: 'Tiene plan gratis de prueba («Experiment») con límites.' },
+  { id: 'xai', name: 'xAI (Grok)', url: 'https://api.x.ai/v1', keyHint: 'xai-…', keyUrl: 'https://console.x.ai', browser: true, billing: 'paid', adapter: USAGE },
   { id: 'together', name: 'Together AI', url: 'https://api.together.xyz/v1', keyHint: 'clave de Together', keyUrl: 'https://api.together.ai/settings/api-keys', browser: true, billing: 'paid', adapter: USAGE },
   { id: 'fireworks', name: 'Fireworks', url: 'https://api.fireworks.ai/inference/v1', keyHint: 'fw_…', keyUrl: 'https://fireworks.ai/account/api-keys', browser: true, billing: 'paid', adapter: USAGE },
-  { id: 'cerebras', name: 'Cerebras', url: 'https://api.cerebras.ai/v1', keyHint: 'csk-…', keyUrl: 'https://cloud.cerebras.ai', browser: true, billing: 'paid', adapter: USAGE },
-  // URLs comprobadas en vivo (GET /models sin clave → 200 o 401 JSON). browser: según la cabecera CORS observada.
+  { id: 'cerebras', name: 'Cerebras', url: 'https://api.cerebras.ai/v1', keyHint: 'csk-…', keyUrl: 'https://cloud.cerebras.ai', browser: true, billing: 'paid', adapter: USAGE, note: 'Tiene plan gratis con límites diarios.' },
   { id: 'nvidia', name: 'NVIDIA NIM (build.nvidia.com)', url: 'https://integrate.api.nvidia.com/v1', keyHint: 'nvapi-…', keyUrl: 'https://build.nvidia.com/settings/api-keys', browser: false, billing: 'paid', adapter: USAGE, note: 'Créditos gratis de prueba. Sin CORS: en la web puede bloquearse, usa el escritorio.' },
-  { id: 'sambanova', name: 'SambaNova', url: 'https://api.sambanova.ai/v1', keyHint: 'clave de SambaNova', keyUrl: 'https://cloud.sambanova.ai/apis', browser: false, billing: 'paid', adapter: USAGE },
+  { id: 'sambanova', name: 'SambaNova', url: 'https://api.sambanova.ai/v1', keyHint: 'clave de SambaNova', keyUrl: 'https://cloud.sambanova.ai/apis', browser: false, billing: 'paid', adapter: USAGE, note: 'Pide un método de pago antes de la primera petición.' },
   { id: 'deepinfra', name: 'DeepInfra', url: 'https://api.deepinfra.com/v1/openai', keyHint: 'clave de DeepInfra', keyUrl: 'https://deepinfra.com/dash/api_keys', browser: true, billing: 'paid', adapter: USAGE },
   { id: 'hyperbolic', name: 'Hyperbolic', url: 'https://api.hyperbolic.xyz/v1', keyHint: 'clave de Hyperbolic', keyUrl: 'https://app.hyperbolic.xyz/settings', browser: true, billing: 'paid', adapter: USAGE },
   { id: 'novita', name: 'Novita AI', url: 'https://api.novita.ai/v3/openai', keyHint: 'sk_…', keyUrl: 'https://novita.ai/settings/key-management', browser: true, billing: 'paid', adapter: USAGE },
@@ -97,11 +101,11 @@ export const PROVIDERS = [
   { id: 'siliconflow', name: 'SiliconFlow', url: 'https://api.siliconflow.com/v1', keyHint: 'sk-…', keyUrl: 'https://cloud.siliconflow.com/account/ak', browser: true, billing: 'paid', adapter: USAGE },
   { id: 'inference', name: 'Inference.net', url: 'https://api.inference.net/v1', keyHint: 'clave de Inference.net', keyUrl: 'https://inference.net/dashboard/api-keys', browser: true, billing: 'paid', adapter: USAGE },
   { id: 'moonshot', name: 'Moonshot (Kimi)', url: 'https://api.moonshot.ai/v1', keyHint: 'sk-…', keyUrl: 'https://platform.moonshot.ai/console/api-keys', browser: true, billing: 'paid', adapter: USAGE },
-  { id: 'zai', name: 'Z.ai (GLM)', url: 'https://api.z.ai/api/paas/v4', keyHint: 'clave de Z.ai', keyUrl: 'https://z.ai/manage-apikey/apikey-list', browser: true, billing: 'paid', adapter: USAGE },
+  { id: 'zai', name: 'Z.ai (GLM)', url: 'https://api.z.ai/api/paas/v4', keyHint: 'clave de Z.ai', keyUrl: 'https://z.ai/manage-apikey/apikey-list', browser: false, billing: 'paid', adapter: USAGE, note: 'Sin CORS: en la web y el móvil usa el relay o la app de escritorio.' },
   { id: 'dashscope', name: 'Alibaba Qwen (DashScope)', url: 'https://dashscope-intl.aliyuncs.com/compatible-mode/v1', keyHint: 'sk-…', keyUrl: 'https://modelstudio.console.alibabacloud.com', browser: true, billing: 'paid', adapter: USAGE },
   { id: 'minimax', name: 'MiniMax', url: 'https://api.minimax.io/v1', keyHint: 'clave de MiniMax', keyUrl: 'https://www.minimax.io/platform', browser: true, billing: 'paid', adapter: USAGE },
-  { id: 'cohere', name: 'Cohere', url: 'https://api.cohere.ai/compatibility/v1', keyHint: 'clave de Cohere', keyUrl: 'https://dashboard.cohere.com/api-keys', browser: true, billing: 'paid' },
-  { id: 'scaleway', name: 'Scaleway (UE)', url: 'https://api.scaleway.ai/v1', keyHint: 'clave secreta de Scaleway', keyUrl: 'https://console.scaleway.com/iam/api-keys', browser: false, billing: 'paid', adapter: USAGE },
+  { id: 'cohere', name: 'Cohere', url: 'https://api.cohere.ai/compatibility/v1', keyHint: 'clave de Cohere', keyUrl: 'https://dashboard.cohere.com/api-keys', browser: true, billing: 'paid', note: 'La clave de prueba es gratis, con límites y solo para uso no comercial.' },
+  { id: 'scaleway', name: 'Scaleway (UE)', url: 'https://api.scaleway.ai/v1', keyHint: 'clave secreta de Scaleway', keyUrl: 'https://console.scaleway.com/iam/api-keys', browser: true, billing: 'paid', adapter: USAGE },
   { id: 'ionos', name: 'IONOS AI (UE)', url: 'https://openai.inference.de-txl.ionos.com/v1', keyHint: 'token de IONOS', keyUrl: 'https://dcd.ionos.com', browser: true, billing: 'paid' },
   { id: 'litellm', name: 'LiteLLM proxy (local)', url: 'http://localhost:4000/v1', keyHint: 'clave del proxy (sk-…)', keyUrl: 'https://docs.litellm.ai', browser: true, local: true, note: 'Une cualquier proveedor (Azure, Bedrock, Vertex…) detrás de una API OpenAI.' },
   { id: 'ollama', name: 'Ollama (local)', url: 'http://localhost:11434/v1', keyHint: 'cualquier texto', keyUrl: 'https://ollama.com', browser: true, local: true, note: 'En la web, Ollama debe permitir el origen: OLLAMA_ORIGINS=*' },

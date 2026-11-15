@@ -17,6 +17,7 @@ export const SLOTS = [
  */
 export function controlUrlFrom(epUrl) {
   const u = normalizeUrl(epUrl).replace(/\/v1$/, '');
+  if (/^https:\/\/[a-z0-9-]+\.trycloudflare\.com$/i.test(u)) return u;  // Kaggle: el túnel apunta al router
   if (/-(8888|8889|8890|8899)\.app\.github\.dev/.test(u)) return u.replace(/-(8888|8889|8890|8899)(\.app\.github\.dev)/, '-8899$2');
   if (/:(8888|8889|8890|8899)$/.test(u)) return u.replace(/:(8888|8889|8890|8899)$/, ':8899');
   return '';

@@ -2,10 +2,26 @@
 
 JeanCode 1.0 reúne en una sola versión todo lo que se publicó por partes entre la 0.1 y la 0.4. Las releases antiguas se retiraron de GitHub para que solo quede una descarga oficial. Su código sigue completo en las etiquetas de git (`v0.1.0` … `v0.4.2`), así que cualquier build anterior se puede reconstruir con `git checkout vX.Y.Z && cd desktop && npm ci && npm run dist`.
 
-## Próxima versión (en `main`, ya en la web)
+## 1.2.1 — sin publicar
 
+**Tu propia API, ahora con GPU gratis en Kaggle**
+- **¿No tienes API?** abre el notebook de Jean-API-Generator en **tu** cuenta de Kaggle (sin tarjeta, solo teléfono verificado): GPU T4 x2, unas 30 horas a la semana que se renuevan cada semana. La clave va en los Secrets de Kaggle.
+- JeanCode reconoce la URL del notebook (`….trycloudflare.com`) como el router de tu Jean-API-Generator: relay, panel de Hugging Face y todos los modelos con una sola URL. Si la sesión de Kaggle termina, el aviso dice que pulses Run All y pegues la URL nueva.
+
+**APIs bien configuradas (comprobadas en vivo el 14 de noviembre)**
+- DeepSeek, Mistral, xAI y Scaleway aceptan llamadas desde la web: ya no pasan por el relay sin necesidad.
+- Z.ai no acepta llamadas desde la web: ahora usa el relay o la app de escritorio en vez de fallar.
+- Anthropic funciona desde la web (se envía su cabecera de acceso directo desde el navegador).
+- Las notas de Groq, Gemini, Cerebras, Mistral, Cohere y Hugging Face dicen que tienen plan gratis con límites; la de SambaNova, que pide un método de pago.
+
+**Web y móvil**
+- Icono propio en todas partes (web, PWA, Android, iOS, pantalla de arranque y escritorio) en vez del marcador provisional con una X. Se generan todos con `scripts/make-icons.py`.
+- La web instalable trae iconos PNG (192, 512 y adaptable) e icono para la pantalla de inicio del iPhone.
+- Los avisos salen arriba, bajo la barra: abajo tapaban la caja de escribir en el móvil.
+- Las cuatro pestañas de Ajustes caben en un móvil; el historial vacío queda alineado.
+
+**Antes, en `main`**
 - **Licencia MIT** (antes AGPL-3.0): se puede usar, modificar y distribuir también en proyectos comerciales, conservando el aviso de copyright.
-- **¿No tienes API?** en tres pasos con un botón para crear tu Codespace; la URL acepta el nombre del Codespace o cualquier URL suya y usa el router.
 - GIF de demostración en el README, plantillas de issues, guía para contribuir y Discussions.
 
 ## 1.2.0 — 12 de noviembre de 2026
