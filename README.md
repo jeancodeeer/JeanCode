@@ -87,6 +87,112 @@ The phone apps are the same web app compiled with Capacitor. The Android APK is 
 
 <br>
 
+## 02b — HOW TO INSTALL IT ON EACH DEVICE
+
+Everything is downloaded from the [latest release](https://github.com/jeancodeeer/JeanCode/releases/latest) (`x.y.z` is the version). No version asks for an account: only your API's URL and key.
+
+<details open>
+<summary><b>Web (any browser)</b></summary>
+
+Open [jeancodeeer.github.io/JeanCode](https://jeancodeeer.github.io/JeanCode/). Nothing to install. To keep it as an app (works offline):
+- **Chrome / Edge on a PC or Android**: ⋮ menu → **Install JeanCode** (or the install icon in the address bar).
+- **Safari on iPhone / iPad**: Share button → **Add to Home Screen**.
+
+Offline you can also use `JeanCode-x.y.z-web.zip`: unzip it and serve the folder with `python -m http.server 8000`.
+</details>
+
+<details>
+<summary><b>Android</b></summary>
+
+1. Download `JeanCode-x.y.z-android.apk` on the phone.
+2. Open it. Android asks to allow **installing unknown apps** from the browser or file manager: allow it for that app only.
+3. Tap **Install**. To update, install the new APK on top (your data stays).
+
+It is signed with a debug key, so Play Protect may warn; the app is the same web build wrapped with Capacitor.
+</details>
+
+<details>
+<summary><b>iPhone / iPad</b></summary>
+
+`JeanCode-x.y.z-ios-unsigned.ipa` is unsigned (the App Store needs a paid Apple developer account). Install it with your own Apple ID:
+1. Install [AltStore](https://altstore.io) or [Sideloadly](https://sideloadly.io) on your PC or Mac and plug in the iPhone.
+2. Drop the `.ipa` in and sign in with your Apple ID.
+3. On the iPhone: **Settings → General → VPN & Device Management** → trust your Apple ID. On iOS 16+, also turn on **Developer Mode** (Settings → Privacy & Security).
+
+With a free Apple ID the app expires after 7 days: reinstall it (AltStore refreshes it for you). Rather not? Use the web app from Safari.
+</details>
+
+<details>
+<summary><b>Windows</b></summary>
+
+1. Download `JeanCode-x.y.z-win-x64.exe` and run it.
+2. If SmartScreen says "Windows protected your PC" (the installer has no paid signature): **More info → Run anyway**.
+3. Pick a folder and finish. It shows up in the Start menu. New versions install on top.
+</details>
+
+<details>
+<summary><b>macOS</b></summary>
+
+1. Download the `.dmg` for your Mac: `mac-arm64` for Apple Silicon (M1, M2…), `mac-x64` for Intel.
+2. Open it and drag **JeanCode** to **Applications**.
+3. The first time, macOS blocks it because it is not notarized: right-click JeanCode → **Open** → **Open**. If that option is missing: **System Settings → Privacy & Security → Open Anyway**, or in Terminal `xattr -dr com.apple.quarantine /Applications/JeanCode.app`.
+</details>
+
+<details>
+<summary><b>Linux</b></summary>
+
+```bash
+chmod +x JeanCode-x.y.z-linux-x86_64.AppImage
+./JeanCode-x.y.z-linux-x86_64.AppImage
+```
+If it complains about FUSE: `sudo apt install libfuse2` (`libfuse2t64` on Ubuntu 24.04+).
+</details>
+
+<details>
+<summary><b>Python + pygame (any system with Python 3.8+)</b></summary>
+
+A light chat client in a window: good for old PCs, a Raspberry Pi or a machine without a browser.
+```bash
+pip install pygame-ce
+python jeancode_pygame.py          # inside the folder of JeanCode-x.y.z-pygame.zip
+```
+F2 API and key · F3 model · F4 history · Esc stops · Ctrl+Q quits. More in [pygame/README.md](pygame/README.md).
+</details>
+
+<details>
+<summary><b>PyKernel</b></summary>
+
+[PyKernel](pygame/README.md#dentro-de-pykernel) is an x86_64 kernel whose operating system is Python (MicroPython): it boots straight into `>>>`. The pygame client runs inside it unchanged.
+
+**If your PyKernel already has it** (`/lib/jeancode`):
+```bash
+python tools/run.py --screen        # on the PC: opens the machine in a window plus the network bridge
+```
+```
+>>> jeancode
+```
+
+**If it doesn't**, copy it to its (FAT) disk with mtools, on Linux or WSL, with the machine off:
+```bash
+unzip JeanCode-x.y.z-pygame.zip
+mmd   -i build/disk.img ::/lib                                   # if /lib does not exist on the disk yet
+mcopy -i build/disk.img -s JeanCode-x.y.z-pygame/jeancode ::/lib/
+```
+Modules in `/disk/lib` are importable. Inside PyKernel:
+```
+>>> from jeancode import app; app.main()
+```
+
+**Networking:** PyKernel has no network card or TCP/IP yet. JeanCode sends each request through the **second serial port (COM2)** and `bridge.py`, on the host PC, makes the HTTPS call. `tools/run.py` sets it up; with plain QEMU:
+```bash
+qemu-system-x86_64 ... -serial vc -serial tcp:127.0.0.1:4555,server=on,wait=off
+python bridge.py --connect 127.0.0.1:4555                        # in another terminal
+```
+To see the window QEMU needs a graphical display (in WSL: `sudo apt install qemu-system-gui`). Settings and history live in `/disk/jeancode/`. Inside PyKernel, `localhost` is the PC running the bridge (handy for Ollama or LM Studio).
+</details>
+
+<br>
+
 ## 03 — THREE MODES
 
 <table>
