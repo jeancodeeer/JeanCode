@@ -105,17 +105,17 @@ export function explain(status, body, ep) {
   const detail = serverMessage(body);
   const tail = detail ? ` Detalle: ${detail}` : '';
   if (status === 401 || kindOf(status, detail) === 'auth') return `${p.name} rechazó la clave (${status}). ${jean ? 'Revisa tu JEAN_API_KEY.' : `Revisa la clave (${p.keyHint}).`}`;
-  if (status === 403) return jean ? 'Acceso denegado (403). ¿El puerto del Codespace está como público? (jean-api.ps1 start lo hace)' : `${p.name} denegó el acceso (403): la clave no tiene permiso para ese modelo o recurso.${tail}`;
+  if (status === 403) return jean ? 'Acceso denegado (403). Tu Space debe ser público (la clave lo protege); en un Codespace, el puerto debe estar como público.' : `${p.name} denegó el acceso (403): la clave no tiene permiso para ese modelo o recurso.${tail}`;
   if (status === 404) return jean && !detail ? 'No se encontró la ruta (404). La URL debe terminar en /v1.' : `No encontrado (404): la URL o el modelo no existen en ${p.name}.${tail}`;
   if (status === 429) return `${p.name} limitó las peticiones (429): espera un poco o usa otro modelo.${tail}`;
-  if (status === 503 && jean) return detail ? `Jean no está listo (503): ${detail}` : 'El modelo todavía está cargando (503). Espera 2–4 minutos tras despertar el Codespace.';
+  if (status === 503 && jean) return detail ? `Jean no está listo (503): ${detail}` : 'El modelo todavía está cargando (503). Espera 2–4 minutos tras despertar tu Space o tu Codespace.';
   if (status >= 500) return `${p.name} tuvo un error interno (${status}). Suele ser temporal.${tail}`;
   return `${p.name} respondió ${status}.${tail}`;
 }
 
 function networkHint(ep) {
   const p = providerOf(ep);
-  if (p.id === 'jean') return 'No se pudo conectar. Puede que el Codespace esté dormido, que el puerto no sea público o que la URL esté mal.';
+  if (p.id === 'jean') return 'No se pudo conectar. Puede que tu Space esté dormido o construyéndose (mira su página en Hugging Face), o que la URL esté mal.';
   if (p.local) return `No se pudo conectar con ${p.name}. ¿Está abierto en esta PC?`;
   return `No se pudo conectar con ${p.name}. Revisa la URL y tu conexión.`;
 }
@@ -132,9 +132,9 @@ const LOCALISH = /^https?:\/\/(localhost|127\.|\[::1\]|10\.|192\.168\.|172\.(1[6
 export const isNativeApp = () => typeof window !== 'undefined' && !!window.Capacitor?.isNativePlatform?.();
 const nativeHttp = () => (isNativeApp() ? window.Capacitor?.Plugins?.CapacitorHttp : null);
 
-/** Router de un Jean-API-Generator configurado (URL del puerto 8899) que hace de relay. */
+/** Router de un Jean-API-Generator configurado (tu Space, o el puerto 8899 de un Codespace) que hace de relay. */
 export function relayBase() {
-  const j = getEndpoints().find((e) => (e.provider || 'jean') === 'jean' && /-8899\.|:8899(\/|$)/.test(e.url));
+  const j = getEndpoints().find((e) => (e.provider || 'jean') === 'jean' && isRouterUrl(e.url));
   if (j) { try { return { origin: new URL(j.url).origin, key: j.key }; } catch { /* URL rara: se prueba el relay propio */ } }
   // sin Codespace: un relay propio (p. ej. el Cloudflare Worker de relay/worker.js), configurado en Ajustes
   const own = store.get('relay', null);
@@ -185,7 +185,7 @@ async function nativeRequest(ep, url, { method = 'GET', headers, body, timeout }
 
 /** Mensaje claro cuando un proveedor bloquea el navegador y no hay forma de esquivarlo aquí. */
 function corsHint(ep) {
-  return `${providerOf(ep).name} no acepta llamadas desde una página web (CORS). Soluciones: añade tu Jean-API-Generator (URL del puerto 8899) en Ajustes y JeanCode usará su relay, o usa la app de escritorio o la de móvil.`;
+  return `${providerOf(ep).name} no acepta llamadas desde una página web (CORS). Soluciones: añade tu Jean-API-Generator (la URL de tu Space) en Ajustes y JeanCode usará su relay, o usa la app de escritorio o la de móvil.`;
 }
 
 async function request(ep, path, init = {}) {
@@ -208,7 +208,7 @@ async function request(ep, path, init = {}) {
     if (e.name === 'TimeoutError') throw new ApiError(`${providerOf(ep).name} no respondió a tiempo.`, 0, '', 'timeout');
     // fallo de red de un proveedor remoto desde la web: casi siempre CORS. Si hay relay o red nativa, se reintenta por ahí.
     if (rt.via === 'direct' && !init.retried && markCorsBlocked(ep)) return request(ep, path, { ...init, retried: true });
-    throw new ApiError(rt.via === 'relay' ? 'No se pudo conectar con el relay de tu Jean-API-Generator: ¿el Codespace está despierto y el puerto 8899 es público?'
+    throw new ApiError(rt.via === 'relay' ? 'No se pudo conectar con el relay de tu Jean-API-Generator: ¿tu Space está despierto?'
       : corsExposed(ep) ? `${networkHint(ep)} Si la URL es correcta, puede ser esto: ${corsHint(ep)}` : networkHint(ep), 0);
   }
   if (!res.ok) { const body = await res.text().catch(() => ''); throw new ApiError(explain(res.status, body, ep), res.status, serverMessage(body)); }
@@ -401,7 +401,7 @@ async function chatOnce({ ep, model, messages, signal, onDelta, onReasoning, onT
     if (e instanceof ApiError) throw e;
     if (signal?.aborted) throw new DOMException('aborted', 'AbortError');
     if (ctl.signal.reason?.name === 'TimeoutError') throw new ApiError(`${providerOf(ep).name} no empezó a responder a tiempo.`, 0, '', 'timeout');
-    throw new ApiError(rt.via === 'relay' ? 'No se pudo conectar con el relay de tu Jean-API-Generator: ¿el Codespace está despierto y el puerto 8899 es público?'
+    throw new ApiError(rt.via === 'relay' ? 'No se pudo conectar con el relay de tu Jean-API-Generator: ¿tu Space está despierto?'
       : corsExposed(ep) ? `${networkHint(ep)} Si la URL es correcta, puede ser esto: ${corsHint(ep)}` : networkHint(ep), 0);
   } finally {
     clearTimeout(timer);
@@ -451,8 +451,9 @@ export function siblingUrls(url) {
   return out;
 }
 
-/** true si la URL es el router (:8899) de un Jean-API-Generator. */
-export const isRouterUrl = (url) => new RegExp(`[-:]${ROUTER_PORT}(\\.app\\.github\\.dev)?(?=/|$)`).test(String(url));
+/** true si la URL es el router de un Jean-API-Generator: un Space (….hf.space) o el puerto 8899. */
+export const isRouterUrl = (url) => /^https:\/\/[a-z0-9-]+\.hf\.space(\/|$)/i.test(String(url))
+  || new RegExp(`[-:]${ROUTER_PORT}(\\.app\\.github\\.dev)?(?=/|$)`).test(String(url));
 
 /**
  * Completa la conexión a un Jean-API-Generator. Si el router (:8899) responde, basta con él: una URL,

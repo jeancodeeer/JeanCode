@@ -5,7 +5,7 @@ JeanCode 1.0 reúne en una sola versión todo lo que se publicó por partes entr
 ## Próxima versión (en `main`, ya en la web)
 
 - **Licencia MIT** (antes AGPL-3.0): se puede usar, modificar y distribuir también en proyectos comerciales, conservando el aviso de copyright.
-- **¿No tienes API?** en tres pasos con un botón para crear tu Codespace; la URL acepta el nombre del Codespace o cualquier URL suya y usa el router.
+- **¿No tienes API?** en tres pasos con un botón para duplicar el Space gratuito de Jean-API-Generator en Hugging Face. La URL acepta `usuario/space`, la página del Space o su URL `.hf.space`; los Codespaces siguen funcionando.
 - GIF de demostración en el README, plantillas de issues, guía para contribuir y Discussions.
 
 ## 1.2.0 — 12 de noviembre de 2026

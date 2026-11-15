@@ -73,7 +73,7 @@ const JEAN_ADAPTER = {
 const USAGE = { usageInStream: true };
 
 export const PROVIDERS = [
-  { id: 'jean', name: 'Jean-API-Generator', url: '', keyHint: 'tu JEAN_API_KEY', keyUrl: 'https://github.com/jeancodeeer/Jean-API-Generator', browser: true, billing: 'own', adapter: JEAN_ADAPTER, note: 'Tu propio Codespace con Grey, Marvel y Fénix. Usa la URL del puerto 8899 (router).' },
+  { id: 'jean', name: 'Jean-API-Generator', url: '', keyHint: 'tu JEAN_API_KEY', keyUrl: 'https://github.com/jeancodeeer/Jean-API-Generator', browser: true, billing: 'own', adapter: JEAN_ADAPTER, note: 'Tu propio Space gratuito de Hugging Face con Grey y Marvel. Pega «usuario/space» o la URL del Space.' },
   { id: 'openai', name: 'OpenAI', url: 'https://api.openai.com/v1', keyHint: 'sk-…', keyUrl: 'https://platform.openai.com/api-keys', browser: true, billing: 'paid', adapter: USAGE },
   { id: 'anthropic', name: 'Anthropic', url: 'https://api.anthropic.com/v1', keyHint: 'sk-ant-…', keyUrl: 'https://console.anthropic.com/settings/keys', browser: false, billing: 'paid', note: 'Usa su capa compatible con OpenAI. En la web puede bloquearse: usa el escritorio.' },
   { id: 'gemini', name: 'Google Gemini', url: 'https://generativelanguage.googleapis.com/v1beta/openai', keyHint: 'AIza…', keyUrl: 'https://aistudio.google.com/apikey', browser: true, billing: 'paid' },

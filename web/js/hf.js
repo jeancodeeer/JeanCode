@@ -1,5 +1,5 @@
-// Hugging Face → tu Codespace: búsqueda de modelos GGUF en el Hub y control del
-// servidor de Jean-API-Generator (puerto 8899) para cargarlos en un puerto de modelo.
+// Hugging Face → tu Jean-API-Generator: búsqueda de modelos GGUF en el Hub y control del
+// servidor (tu Space, o el puerto 8899 de un Codespace) para cargarlos en un puerto de modelo.
 import { normalizeUrl } from './api.js';
 
 const HUB = 'https://huggingface.co';
@@ -12,11 +12,12 @@ export const SLOTS = [
 ];
 
 /**
- * URL del servidor de control a partir de un endpoint Jean (-8888.app.github.dev → -8899).
- * El router de Jean-API-Generator ya vive en :8899: su URL sin /v1 es el control.
+ * URL del servidor de control a partir de un endpoint Jean. En un Space es la propia URL del Space;
+ * en un Codespace, el puerto 8899 (-8888.app.github.dev → -8899). Siempre sin /v1.
  */
 export function controlUrlFrom(epUrl) {
   const u = normalizeUrl(epUrl).replace(/\/v1$/, '');
+  if (/^https:\/\/[a-z0-9-]+\.hf\.space$/i.test(u)) return u;
   if (/-(8888|8889|8890|8899)\.app\.github\.dev/.test(u)) return u.replace(/-(8888|8889|8890|8899)(\.app\.github\.dev)/, '-8899$2');
   if (/:(8888|8889|8890|8899)$/.test(u)) return u.replace(/:(8888|8889|8890|8899)$/, ':8899');
   return '';
@@ -60,14 +61,14 @@ export async function control(base, key, path, body) {
   let status, text;
   if (b?.http) {
     const r = await b.http({ url: base + path, method, headers, body: body ? JSON.stringify(body) : undefined });
-    if (r.error) throw new Error('No se pudo conectar con el control (puerto 8899 público y Codespace encendido).');
+    if (r.error) throw new Error('No se pudo conectar con el control: ¿tu Space está encendido?');
     status = r.status; text = r.body;
   } else {
     let res;
     try {
       res = await fetch(base + path, { method, headers, body: body ? JSON.stringify(body) : undefined });
     } catch {
-      throw new Error('No se pudo conectar con el control: el puerto 8899 debe ser público y el Codespace estar encendido.');
+      throw new Error('No se pudo conectar con el control: tu Space debe estar encendido (o, en un Codespace, el puerto 8899 público).');
     }
     status = res.status; text = await res.text();
   }

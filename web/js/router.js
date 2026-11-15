@@ -31,13 +31,14 @@ export function redact(text) {
 }
 
 /**
- * Host y ruta de un endpoint, sin consulta ni credenciales. El nombre de un Codespace identifica a su
- * dueño: se enmascara (…-8899.app.github.dev) para que el registro se pueda compartir.
+ * Host y ruta de un endpoint, sin consulta ni credenciales. El nombre de un Space o de un Codespace
+ * identifica a su dueño: se enmascara (….hf.space, …-8899.app.github.dev) para poder compartir el registro.
  */
 export function where(ep) {
   try {
     const u = new URL(ep.url);
-    const host = u.host.replace(/^[a-z0-9-]+-(\d{4,5})\.app\.github\.dev$/i, '…-$1.app.github.dev');
+    const host = u.host.replace(/^[a-z0-9-]+-(\d{4,5})\.app\.github\.dev$/i, '…-$1.app.github.dev')
+      .replace(/^[a-z0-9-]+\.hf\.space$/i, '….hf.space');
     return `${host}${u.pathname}`;
   } catch { return '(url inválida)'; }
 }
@@ -196,12 +197,23 @@ function incompatibleFormat(u) {
  * Corrige lo seguro (barra final, ruta de petición pegada, proveedor que no corresponde al host, la
  * capa OpenAI de Gemini/Ollama/Anthropic) y rechaza lo que fallaría o expondría la clave.
  */
+/** Subdominio de un Space de Hugging Face: «Usuario/Mi_Space» → «usuario-mi-space». */
+const spaceHost = (owner, name) => `${owner}-${name}`.toLowerCase().replace(/[._]/g, '-');
+
 /**
- * Jean-API-Generator: acepta el nombre del Codespace, la URL del editor (…github.dev) o la de cualquier
- * puerto de modelo, y devuelve la URL del router (puerto 8899, que trae todos los modelos). null si no aplica.
+ * Jean-API-Generator: devuelve la URL del router (trae todos los modelos) a partir de lo que el usuario
+ * pegue, o null si no aplica.
+ * - Space de Hugging Face: «usuario/space», huggingface.co/spaces/usuario/space o usuario-space.hf.space.
+ * - Codespace: su nombre, la URL del editor (…github.dev) o la de cualquier puerto de modelo (→ 8899).
  */
 export function jeanRouterUrl(input) {
   const raw = String(input || '').trim().replace(/\/+$/, '');
+  const short = raw.match(/^([a-z0-9][\w-]*)\/([a-z0-9][\w.-]*)$/i);
+  if (short) return `https://${spaceHost(short[1], short[2])}.hf.space/v1`;
+  const page = raw.match(/^(?:https?:\/\/)?(?:www\.)?huggingface\.co\/spaces\/([\w-]+)\/([\w.-]+)/i);
+  if (page) return `https://${spaceHost(page[1], page[2])}.hf.space/v1`;
+  const hf = raw.match(/^(?:https?:\/\/)?([a-z0-9-]+)\.hf\.space(\/.*)?$/i);
+  if (hf) { const r = `https://${hf[1].toLowerCase()}.hf.space/v1`; return raw === r ? null : r; }
   if (/^[a-z0-9][a-z0-9-]{4,}[a-z0-9]$/i.test(raw) && !raw.includes('.')) return `https://${raw.toLowerCase()}-8899.app.github.dev/v1`;
   let u;
   try { u = new URL(/^https?:\/\//i.test(raw) ? raw : `https://${raw}`); } catch { return null; }
@@ -217,10 +229,13 @@ export function validateEndpoint({ url, key, provider }, { existing = [], deskto
   const warnings = [];
   let clean = normalizeUrl(url);
   let prov = providerById(provider);
-  // tu Codespace en cualquier forma (nombre, URL del editor o de un puerto de modelo) -> router 8899
+  // tu Space o tu Codespace en cualquier forma -> la URL del router, que trae todos los modelos
   if (prov.id === 'jean') {
     const r = jeanRouterUrl(url);
-    if (r && normalizeUrl(r) !== clean) { warnings.push('Se usa el router de tu Codespace (puerto 8899): trae todos sus modelos.'); clean = normalizeUrl(r); }
+    if (r && normalizeUrl(r) !== clean) {
+      warnings.push(/\.hf\.space\//.test(r) ? 'Se usa la URL de la API de tu Space: trae todos sus modelos.' : 'Se usa el router de tu Codespace (puerto 8899): trae todos sus modelos.');
+      clean = normalizeUrl(r);
+    }
   }
   const k = String(key ?? '').trim();
   let u;

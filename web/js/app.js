@@ -70,7 +70,7 @@ function showSplash() {
   $('#splash').hidden = false;
   $('#app').hidden = true;
   $('#api-repo-link').href = CONFIG.apiRepoUrl;
-  $('#api-codespace-link').href = `https://codespaces.new/${CONFIG.owner}/Jean-API-Generator`;
+  $('#api-space-link').href = CONFIG.spaceTemplateUrl;
 }
 
 async function enterApp() {
@@ -119,7 +119,7 @@ function wireProvider(select, urlInput, keyInput, note) {
   const apply = () => {
     const p = providerById(select.value);
     urlInput.value = p.url;
-    urlInput.placeholder = p.id === 'jean' ? 'https://tu-codespace-8899.app.github.dev/v1' : (p.url || 'https://tu-servidor/v1');
+    urlInput.placeholder = p.id === 'jean' ? 'tu-usuario/tu-space' : (p.url || 'https://tu-servidor/v1');
     keyInput.placeholder = p.keyHint;
     const parts = [];
     if (p.note) parts.push(esc(p.note));
@@ -390,7 +390,7 @@ function renderFenix() {
   const box = $('#fenix-status');
   if (!box) return;
   const f = state.models.find((m) => /fenix/i.test(m.id));
-  box.textContent = f ? `Conectado: ${f.id} en ${f.ep.url}` : 'No encontrado. Actívalo en tu Codespace y pulsa Buscar Fénix.';
+  box.textContent = f ? `Conectado: ${f.id} en ${f.ep.url}` : 'No encontrado. Fénix necesita 32 GB de RAM: actívalo en un servidor que la tenga y pulsa Buscar Fénix.';
   box.classList.toggle('ok', !!f);
 }
 
@@ -1820,13 +1820,13 @@ const ctl = (path, body) => {
   const ep = jeanEndpoint();
   if (!ep) throw new Error('Conecta primero tu Jean-API-Generator.');
   const base = $('#hf-control').value.trim().replace(/\/+$/, '');
-  if (!base) throw new Error('Falta la URL del control (puerto 8899 de tu Codespace).');
+  if (!base) throw new Error('Falta la URL del control (la URL de tu Space).');
   return control(base, ep.key, path, body);
 };
 
 async function refreshSlots() {
   const list = $('#hf-slots');
-  list.innerHTML = '<li>Consultando tu Codespace…</li>';
+  list.innerHTML = '<li>Consultando tu servidor…</li>';
   try {
     const st = await ctl('/status');
     hf.ram = st.ram_available || 0;

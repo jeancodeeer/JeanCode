@@ -85,10 +85,10 @@
               <button type="button" class="btn" id="gen-btn">Generar</button>
             </span>
           </li>
-          <li><strong>Añádela como secreto</strong> <code>JEAN_API_KEY</code> en <a class="link-out" href="https://github.com/settings/codespaces" target="_blank" rel="noopener">tus secretos de Codespaces</a>, con acceso a <code>Jean-API-Generator</code>.</li>
-          <li><strong>Crea tu Codespace</strong> y espera 2–4 minutos: <a class="btn" id="api-codespace-link" href="https://codespaces.new/jeancodeeer/Jean-API-Generator" target="_blank" rel="noopener">Crear mi Codespace</a></li>
+          <li><strong>Duplica el Space</strong> en tu cuenta de Hugging Face, con el hardware gratuito <em>CPU basic</em> y visibilidad <em>Public</em>: <a class="btn" id="api-space-link" href="https://huggingface.co/spaces/JeanCoder/jean-api?duplicate=true" target="_blank" rel="noopener">Duplicar el Space</a></li>
+          <li><strong>Pega la clave</strong> en el campo <code>JEAN_API_KEY</code> de ese mismo diálogo (queda como secreto: nadie más la ve) y espera 3–6 minutos.</li>
         </ol>
-        <p class="note">Luego pega arriba el <strong>nombre de tu Codespace</strong> o cualquier URL suya: JeanCode encuentra el router solo. Es un servidor personal en CPU (~8 tokens/s) que se duerme tras 30 minutos sin uso.</p>
+        <p class="note">Luego pega arriba <strong>tu-usuario/tu-space</strong> o la URL del Space: JeanCode encuentra la API sola. Es un servidor personal en CPU, gratis, que se duerme tras 48 horas sin visitas y despierta con la siguiente petición.</p>
         <a class="link-out" id="api-repo-link" href="https://github.com/jeancodeeer/Jean-API-Generator" target="_blank" rel="noopener">Cómo funciona Jean-API-Generator</a>
       </div>
     </details>
@@ -546,8 +546,8 @@
       <input id="hf-token" type="password" placeholder="hf_… solo para modelos privados" spellcheck="false" autocomplete="off">
     </label>
     <label class="field">
-      <span class="label">Control de tu Codespace</span>
-      <input id="hf-control" type="url" placeholder="https://tu-codespace-8899.app.github.dev" spellcheck="false">
+      <span class="label">Control de tu servidor</span>
+      <input id="hf-control" type="url" placeholder="https://tu-usuario-tu-space.hf.space" spellcheck="false">
     </label>
   </div>
   <p class="note" id="hf-control-note">El token se queda en este equipo y solo viaja a tu Codespace al descargar.</p>

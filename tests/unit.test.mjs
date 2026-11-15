@@ -715,3 +715,24 @@ test('Jean API: el nombre del Codespace o cualquier URL suya lleva al router 889
   assert.equal(v.url, 'https://jeancode-api-7vrvr96vw54x3wpq5-8899.app.github.dev/v1');
   assert.ok(v.warnings.some((w) => /router/.test(w)));
 });
+
+test('Jean API: un Space de Hugging Face en cualquier forma lleva a su URL /v1', async () => {
+  const R = await import('../web/js/router.js');
+  const A = await import('../web/js/api.js');
+  const H = await import('../web/js/hf.js');
+  const url = 'https://jeancoder-jean-api.hf.space/v1';
+  assert.equal(R.jeanRouterUrl('JeanCoder/jean-api'), url, 'usuario/space');
+  assert.equal(R.jeanRouterUrl('https://huggingface.co/spaces/JeanCoder/jean-api'), url, 'página del Space');
+  assert.equal(R.jeanRouterUrl('huggingface.co/spaces/JeanCoder/jean-api/settings'), url, 'página con subruta');
+  assert.equal(R.jeanRouterUrl('https://JeanCoder-jean-api.hf.space'), url, 'URL del Space sin /v1');
+  assert.equal(R.jeanRouterUrl('Some_User/my.space'), 'https://some-user-my-space.hf.space/v1', 'puntos y guiones bajos');
+  assert.equal(R.jeanRouterUrl(url), null, 'ya es la URL de la API');
+  const v = R.validateEndpoint({ url: 'JeanCoder/jean-api', key: 'k', provider: 'jean' });
+  assert.equal(v.ok, true, JSON.stringify(v.errors));
+  assert.equal(v.url, url);
+  assert.ok(v.warnings.some((w) => /Space/.test(w)));
+  assert.equal(A.isRouterUrl(url), true, 'el Space es el router');
+  assert.equal(A.isRouterUrl('https://api.groq.com/openai/v1'), false);
+  assert.equal(H.controlUrlFrom(url), 'https://jeancoder-jean-api.hf.space', 'control = URL del Space');
+  assert.equal(R.where({ url }), '….hf.space/v1', 'el registro no muestra el usuario');
+});

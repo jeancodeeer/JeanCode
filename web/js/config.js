@@ -27,6 +27,8 @@ export const CONFIG = {
   repo,
   repoUrl: `https://github.com/${owner}/${repo}`,
   apiRepoUrl: `https://github.com/${owner}/Jean-API-Generator`,
+  // plantilla del Space de Jean-API-Generator en Hugging Face (gratis, CPU basic)
+  spaceTemplateUrl: 'https://huggingface.co/spaces/JeanCoder/jean-api?duplicate=true',
   releasesApi: `https://api.github.com/repos/${owner}/${repo}/releases/latest`,
   releasesUrl: `https://github.com/${owner}/${repo}/releases/latest`,
   changelogUrl: `https://raw.githubusercontent.com/${owner}/${repo}/main/CHANGELOG.md`,
