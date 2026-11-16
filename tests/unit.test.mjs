@@ -800,3 +800,46 @@ test('EJECUTAR en el PC: comandos según el lenguaje, dentro de la copia', () =>
   const java = runner.stepsFor('java', 'Main.java', { 'Main.java': 'package app.demo;\nclass Main {}' });
   assert.deepEqual(java[1][0].args.slice(-1), ['app.demo.Main']);
 });
+
+/* ---------------- razonamiento por modelo y aviso de versión nueva ---------------- */
+import { reasoningOf, resolveMode, applyReasoning } from '../web/js/reasoning.js';
+import { platformOf, pickAsset, changeKind, updateFrom } from '../web/js/update.js';
+
+test('razonamiento: cada modelo ofrece lo suyo y se pide a su manera', () => {
+  const ep = (provider) => ({ id: provider, provider, url: 'x' });
+  assert.deepEqual(reasoningOf(ep('jean'), 'jean-grey').modes, ['normal', 'think']);
+  assert.deepEqual(reasoningOf(ep('openai'), 'o3-mini').modes, ['low', 'medium', 'high']);
+  assert.deepEqual(reasoningOf(ep('openai'), 'gpt-5').modes, ['minimal', 'low', 'medium', 'high']);
+  assert.deepEqual(reasoningOf(ep('openai'), 'gpt-4o').modes, [], 'sin razonamiento regulable');
+  assert.equal(reasoningOf(ep('deepseek'), 'deepseek-reasoner').always, true);
+  const body = { model: 'x', temperature: 0.2 };
+  assert.deepEqual(applyReasoning(body, ep('jean'), 'jean-grey', 'think'), { model: 'x', temperature: 0.2, chat_template_kwargs: { enable_thinking: true } });
+  assert.deepEqual(applyReasoning(body, ep('openai'), 'o3-mini', 'high'), { model: 'x', reasoning_effort: 'high' }, 'sin temperature');
+  assert.deepEqual(applyReasoning(body, ep('openrouter'), 'openai/gpt-oss-120b', 'low').reasoning, { effort: 'low' });
+  const a = applyReasoning(body, ep('anthropic'), 'claude-sonnet-4-5', 'medium');
+  assert.equal(a.thinking.budget_tokens, 8192);
+  assert.ok(a.max_tokens > 8192 && !('temperature' in a));
+  assert.deepEqual(applyReasoning(body, ep('groq'), 'gpt-4o', 'high'), body, 'un modelo sin razonamiento no cambia');
+  assert.equal(resolveMode('think', { modes: ['low', 'medium', 'high'] }), 'medium', 'PENSAR → esfuerzo medio');
+  assert.equal(resolveMode('high', { modes: ['normal', 'think'] }), 'think');
+  assert.equal(resolveMode('normal', { modes: ['low', 'high'] }), 'low');
+});
+
+test('versión nueva: plataforma, descarga y tipo de salto', () => {
+  assert.equal(platformOf({ desktop: false }), null, 'la web se actualiza sola');
+  assert.equal(platformOf({ capacitor: { isNativePlatform: () => true, getPlatform: () => 'android' } }), 'android');
+  assert.equal(platformOf({ desktop: true, ua: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Electron/38' }), 'win');
+  const assets = [{ name: 'JeanCode-1.3.0-android.apk', size: 1 }, { name: 'JeanCode-Setup-1.3.0.exe', size: 2, browser_download_url: 'https://dl/JeanCode-Setup-1.3.0.exe' }, { name: 'JeanCode-1.3.0-arm64.dmg', size: 3 }];
+  assert.equal(pickAsset(assets, 'android').name, 'JeanCode-1.3.0-android.apk');
+  assert.equal(pickAsset(assets, 'linux'), null);
+  assert.equal(changeKind('1.2.2', '1.2.3'), 'parche');
+  assert.equal(changeKind('1.2.2', '1.3.0'), 'menor');
+  assert.equal(changeKind('1.2.2', '2.0.0'), 'mayor');
+  const rel = { tag_name: 'v1.3.0', assets, body: '## Novedades', html_url: 'https://github.com/x/releases/tag/v1.3.0' };
+  const u = updateFrom(rel, { platform: 'win', current: '1.2.2' });
+  assert.equal(u.version, '1.3.0');
+  assert.match(u.url, /\.exe$/);
+  assert.equal(updateFrom(rel, { platform: 'win', current: '1.3.0' }), null, 'misma versión');
+  assert.equal(updateFrom(rel, { platform: 'win', current: '1.2.2', skipped: '1.3.0' }), null, 'omitida');
+  assert.equal(updateFrom({ ...rel, prerelease: true }, { platform: 'win', current: '1.2.2' }), null);
+});

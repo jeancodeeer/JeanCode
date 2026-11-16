@@ -43,7 +43,9 @@ export function parseFiles(text) {
     const p = safePath(m[1]);
     if (p) deletes.push(p);
   }
-  const prose = text.replace(FILE_RE, (_, p) => `\n\`${safePath(p) || p}\` · escrito\n`).replace(DEL_RE, (_, p) => `\n\`${p}\` · borrado\n`).trim();
+  // mientras llega, el archivo en curso dice "escribiendo… N líneas" y los terminados "escrito"
+  const prose = text.replace(FILE_RE, (m, p, body) => (m.endsWith('<<<END>>>')
+    ? `\n\`${safePath(p) || p}\` · escrito\n` : `\n\`${safePath(p) || p}\` · escribiendo… ${body.split('\n').length} líneas\n`)).replace(DEL_RE, (_, p) => `\n\`${p}\` · borrado\n`).trim();
   return { files, deletes, prose, open };
 }
 

@@ -70,7 +70,7 @@ function blocks(text) {
 }
 
 /** Separa el razonamiento (<think>) del texto final y devuelve HTML. */
-export function renderMarkdown(text, reasoning = '') {
+export function renderMarkdown(text, reasoning = '', { open: openThink = false, label = 'RAZONAMIENTO', live = false } = {}) {
   let thinking = reasoning;
   let body = text;
   const open = body.indexOf('<think>');
@@ -80,7 +80,7 @@ export function renderMarkdown(text, reasoning = '') {
     body = body.slice(0, open) + (close >= 0 ? body.slice(close + 8) : '');
   }
   const think = thinking.trim()
-    ? `<details class="think"><summary>RAZONAMIENTO</summary>${blocks(thinking.trim())}</details>` : '';
+    ? `<details class="think${live ? ' live' : ''}"${openThink ? ' open' : ''}><summary>${esc(label)}</summary><div class="think-body">${blocks(thinking.trim())}</div></details>` : '';
   return think + blocks(body.trim());
 }
 

@@ -13,6 +13,8 @@ import { lineDiff, diffStats } from './diff.js';
 import { PROVIDERS, providerById, providerOf, LOCAL_CANDIDATES, OLLAMA_SUGGESTED } from './providers.js';
 import { AUTO, modelKey, chat as routedChat, probeEndpoint, healthOf, validateEndpoint, pickAuto, visibleModels, resolveSaved, formatLog, routeLog, FALLBACK_POLICIES, fallbackPolicy, decide, routeFor, setRouteFor, checkEndpoint, exportConfig, KIND_LABEL, formatTrace, fallbackChain, allowPaidAuto, where, latencyOf } from './router.js';
 import { capsOf, describeCaps, billingOf, fmtCtx } from './capabilities.js';
+import { reasoningOf, resolveMode, MODES } from './reasoning.js';
+import { platformOf, updateFrom, KIND_TEXT } from './update.js';
 import { normalizePolicy, describeAction, riskOf, actionKey, needsTerminalApproval, INPUT_TOOLS } from './computer.js';
 import { SLOTS, controlUrlFrom, hfSearch, hfFiles, control, gb } from './hf.js';
 import { initApps } from './apps.js';
@@ -97,19 +99,64 @@ async function enterApp() {
   await refreshModels();
   renderThreads();
   openThread(state.threads.find((t) => t.mode === state.mode)?.id || null);
-  if (desktop) checkUpdate();
 }
 
-/** Escritorio: avisa una vez por sesión si hay una versión publicada más nueva. La web se actualiza sola. */
-async function checkUpdate() {
-  if (sessionStorage.getItem('jeancode.updateChecked')) return;
-  sessionStorage.setItem('jeancode.updateChecked', '1');
+/*
+ * Escritorio y móvil: al abrir, al volver a la app y cada 6 h se mira la última release de GitHub.
+ * Si es más nueva, pantalla completa con la versión (1.2.3, 1.3.0…), qué tipo de salto es, las
+ * novedades y la descarga de ESTA plataforma. La web no la necesita: se actualiza sola.
+ */
+const UPDATE_PLATFORM = platformOf({ desktop: !!desktop, capacitor: window.Capacitor || null, ua: navigator.userAgent });
+const UPDATE_EVERY = 6 * 3600 * 1000;
+async function checkUpdate({ force = false } = {}) {
+  if (!UPDATE_PLATFORM) return null;
+  if (!force && Date.now() - store.get('updateCheckedAt', 0) < 30 * 60 * 1000 && !store.get('updatePending', null)) return null;
+  let upd = null;
   try {
-    const res = await fetch(CONFIG.releasesApi, { headers: { Accept: 'application/vnd.github+json' } });
-    if (!res.ok) return;
-    const rel = await res.json();
-    if (isNewer(rel.tag_name)) toast(`JeanCode ${rel.tag_name.replace(/^v/, '')} disponible · Más → Descargar la app`);
-  } catch { /* sin red: nada que avisar */ }
+    const res = await fetch(CONFIG.releasesApi, { headers: { Accept: 'application/vnd.github+json' }, cache: 'no-store' });
+    if (!res.ok) return null;
+    store.set('updateCheckedAt', Date.now());
+    upd = updateFrom(await res.json(), { platform: UPDATE_PLATFORM, skipped: force ? null : store.get('updateSkipped', null) });
+  } catch { return null; } // sin red: nada que avisar
+  store.set('updatePending', upd ? upd.version : null);
+  if (!upd) return null;
+  const snooze = store.get('updateSnooze', null);
+  if (!force && snooze?.version === upd.version && Date.now() < snooze.until) return upd;
+  showUpdate(upd);
+  return upd;
+}
+
+function showUpdate(upd) {
+  const d = $('#update-splash');
+  $('#upd-version').textContent = upd.version;
+  $('#upd-kind').textContent = KIND_TEXT[upd.kind];
+  $('#upd-from').innerHTML = `Tienes la <b>${esc(upd.current)}</b>. ${upd.date ? `Publicada el ${esc(new Date(upd.date).toLocaleDateString('es', { day: 'numeric', month: 'long', year: 'numeric' }))}.` : ''}`;
+  $('#upd-notes').innerHTML = upd.notes ? renderMarkdown(upd.notes.slice(0, 6000)) : '';
+  const get = $('#upd-get');
+  get.href = upd.url || CONFIG.releasesUrl;
+  get.textContent = `Descargar ${upd.version}`;
+  $('#upd-file').innerHTML = (upd.asset ? `${esc(upd.asset.name)} · ${(upd.asset.size / 1048576).toFixed(0)} MB · ` : '')
+    + `<a href="${esc(upd.page || CONFIG.releasesUrl)}" target="_blank" rel="noopener">Todas las descargas</a>`
+    + (UPDATE_PLATFORM === 'ios' ? ' · instálala con AltStore o Sideloadly' : '')
+    + (UPDATE_PLATFORM === 'android' ? ' · al abrir el .apk, Android pedirá permiso para instalar' : '');
+  d.dataset.version = upd.version;
+  d.hidden = false;
+  get.focus();
+}
+function closeUpdate(how) {
+  const d = $('#update-splash');
+  const v = d.dataset.version;
+  if (how === 'skip') store.set('updateSkipped', v);
+  if (how === 'later') store.set('updateSnooze', { version: v, until: Date.now() + 24 * 3600 * 1000 });
+  d.hidden = true;
+}
+$('#upd-later').addEventListener('click', () => closeUpdate('later'));
+$('#upd-skip').addEventListener('click', () => { closeUpdate('skip'); toast('NO SE VOLVERÁ A AVISAR DE ESTA VERSIÓN'); });
+$('#upd-get').addEventListener('click', () => setTimeout(() => closeUpdate('later'), 300));
+$('#update-splash').addEventListener('keydown', (e) => { if (e.key === 'Escape') closeUpdate('later'); });
+if (UPDATE_PLATFORM) {
+  setInterval(() => checkUpdate(), UPDATE_EVERY);
+  document.addEventListener('visibilitychange', () => { if (!document.hidden && Date.now() - store.get('updateCheckedAt', 0) > UPDATE_EVERY) checkUpdate(); });
 }
 
 /** Diagnóstico claro de una conexión fallida (queja típica de OpenCode: errores crípticos de proveedor). */
@@ -299,6 +346,7 @@ function applyRoute() {
     opt.textContent = pick ? `AUTO · ${pick.id.toUpperCase()}` : 'AUTO';
   }
   renderRouteCard();
+  renderReasoning();
 }
 
 /** Descartes agrupados por motivo: "3 modelos · es de pago y …" en vez de una lista interminable. */
@@ -422,6 +470,7 @@ $('#model-select').addEventListener('change', (e) => {
   if (m) {
     setRouteFor(state.mode, { routing: 'model', target: modelKey(m) });
     renderRouteCard();
+    renderReasoning();
     if (/fenix/i.test(m.id) && !store.get('fenixWarned', false)) {
       store.set('fenixWarned', true);
       toast('FÉNIX EN CPU RESPONDE LENTO: ÚSALO PARA TAREAS DIFÍCILES');
@@ -632,16 +681,49 @@ function setUsage(row, u) {
   f.textContent = `↑ ${fmtTok(u.prompt)} · ↓ ${fmtTok(u.completion)} tokens${u.tps ? ` · ${u.tps.toFixed(1)} tok/s` : ''}`;
 }
 
-/** Streaming: como mucho un redibujo por fotograma (antes se redibujaba entero con cada token). */
+/*
+ * Streaming con aparición progresiva (como ChatGPT): el texto que llega se guarda y se va mostrando
+ * a ritmo constante, acelerando si se acumula, en vez de aparecer a trozos. Como mucho un redibujo
+ * por fotograma. Sin animación si el sistema pide movimiento reducido o el mensaje no venía en streaming.
+ */
+const REDUCED = window.matchMedia?.('(prefers-reduced-motion: reduce)');
 function updateMessage(row, content, reasoning = '', streaming = false) {
   row._pending = { content, reasoning, streaming };
-  if (!streaming) { if (row._raf) { cancelAnimationFrame(row._raf); row._raf = null; } renderRow(row); return; }
+  if (streaming) row._animated = true;
+  if (reasoning && !row._thinkStart) row._thinkStart = performance.now();
+  if (reasoning && !row._thinkEnd && (stripVisible(content).trim() || !streaming)) row._thinkEnd = performance.now();
+  if (!row._animated || REDUCED?.matches || (!streaming && !row._raf)) { row._shown = content.length; if (row._raf) { cancelAnimationFrame(row._raf); row._raf = null; } renderRow(row); return; }
+  if (row._shown == null || row._shown > content.length) row._shown = Math.min(row._shown ?? 0, content.length);
   if (row._raf) return;
-  row._raf = requestAnimationFrame(() => { row._raf = null; renderRow(row); });
+  const tick = () => {
+    row._raf = null;
+    const p = row._pending;
+    const backlog = p.content.length - row._shown;
+    if (backlog > 0) {
+      // ~3 caracteres por fotograma con el flujo al día; si se acumula, alcanza en ~0,4 s
+      row._shown += Math.max(3, Math.ceil(backlog / 24));
+      if (row._shown > p.content.length) row._shown = p.content.length;
+      // no cortar dentro de una palabra: el texto aparece palabra a palabra
+      const next = p.content.slice(row._shown).search(/[\s.,;:!?)\]}>]/);
+      if (next > 0 && next < 18) row._shown = Math.min(p.content.length, row._shown + next);
+    }
+    renderRow(row);
+    if (row._shown < p.content.length || p.streaming) row._raf = requestAnimationFrame(tick);
+  };
+  row._raf = requestAnimationFrame(tick);
 }
+// texto que se ve de verdad (sin bloques de archivos ni de herramientas): decide cuándo acabó de pensar
+function stripVisible(content) {
+  if (state.mode === 'code') return parseFiles(content).prose;
+  if (state.mode === 'agent') return stripToolBlocks(content);
+  return content.replace(/<think>[\s\S]*?(<\/think>|$)/, '');
+}
+const secs = (ms) => (ms < 10000 ? (ms / 1000).toFixed(1) : Math.round(ms / 1000)) + ' s';
 
 function renderRow(row) {
-  const { content, reasoning, streaming } = row._pending;
+  const { content: full, reasoning, streaming: arriving } = row._pending;
+  const content = row._shown != null && row._shown < full.length ? full.slice(0, row._shown) : full;
+  const streaming = arriving || content.length < full.length;
   const b = $('.bubble', row);
   const role = ['user', 'tool', 'error', 'system'].find((r) => row.classList.contains(r)) || 'assistant';
   if (role !== 'assistant') b.textContent = content;
@@ -649,7 +731,21 @@ function renderRow(row) {
     let shown = content;
     if (state.mode === 'code') shown = parseFiles(content).prose;
     if (state.mode === 'agent') shown = stripToolBlocks(content);
-    b.innerHTML = renderMarkdown(shown, reasoning) || (streaming ? '' : '<p class="muted">(usando herramientas…)</p>');
+    // razonamiento en directo: abierto mientras piensa, se pliega al empezar la respuesta (el usuario manda si lo toca)
+    const thinking = !!reasoning && streaming && !row._thinkEnd;
+    const dur = row._thinkStart ? (row._thinkEnd || performance.now()) - row._thinkStart : 0;
+    const label = thinking ? `PENSANDO… ${secs(dur)}` : dur >= 500 ? `RAZONÓ ${secs(dur)}` : 'RAZONAMIENTO';
+    const prevThink = $('.think', b);
+    const prevScroll = prevThink ? $('.think-body', prevThink)?.scrollTop : 0;
+    b.innerHTML = renderMarkdown(shown, reasoning, { open: row._thinkOpen ?? thinking, label, live: thinking })
+      || (streaming ? '<p class="muted waiting">Escribiendo…</p>' : '<p class="muted">(usando herramientas…)</p>');
+    const th = $('.think', b);
+    if (th) {
+      const body = $('.think-body', th);
+      if (body) body.scrollTop = thinking ? body.scrollHeight : prevScroll;
+      // solo cuenta lo que hace el usuario (el atributo open de cada redibujo también dispara 'toggle')
+      $('summary', th).addEventListener('click', () => { row._thinkOpen = !th.open; });
+    }
   }
   b.classList.toggle('cursor', streaming);
   // lectores de pantalla: no se anuncia cada trozo del streaming, solo el final (región #sr-live)
@@ -722,17 +818,48 @@ async function regenerate(row, how, modelKeyWanted) {
   }
 }
 
+/*
+ * Línea de herramienta del agente. Aparece al EMPEZAR (con lo que hace: el comando, el archivo…) y
+ * se completa al terminar con ✓/✕, la duración y el resultado. Así se ve en directo qué ejecuta.
+ */
+const toolRows = new WeakMap();
+const CMD_TOOLS = new Set(['run_command', 'start_process']);
+function toolTarget(call) {
+  return PC_TOOLS.has(call.tool) ? describeAction(call.tool, call.args)
+    : call.args?.command || call.args?.path || call.args?.pattern || call.args?.url || call.args?.name || call.args?.from || call.args?.id || '';
+}
 function addToolLine(call, result, nested) {
   const el = streamEl();
-  const row = document.createElement('details');
-  row.className = 'tool-line' + (nested ? ' nested' : '');
-  const target = PC_TOOLS.has(call.tool) ? describeAction(call.tool, call.args)
-    : call.args.path || call.args.pattern || call.args.command || call.args.url || call.args.name || call.args.from || call.args.id || '';
-  const bad = /^(ERROR|DENEGADO|RECHAZADO)/.test(String(result));
-  row.innerHTML = `<summary><span class="tl-name">${esc(call.tool)}</span><span class="tl-arg mono">${esc(String(target).slice(0, 120))}</span>${bad ? '<span class="tl-bad">✕</span>' : '<span class="tl-ok">✓</span>'}</summary><pre></pre>`;
-  $('pre', row).textContent = String(result).slice(0, 4000);
-  el.appendChild(row);
-  el.scrollTop = el.scrollHeight;
+  let row = toolRows.get(call);
+  if (!row) {
+    row = document.createElement('details');
+    row.className = 'tool-line' + (nested ? ' nested' : '');
+    const target = String(toolTarget(call));
+    row.innerHTML = `<summary><span class="tl-name"></span><span class="tl-arg mono"></span><span class="tl-time mono"></span><span class="tl-state"></span></summary><pre></pre>`;
+    $('.tl-name', row).textContent = call.tool;
+    $('.tl-arg', row).textContent = (CMD_TOOLS.has(call.tool) ? '$ ' : '') + target.slice(0, 160);
+    $('.tl-arg', row).title = target;
+    row._t0 = performance.now();
+    toolRows.set(call, row);
+    el.appendChild(row);
+  }
+  const pending = result === null || result === undefined;
+  row.classList.toggle('running', pending);
+  const st = $('.tl-state', row);
+  if (pending) {
+    st.className = 'tl-state tl-run';
+    $('pre', row).textContent = CMD_TOOLS.has(call.tool) ? `$ ${call.args?.command || ''}\n(ejecutando…)` : JSON.stringify(call.args || {}, null, 2).slice(0, 2000);
+    clearInterval(row._timer);
+    row._timer = setInterval(() => { if (!row.isConnected) { clearInterval(row._timer); return; } $('.tl-time', row).textContent = secs(performance.now() - row._t0); }, 100);
+  } else {
+    clearInterval(row._timer);
+    const bad = /^(ERROR|DENEGADO|RECHAZADO)/.test(String(result));
+    st.className = `tl-state ${bad ? 'tl-bad' : 'tl-ok'}`;
+    st.textContent = bad ? '✕' : '✓';
+    $('.tl-time', row).textContent = secs(performance.now() - row._t0);
+    $('pre', row).textContent = String(result).slice(0, 4000);
+  }
+  if (el.scrollHeight - el.scrollTop - el.clientHeight < 200) el.scrollTop = el.scrollHeight;
 }
 
 document.addEventListener('click', async (e) => {
@@ -1398,7 +1525,7 @@ async function sendChat(t, m, { regen = null } = {}) {
   };
   try {
     const r = await routedChat(m, {
-      signal: state.abort.signal, think: state.think,
+      signal: state.abort.signal, reasoning: reasoningFor(m),
       messages: [{ role: 'system', content: sys }, ...history],
       onDelta: (d) => { text += d; paint(); },
       onReasoning: (d) => { reasoning += d; paint(); },
@@ -1835,7 +1962,7 @@ async function sendAgent(t, m, text, turn) {
 
   let row = null;
   const ctx = {
-    ep: m.ep, model: m.id, desktop, workspace: state.workspace, mode: state.perm, agent: state.agent, sys, think: state.think,
+    ep: m.ep, model: m.id, desktop, workspace: state.workspace, mode: state.perm, agent: state.agent, sys, reasoning: reasoningFor(m),
     // el agente pide cada paso al enrutador; si cambia de backend, los pasos siguientes siguen en el nuevo
     chat: (o) => routedChat({ id: o.model, ep: o.ep }, o, routeCtx((to) => { ctx.ep = to.ep; ctx.model = to.id; })).then((r) => r.text),
     signal: state.abort.signal, confirm: confirmWithAttention, isAllowed, allowCommand, hooks: engine, runHooks: engine.text, computer,
@@ -1850,7 +1977,8 @@ async function sendAgent(t, m, text, turn) {
         if (ev.nested) $('.who', row).textContent = 'SUBAGENTE';
         if (!stripToolBlocks(ev.text) && !ev.reasoning) row.remove();
       }
-      if (ev.type === 'tool-end') addToolLine(ev.call, ev.result, ev.nested);
+      if (ev.type === 'tool-start') addToolLine(ev.call, null, ev.nested);
+      if (ev.type === 'tool-end') addToolLine(ev.call, ev.result ?? '', ev.nested);
       if (ev.type === 'subagent-start') addMessage('system', `SUBAGENTE${ev.agent ? ` ${ev.agent.toUpperCase()}` : ''} LANZADO · ${String(ev.task).slice(0, 300)}`);
       if (ev.type === 'subagent-end') addMessage('system', subagentSummary(ev));
       if (ev.type === 'todos' && !ev.nested) { t.todos = ev.todos; renderTodos(ev.todos); }
@@ -2645,12 +2773,43 @@ if (desktop) {
 }
 
 /* ------------------------------------------------------------------ init */
-function setThink(on) {
-  state.think = on;
-  store.set('think', on);
-  $('#think-btn').setAttribute('aria-pressed', String(on));
+/* Modo de razonamiento (NORMAL / PENSAR / ESFUERZO). Se recuerda por modelo; si el modelo no admite
+   el modo guardado se usa el más parecido. reasoning.js decide qué ofrece cada modelo y cómo se pide. */
+function reasoningFor(m) {
+  if (!m) return undefined;
+  const info = reasoningOf(m.ep, m.id, capsOf(m.ep, m.id));
+  const saved = store.get('reasoningModes', {})[modelKey(m)] ?? store.get('reasoningLast', state.think ? 'think' : 'normal');
+  return resolveMode(saved, info) || undefined;
 }
-$('#think-btn').addEventListener('click', () => { setThink(!state.think); toast(state.think ? 'RAZONAR: SÍ (MÁS LENTO)' : 'RAZONAR: NO (MÁS RÁPIDO)'); });
+function renderReasoning() {
+  const m = currentModel();
+  const btn = $('#think-btn');
+  const list = $('#reason-list');
+  if (!btn || !list) return;
+  const info = m ? reasoningOf(m.ep, m.id, capsOf(m.ep, m.id)) : { modes: [] };
+  const cur = m ? reasoningFor(m) : null;
+  const effort = cur && !['normal', 'think'].includes(cur);
+  btn.textContent = !info.modes.length ? (info.always ? 'Razona siempre' : 'Normal') : effort ? `Esfuerzo · ${MODES[cur].short}` : MODES[cur].label;
+  btn.classList.toggle('on', !!cur && cur !== 'normal');
+  btn.title = m ? `${m.id}: ${info.modes.length ? 'elige cuánto razona antes de responder' : info.always ? 'este modelo razona siempre; verás su razonamiento' : 'este modelo no tiene modo de razonamiento regulable'}` : 'Sin modelo';
+  list.innerHTML = (info.modes.length
+    ? info.modes.map((k) => `<button type="button" role="menuitemradio" aria-checked="${k === cur}" data-reason="${k}"><span>${esc(MODES[k].label)}</span><small>${esc(MODES[k].title)}</small></button>`).join('')
+    : '')
+    + `<div class="menu-note">${esc(m ? m.id : 'Sin modelo')} · ${info.modes.length ? (info.always ? 'siempre razona: eliges cuánto' : 'el razonamiento se ve mientras llega') : info.always ? 'razona siempre: verás su razonamiento' : 'sin razonamiento regulable'}</div>`;
+}
+$('#reason-list').addEventListener('click', (e) => {
+  const b = e.target.closest('[data-reason]');
+  const m = currentModel();
+  if (!b || !m) return;
+  const modes = store.get('reasoningModes', {});
+  modes[modelKey(m)] = b.dataset.reason;
+  store.set('reasoningModes', modes);
+  store.set('reasoningLast', b.dataset.reason);
+  $('#reason-menu').open = false;
+  renderReasoning();
+  toast(`RAZONAMIENTO: ${MODES[b.dataset.reason].label.toUpperCase()}`);
+});
+function setThink(on) { state.think = on; } // compatibilidad: el estado antiguo solo sirve de valor inicial
 
 function applyBrand() {
   if (!BRAND.logo) return;
@@ -2691,6 +2850,7 @@ if ('serviceWorker' in navigator && location.protocol.startsWith('http') && !des
   window.addEventListener('pagehide', () => { saveThreadsNow(state.threads.slice(0, 200)); });
   if (getEndpoints().length) await enterApp();
   else showSplash();
+  setTimeout(() => checkUpdate(), 1500); // escritorio y móvil, también antes de conectar una API
 })();
 
 // la tarjeta de ruta se recalcula al abrirla (la conversación pudo crecer y cambiar lo que cabe)

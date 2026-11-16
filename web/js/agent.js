@@ -402,7 +402,7 @@ ${r}` : '';
     ctx.onEvent({ type: 'assistant-start', sub });
     // ctx.chat = enrutador de la interfaz (respaldo y registro); sin él, llamada directa
     const stream = () => (ctx.chat || chatStream)({
-      ep: ctx.ep, model: ctx.model, messages, signal: ctx.signal, think: ctx.think,
+      ep: ctx.ep, model: ctx.model, messages, signal: ctx.signal, think: ctx.think, reasoning: ctx.reasoning,
       tools: ctx.native !== false ? toolSchemasFor({ computer: ctx.computer && !sub ? ctx.computer : null, mcp: ctx.mcp }) : undefined,
       onDelta: (t) => { text += t; ctx.onEvent({ type: 'assistant-delta', text, reasoning, sub }); },
       onReasoning: (t) => { reasoning += t; ctx.onEvent({ type: 'assistant-delta', text, reasoning, sub }); },

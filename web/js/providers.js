@@ -49,6 +49,7 @@ const OPENROUTER_ADAPTER = {
       maxOutput: m.top_provider?.max_completion_tokens || null,
       vision: Array.isArray(m.architecture?.input_modalities) ? m.architecture.input_modalities.includes('image') : null,
       tools: m.supported_parameters ? params.has('tools') : null,
+      reasoning: m.supported_parameters ? (params.has('reasoning') || params.has('include_reasoning')) : null,
       structured: m.supported_parameters ? (params.has('structured_outputs') || params.has('response_format')) : null,
       chat: Array.isArray(m.architecture?.output_modalities) ? m.architecture.output_modalities.includes('text') : null,
       price: Number.isFinite(prompt) && Number.isFinite(completion) ? { prompt, completion } : null,

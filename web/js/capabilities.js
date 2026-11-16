@@ -12,7 +12,7 @@ import { providerOf } from './providers.js';
 /** Campos de una ficha. true/false = sabido; null = desconocido. */
 const EMPTY = {
   chat: null, code: null, tools: null, vision: null, streaming: null, structured: null, embeddings: null,
-  context: null, maxOutput: null, local: null, billing: null, price: null, source: [],
+  reasoning: null, context: null, maxOutput: null, local: null, billing: null, price: null, source: [],
 };
 
 /*
