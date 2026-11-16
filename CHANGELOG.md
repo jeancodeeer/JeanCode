@@ -2,7 +2,7 @@
 
 JeanCode 1.0 reúne en una sola versión todo lo que se publicó por partes entre la 0.1 y la 0.4. Las releases antiguas se retiraron de GitHub para que solo quede una descarga oficial. Su código sigue completo en las etiquetas de git (`v0.1.0` … `v0.4.2`), así que cualquier build anterior se puede reconstruir con `git checkout vX.Y.Z && cd desktop && npm ci && npm run dist`.
 
-## Sin publicar
+## 1.2.3 — 16 de noviembre de 2026
 
 **CODE: pestaña EJECUTAR (web, móvil y escritorio)**
 - La antigua «Vista previa» ahora es **EJECUTAR** y corre el **proyecto entero**, no un archivo suelto: una página HTML carga sus CSS (con `@import` y `url()`), sus JS clásicos y módulos ES encadenados, `fetch()`/XHR de archivos del proyecto (JSON, texto…), SVG, `localStorage` (se conserva entre ejecuciones) y los enlaces a otras páginas del proyecto.
