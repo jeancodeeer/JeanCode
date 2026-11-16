@@ -198,7 +198,7 @@ Para ver la ventana, QEMU necesita una pantalla gráfica (en WSL: `sudo apt inst
 <table>
 <tr>
 <td width="33%" valign="top"><b>CHAT</b> · web + escritorio<br>Markdown en streaming, bloques de código, razonamiento plegable y consumo de tokens por respuesta.</td>
-<td width="33%" valign="top"><b>CODE</b> · web + escritorio<br>Describes un proyecto y se escriben todos los archivos. Árbol, vista previa en vivo y descarga en <code>.zip</code>. Nada se ejecuta en tu PC.</td>
+<td width="33%" valign="top"><b>CODE</b> · web + escritorio<br>Describes un proyecto y se escriben todos los archivos. Árbol, <b>EJECUTAR</b> el proyecto entero (HTML con sus JS/CSS, Python, JavaScript, Batch… aislado; en escritorio, cualquier lenguaje instalado, con permiso) y descarga en <code>.zip</code>.</td>
 <td width="33%" valign="top"><b>AGENT</b> · escritorio<br>Un agente al estilo de Claude Code y OpenCode, dentro de la carpeta que elijas.</td>
 </tr>
 </table>

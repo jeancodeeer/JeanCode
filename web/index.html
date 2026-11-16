@@ -170,7 +170,7 @@
           <div class="stream" id="code-stream">
             <div class="empty">
               <h2 class="empty-title">Describe tu proyecto</h2>
-              <p class="muted">Jean escribe los archivos; los revisas, los editas y los descargas en .zip. Nada se ejecuta en tu PC.</p>
+              <p class="muted">Jean escribe los archivos; los revisas, los editas, los ejecutas en EJECUTAR (el proyecto entero, aislado) y los descargas en .zip.</p>
               <div class="chips">
                 <button class="chip" data-prompt="Una landing page en HTML/CSS para una cafetería, en un solo index.html con estilos en styles.css.">Landing page</button>
                 <button class="chip" data-prompt="Una API REST en Node.js con Express para una lista de tareas, con package.json y README.">API con Express</button>
@@ -189,12 +189,29 @@
             <div class="viewer">
               <div class="viewer-tabs" data-impeccable-ignore="cramped-padding">
                 <button class="vt active" data-vt="source">Código</button>
-                <button class="vt" data-vt="preview">Vista previa</button>
+                <button class="vt" data-vt="preview" title="Ejecuta el proyecto entero: la página con sus JS y CSS, o el programa con sus módulos y archivos">Ejecutar</button>
                 <span class="viewer-path" id="viewer-path">—</span>
                 <button class="icon-btn" id="dl-file" aria-label="Descargar este archivo"><svg class="i"><use href="#i-down"/></svg></button>
               </div>
               <textarea id="viewer-src" class="viewer-src" spellcheck="false" aria-label="Contenido del archivo"></textarea>
-              <iframe id="viewer-preview" class="viewer-preview" sandbox="allow-scripts" title="Vista previa" hidden></iframe>
+              <div class="viewer-run" id="viewer-run" hidden>
+                <div class="run-bar" data-impeccable-ignore="cramped-padding">
+                  <select id="run-entry" class="run-entry" aria-label="Archivo que se ejecuta"></select>
+                  <div class="seg run-where" id="run-where" role="radiogroup" aria-label="Dónde se ejecuta" hidden>
+                    <button type="button" data-where="pc" role="radio" aria-checked="true" title="Con el programa instalado en tu PC (pide permiso)">PC</button>
+                    <button type="button" data-where="web" role="radio" aria-checked="false" title="Aislado, dentro de JeanCode">Navegador</button>
+                  </div>
+                  <span class="run-status" id="run-status" role="status" aria-live="polite"></span>
+                  <button class="btn sm" type="button" id="run-restart">Reiniciar</button>
+                  <button class="btn sm" type="button" id="run-stop">Detener</button>
+                </div>
+                <!-- aislado: origen opaco, sin acceso a claves, historial ni almacenamiento de JeanCode -->
+                <iframe id="viewer-preview" class="viewer-preview" sandbox="allow-scripts allow-forms allow-modals" title="Proyecto en ejecución"></iframe>
+                <details class="run-log" id="run-log" hidden>
+                  <summary>Consola <span id="run-log-n"></span><button type="button" class="run-log-clear" id="run-log-clear">Limpiar</button></summary>
+                  <pre id="run-log-body"></pre>
+                </details>
+              </div>
             </div>
           </div>
         </div>

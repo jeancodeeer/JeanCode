@@ -39,6 +39,11 @@ contextBridge.exposeInMainWorld('jeancodeDesktop', {
   hooks: { global: call('hooks:global'), saveGlobal: call('hooks:saveGlobal'), exec: call('hooks:exec') },
   turn: { begin: call('turn:begin'), rewind: call('turn:rewind') },
   shell: { run: call('shell:run'), cancel: call('shell:cancel') },
+  // Ejecutar el proyecto del modo CODE en el PC (copia temporal; los comandos los decide lib/runner.js)
+  run: {
+    plan: call('run:plan'), start: call('run:start'), input: call('run:input'), stop: call('run:stop'),
+    onEvent: (fn) => ipcRenderer.on('run:event', (_e, id, ev) => fn(id, ev)),
+  },
   proc: { start: call('proc:start'), output: call('proc:output'), list: call('proc:list'), stop: call('proc:stop') },
   // Control del equipo: cada acción la ejecuta el proceso principal en serie, con parada y registro
   mcp: {

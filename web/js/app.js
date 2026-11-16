@@ -4,7 +4,8 @@ import { VERSION, isNewer } from './version.js';
 import { store } from './store.js';
 import { getEndpoints, saveEndpoints, addEndpoint, probe, generateKey, discoverSiblings, detectLocal, ollamaPull } from './api.js';
 import { renderMarkdown, esc } from './md.js';
-import { CODE_SYSTEM, parseFiles, projectContext, buildPreview } from './code.js';
+import { CODE_SYSTEM, parseFiles, projectContext } from './code.js';
+import { langOf, canRun, entryFor, runnableFiles, buildRunDoc, dependencies } from './run.js';
 import { makeZip, downloadBlob } from './zip.js';
 import { agentSystem, runAgent, stripToolBlocks, STYLES, toolSchemasFor } from './agent.js';
 import { BUILTIN, PROMPTS, matchCommands, parseCommand, expandCustom, estimateTokens, CONTEXT_LIMIT } from './commands.js';
@@ -37,6 +38,15 @@ const state = {
   abort: null,
   file: null,
   viewerTab: 'source',
+  run: null,              // ejecución en curso de EJECUTAR: { token, entry, thread, version, id (PC) }
+  runEntry: null,         // archivo de entrada elegido (se deduce del archivo abierto si falta)
+  runWhere: store.get('runWhere', 'pc'), // escritorio: 'pc' (programa instalado) o 'web' (aislado)
+  runAllowed: new Set(),  // comandos permitidos en esta sesión ("permitir en esta sesión")
+  runStorage: {},         // localStorage simulado de cada proyecto, entre ejecuciones
+  filesVersion: 0,        // sube con cada cambio de archivos: EJECUTAR se reinicia si cambió
+  runTimer: null,
+  runEvents: new Map(),   // eventos del PC que llegan antes de conocer el id de la ejecución
+  codeStreaming: false,   // llegan archivos del modelo: EJECUTAR espera (salvo HTML, que se refresca)
   workspace: store.get('workspace', null),
   perm: store.get('perm', 'ask'),
   agent: store.get('agent', 'build'),
@@ -577,7 +587,7 @@ function openThread(id, { keepTop = false } = {}) {
     }
     if (keepTop) el.scrollTop = el.scrollHeight - prevHeight + prevTop;
   }
-  if (state.mode === 'code') { state.file = null; renderFiles(); }
+  if (state.mode === 'code') { state.file = null; state.runEntry = null; stopRun(); renderFiles(); }
   if (state.mode === 'agent') renderTodos(t?.todos || []);
   renderThreads();
   updateContext();
@@ -1435,6 +1445,11 @@ function applyFiles(t, base, text, final) {
   if (open && open !== state.file) state.file = open;
   if (final) state.file = ['index.html', 'README.md'].find((p) => p in files) || state.file;
   if (!state.file || !(state.file in next)) state.file = Object.keys(files)[0] || Object.keys(next)[0] || null;
+  if (Object.keys(files).length || deletes.length) state.filesVersion++;
+  // mientras llega la respuesta solo se refrescan las páginas HTML (cada 1,5 s); el resto, al terminar
+  state.codeStreaming = !final;
+  if (final) { if (state.mode === 'code' && state.viewerTab === 'preview') scheduleRun(0); }
+  else if (state.viewerTab === 'preview' && langOf(currentEntry())?.web === 'html') scheduleRun(1500, true);
   renderFiles();
 }
 
@@ -1460,10 +1475,10 @@ function renderFiles() {
   const src = $('#viewer-src');
   $('#viewer-path').textContent = state.file || '—';
   if (document.activeElement !== src) src.value = state.file ? files[state.file] ?? '' : '';
-  const isHtml = state.file && /\.html?$/i.test(state.file);
-  $('[data-vt="preview"]').disabled = !isHtml;
-  if (state.viewerTab === 'preview' && isHtml) $('#viewer-preview').srcdoc = buildPreview(files, state.file) || '';
-  else if (state.viewerTab === 'preview') setViewerTab('source');
+  const any = runnableFiles(files, { desktop: !!desktop }).length > 0;
+  $('[data-vt="preview"]').disabled = !any;
+  if (state.viewerTab === 'preview' && !any) setViewerTab('source');
+  else if (state.viewerTab === 'preview') { updateRunBar(files); if (!state.runTimer && !state.codeStreaming && needsRun()) startRun(); }
   if (t && $('#project-name').value === 'mi-proyecto' && t.title !== 'NUEVA CONVERSACIÓN') {
     $('#project-name').value = t.title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 32) || 'mi-proyecto';
   }
@@ -1473,18 +1488,205 @@ function setViewerTab(tab) {
   state.viewerTab = tab;
   $$('.vt').forEach((b) => b.classList.toggle('active', b.dataset.vt === tab));
   $('#viewer-src').hidden = tab !== 'source';
-  $('#viewer-preview').hidden = tab !== 'preview';
+  $('#viewer-run').hidden = tab !== 'preview';
   if (tab === 'preview') renderFiles();
 }
 $$('.vt').forEach((b) => b.addEventListener('click', () => setViewerTab(b.dataset.vt)));
 $('#file-tree').addEventListener('click', (e) => {
   const b = e.target.closest('[data-file]');
-  if (b) { state.file = b.dataset.file; renderFiles(); }
+  if (!b) return;
+  state.file = b.dataset.file;
+  // abrir un archivo ejecutable (o una dependencia de una página) lo convierte en lo que se ejecuta
+  const files = thread()?.files || {};
+  const opts = { desktop: !!desktop };
+  if (canRun(langOf(state.file), opts) || Object.keys(files).some((p) => /\.html?$/i.test(p) && dependencies(files, p).includes(state.file))) {
+    state.runEntry = entryFor(files, state.file, { ...opts, explicit: true });
+  }
+  renderFiles();
 });
 $('#viewer-src').addEventListener('input', (e) => {
   const t = thread();
-  if (t && state.file) { t.files[state.file] = e.target.value; saveThreads(); }
+  if (t && state.file) { t.files[state.file] = e.target.value; state.filesVersion++; saveThreads(); }
 });
+
+/* ------------------------------------------------------------ EJECUTAR */
+// El proyecto entero se ejecuta en un iframe aislado (run.js + sandbox.js) o, en el escritorio,
+// con el programa del PC (desktop/lib/runner.js) tras pedir permiso. La salida vuelve por postMessage.
+function NOTE(text) {
+  return `<!doctype html><body style="margin:0;height:100vh;display:grid;place-items:center;background:#000;color:#7f7e78;font:500 11px/1.6 ui-monospace,Consolas,monospace;letter-spacing:.12em;text-transform:uppercase;text-align:center;padding:0 16px">${esc(text)}</body>`;
+}
+
+function currentEntry() {
+  const files = thread()?.files || {};
+  if (!state.runEntry || !(state.runEntry in files)) state.runEntry = entryFor(files, state.file, { desktop: !!desktop });
+  return state.runEntry;
+}
+function needsRun() {
+  const t = thread();
+  return !!t && (!state.run || state.run.entry !== currentEntry() || state.run.thread !== t.id || state.run.version !== state.filesVersion);
+}
+function scheduleRun(ms, onlyIfChanged = false) {
+  if (onlyIfChanged && state.runTimer) return; // durante la respuesta: como mucho una vez cada `ms`
+  clearTimeout(state.runTimer);
+  state.runTimer = setTimeout(() => { state.runTimer = null; if (state.viewerTab === 'preview' && (!onlyIfChanged || needsRun())) startRun(); }, ms);
+}
+function pcFor(lang) { return !!desktop && !!lang?.pc && (!lang.web || state.runWhere === 'pc'); }
+function setRunStatus(text) { $('#run-status').textContent = text || ''; }
+
+function updateRunBar(files) {
+  const opts = { desktop: !!desktop };
+  const entry = currentEntry();
+  const list = runnableFiles(files, opts);
+  const sel = $('#run-entry');
+  const html = list.map((p) => `<option value="${esc(p)}">${esc(p)} · ${esc(langOf(p).label)}</option>`).join('');
+  if (sel.dataset.html !== html) { sel.innerHTML = html; sel.dataset.html = html; }
+  sel.value = entry || '';
+  const lang = langOf(entry);
+  const both = !!desktop && !!lang?.pc && !!lang?.web;
+  $('#run-where').hidden = !both;
+  $$('#run-where button').forEach((b) => { const on = b.dataset.where === (both ? state.runWhere : 'web'); b.classList.toggle('active', on); b.setAttribute('aria-checked', on); });
+}
+
+function clearRunLog() {
+  $('#run-log-body').textContent = '';
+  $('#run-log-n').textContent = '';
+  $('#run-log').hidden = true;
+  $('#run-log').classList.remove('has-error');
+  clearRunLog.n = 0;
+}
+function appendRunLog(level, text) {
+  const body = $('#run-log-body');
+  const line = document.createElement('span');
+  line.className = `l-${level}`;
+  line.textContent = `${text}\n`;
+  body.append(line);
+  if (body.childNodes.length > 500) body.firstChild.remove();
+  clearRunLog.n = (clearRunLog.n || 0) + 1;
+  $('#run-log-n').textContent = `· ${clearRunLog.n}`;
+  $('#run-log').hidden = false;
+  if (level === 'error') $('#run-log').classList.add('has-error');
+  body.scrollTop = body.scrollHeight;
+}
+
+function stopRun(note) {
+  clearTimeout(state.runTimer);
+  state.runTimer = null;
+  const r = state.run;
+  if (r?.id && desktop) desktop.run.stop(r.id).catch(() => {});
+  state.run = null;
+  if (note) { $('#viewer-preview').srcdoc = NOTE(note); setRunStatus(note); }
+}
+
+async function startRun() {
+  const t = thread();
+  const files = t?.files || {};
+  stopRun();
+  const entry = currentEntry();
+  const frame = $('#viewer-preview');
+  updateRunBar(files);
+  clearRunLog();
+  if (!entry) { frame.srcdoc = NOTE('Nada que ejecutar todavía'); setRunStatus(''); return; }
+  const lang = langOf(entry);
+  const token = crypto.randomUUID();
+  state.run = { token, entry, thread: t.id, version: state.filesVersion, id: null, lang };
+  if (pcFor(lang)) return runOnPc(files, entry, lang, token);
+  runInFrame(files, entry, lang, token);
+}
+
+function runInFrame(files, entry, lang, token) {
+  const t = thread();
+  const doc = buildRunDoc(files, entry, { token, storage: state.runStorage[t?.id] || {}, desktop: !!desktop });
+  if (!doc) {
+    $('#viewer-preview').srcdoc = NOTE(desktop ? `${lang?.label || entry}: no hay forma de ejecutarlo` : `${lang?.label || entry} solo se ejecuta en la app de escritorio (con el programa instalado en tu PC)`);
+    setRunStatus('');
+    return;
+  }
+  $('#viewer-preview').srcdoc = doc.srcdoc;
+  setRunStatus(doc.mode === 'html' ? `${entry} · ${Object.keys(files).length} archivos` : doc.mode === 'python' ? 'Python · navegador' : 'en marcha · navegador');
+}
+
+async function runOnPc(files, entry, lang, token) {
+  const frame = $('#viewer-preview');
+  const plan = await desktop.run.plan({ files, entry, lang: lang.id });
+  if (state.run?.token !== token) return;
+  if (!plan.ok) {
+    if (lang.web) { runInFrame(files, entry, lang, token); return; }
+    frame.srcdoc = NOTE(plan.reason);
+    setRunStatus('');
+    return;
+  }
+  const key = `${lang.id}\n${plan.command}`;
+  if (!state.runAllowed.has(key)) {
+    frame.srcdoc = NOTE('Esperando tu permiso');
+    const ok = await confirmDialog({ title: 'EJECUTAR COMANDO EN TU PC', command: plan.command, where: `copia temporal del proyecto · ${plan.cwd === '.' ? 'raíz' : plan.cwd}`, allowAlways: true, alwaysLabel: 'PERMITIR EN ESTA SESIÓN' });
+    if (state.run?.token !== token) return;
+    if (!ok) { stopRun('No se ejecutó'); if (lang.web) setRunStatus('no se ejecutó · prueba NAVEGADOR'); return; }
+    if (ok === 'always') state.runAllowed.add(key);
+  }
+  const doc = buildRunDoc({}, entry, { token, remote: true, title: `${lang.label} · ${entry} · PC` });
+  await new Promise((r) => { frame.addEventListener('load', r, { once: true }); frame.srcdoc = doc.srcdoc; });
+  if (state.run?.token !== token) return;
+  setRunStatus(`en tu PC · ${plan.command}`);
+  try {
+    const { id } = await desktop.run.start({ files, entry, lang: lang.id });
+    if (state.run?.token !== token) { desktop.run.stop(id).catch(() => {}); return; }
+    state.run.id = id;
+    (state.runEvents.get(id) || []).forEach((ev) => onRunEvent(id, ev));
+    state.runEvents.delete(id);
+  } catch (err) {
+    frame.contentWindow?.postMessage({ jc: 'host', type: 'out', text: `${err.message}\n`, err: true }, '*');
+  }
+}
+
+function onRunEvent(id, ev) {
+  const r = state.run;
+  if (!r || r.id !== id) { if (!r?.id) { const l = state.runEvents.get(id) || []; l.push(ev); state.runEvents.set(id, l.slice(-500)); } return; }
+  const post = (m) => $('#viewer-preview').contentWindow?.postMessage({ jc: 'host', ...m }, '*');
+  if (ev.type === 'out') post({ type: 'out', text: ev.text, err: ev.err });
+  else if (ev.type === 'missing') {
+    post({ type: 'note', text: `\nNo se encontró ${ev.cmd} en tu PC.${r.lang?.web ? ' Se ejecuta en el navegador.' : ' Instálalo y vuelve a ejecutar.'}\n` });
+    if (r.lang?.web) { const files = thread()?.files || {}; setTimeout(() => { if (state.run === r) runInFrame(files, r.entry, r.lang, r.token); }, 900); }
+  } else if (ev.type === 'exit') {
+    post({ type: 'exit', code: ev.code });
+    r.id = `${id}:fin`;
+    setRunStatus(ev.code ? `terminó · código ${ev.code}` : 'terminó');
+  }
+}
+if (desktop?.run) desktop.run.onEvent(onRunEvent);
+
+window.addEventListener('message', (e) => {
+  const frame = $('#viewer-preview');
+  const r = state.run;
+  const m = e.data;
+  if (!frame || e.source !== frame.contentWindow || !r || !m || m.jc !== r.token) return; // solo el iframe actual
+  const files = thread()?.files || {};
+  switch (m.type) {
+    case 'log': appendRunLog(m.level === 'error' ? 'error' : m.level === 'warn' ? 'warn' : 'log', String(m.text).slice(0, 4000)); break;
+    case 'storage': if (m.data && typeof m.data === 'object') state.runStorage[r.thread] = m.data; break;
+    case 'exit': setRunStatus(m.code ? `terminó · código ${m.code}` : 'terminó'); break;
+    case 'stdin': if (r.id && desktop) desktop.run.input(r.id, String(m.text)); break;
+    case 'external': if (/^https?:\/\//i.test(m.url)) window.open(m.url, '_blank', 'noopener'); break;
+    case 'nav': {
+      const p = String(m.path);
+      if (!(p in files)) { toast(`NO EXISTE ${p.toUpperCase()}`); break; }
+      state.file = p;
+      if (canRun(langOf(p), { desktop: !!desktop })) state.runEntry = p;
+      else setViewerTab('source');
+      renderFiles();
+      break;
+    }
+    default: break;
+  }
+});
+$('#run-entry').addEventListener('change', (e) => { state.runEntry = e.target.value; startRun(); });
+$('#run-restart').addEventListener('click', () => startRun());
+$('#run-stop').addEventListener('click', () => { if (state.run) stopRun('Detenido'); });
+$$('#run-where button').forEach((b) => b.addEventListener('click', () => {
+  state.runWhere = b.dataset.where;
+  store.set('runWhere', state.runWhere);
+  startRun();
+}));
+$('#run-log-clear').addEventListener('click', (e) => { e.preventDefault(); clearRunLog(); });
 $('#dl-zip').addEventListener('click', () => {
   const t = thread();
   if (!t || !Object.keys(t.files || {}).length) { toast('NO HAY ARCHIVOS TODAVÍA'); return; }
@@ -1709,13 +1911,13 @@ streamElAll().forEach((el) => el.addEventListener('click', async (e) => {
 
 function streamElAll() { return [$('#chat-stream'), $('#code-stream'), $('#agent-stream')]; }
 
-function confirmDialog({ title, command, path, before, after, allowAlways = false, alwaysLabel = '' }) {
+function confirmDialog({ title, command, path, before, after, allowAlways = false, alwaysLabel = '', where = null }) {
   return new Promise((resolve) => {
     const d = $('#panel-confirm');
     $('#confirm-title').textContent = title;
     const body = $('#confirm-body');
     if (command != null) {
-      $('#confirm-path').textContent = state.workspace || '';
+      $('#confirm-path').textContent = where ?? state.workspace ?? '';
       body.innerHTML = `<pre class="cmd">${title.includes('COMANDO') || title.includes('PROCESO') ? '$ ' : ''}${esc(command)}</pre>`;
     } else {
       const ops = lineDiff(before, after);

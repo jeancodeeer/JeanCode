@@ -1,5 +1,6 @@
 // Modo CODE (estilo Abacus): el modelo devuelve archivos completos en bloques marcados,
-// que se reflejan en el árbol de archivos mientras llegan. No se ejecuta nada en la PC.
+// que se reflejan en el árbol de archivos mientras llegan. La pestaña EJECUTAR (run.js) corre el
+// proyecto entero aislado; en el escritorio, también en el PC con permiso.
 
 export const CODE_SYSTEM = `Eres Jean, un generador de proyectos de software.
 Cuando el usuario describa o pida cambios en un proyecto, responde con una explicación breve
@@ -14,6 +15,7 @@ Reglas:
 - Rutas relativas, con "/", sin "..".
 - Escribe siempre el archivo entero, nunca fragmentos ni "...resto igual".
 - Incluye lo necesario para ejecutar el proyecto (package.json, requirements.txt, README.md).
+- Usa un punto de entrada claro (index.html, main.py, index.js, main.bat…): JeanCode lo ejecuta con todos sus archivos.
 - No pongas los archivos dentro de bloques \`\`\`.`;
 
 const FILE_RE = /<<<FILE\s+([^>\n]+?)\s*>>>\n?([\s\S]*?)(?:<<<END>>>|$)/g;

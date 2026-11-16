@@ -8,6 +8,7 @@ const diagnostics = require('./lib/diagnostics');
 const { checkLink } = require('./lib/linkcheck');
 const skillsLib = require('./lib/skills');
 const { ComputerControl } = require('./lib/computer/control');
+const runner = require('./lib/runner');
 
 const CONFIG_FILE = () => path.join(app.getPath('userData'), 'config.json');
 const skills = () => skillsLib.create(path.join(app.getPath('userData'), 'skills'));
@@ -272,7 +273,7 @@ function finishSession() {
 
 function emergencyStop(reason) {
   if (!control || control.state.status === 'idle') return;
-  const killed = tools.stopAllProcesses();
+  const killed = tools.stopAllProcesses() + runner.stopAll();
   control.stop(`${reason}${killed ? ` · ${killed} proceso(s) terminados` : ''}`);
   if (win && !win.isDestroyed()) { win.webContents.send('computer:emergency', reason); win.restore(); win.focus(); }
 }
@@ -323,6 +324,12 @@ ipcMain.handle('fs:trash', async (_e, root, rel) => {
   return `${rel} enviado a la papelera (recuperable)`;
 });
 
+/* ---------------- ejecutar el proyecto del modo CODE en el PC (lib/runner.js) ---------------- */
+ipcMain.handle('run:plan', (_e, req) => runner.plan(req));
+ipcMain.handle('run:start', (e, req) => runner.start(req, (id, ev) => { if (!e.sender.isDestroyed()) e.sender.send('run:event', id, ev); }));
+ipcMain.handle('run:input', (_e, id, text) => runner.input(id, text));
+ipcMain.handle('run:stop', (_e, id) => runner.stop(id));
+
 /* ---------------- skills ---------------- */
 ipcMain.handle('skills:list', () => skills().list());
 ipcMain.handle('skills:read', (_e, name) => skills().read(name));
@@ -343,6 +350,7 @@ app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(
 app.on('will-quit', () => {
   globalShortcut.unregisterAll();
   tools.stopAllProcesses();
+  runner.stopAll();
   if (control) control.driver.stop();
   mcp.closeAll().catch(() => {});
 });
