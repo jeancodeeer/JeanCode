@@ -2,8 +2,9 @@
 // (Jean-API-Generator / llama-server) u otro de providers.js (OpenAI, OpenRouter, Groq…).
 // En el escritorio las peticiones pasan por el proceso principal (sin CORS) vía window.jeancodeDesktop.
 import { store } from './store.js';
+import { applyReasoning } from './reasoning.js';
 import { supportsThinkToggle, wantsStreamUsage, providerOf, adapterOf } from './providers.js';
-import { learnCap, reportCaps } from './capabilities.js';
+import { learnCap, reportCaps, capsOf } from './capabilities.js';
 import { looksBuffered } from './quality.js';
 
 const bridge = () => (typeof window !== 'undefined' ? window.jeancodeDesktop : null);
@@ -264,6 +265,10 @@ const DROPPABLE = [
   { key: 'temperature', re: /temperature/i },
   { key: 'stream_options', re: /stream_options|include_usage/i },
   { key: 'chat_template_kwargs', re: /chat_template_kwargs|enable_thinking/i },
+  { key: 'reasoning_effort', re: /reasoning_effort/i },
+  { key: 'reasoning', re: /\breasoning\b/i },
+  { key: 'thinking', re: /\bthinking\b|budget_tokens/i },
+  { key: 'enable_thinking', re: /enable_thinking/i },
 ];
 const dropped = new Map(); // `${ep.id}|${model}` -> Set de parámetros a omitir
 export const droppedParams = (ep, model) => [...(dropped.get(`${ep.id}|${model}`) || [])];
@@ -297,11 +302,12 @@ export async function chatStream(opts) {
 /** Espera máxima hasta que el servidor responde (cabeceras). En CPU (Jean, local) leer un contexto largo tarda. */
 export const firstByteTimeout = (ep) => (providerOf(ep).id === 'jean' || providerOf(ep).local || /localhost|127\.0\.0\.1/.test(ep.url) ? 900000 : 120000);
 
-async function chatOnce({ ep, model, messages, signal, onDelta, onReasoning, onToolCalls, onUsage, temperature, think, tools }, skip = new Set()) {
+async function chatOnce({ ep, model, messages, signal, onDelta, onReasoning, onToolCalls, onUsage, temperature, think, reasoning, tools }, skip = new Set()) {
   let payload = { model, messages, stream: true, temperature: temperature ?? 0.2 };
-  // Modelos Qwen/Jean: sin la fase de razonamiento responden varias veces más rápido en CPU.
-  // Solo llama-server entiende este parámetro; OpenAI y otros lo rechazarían.
-  if (typeof think === 'boolean' && supportsThinkToggle(ep)) payload.chat_template_kwargs = { enable_thinking: think };
+  // Modo de razonamiento elegido (NORMAL / PENSAR / ESFUERZO): cada proveedor lo pide a su manera (reasoning.js)
+  if (reasoning) payload = applyReasoning(payload, ep, model, reasoning, capsOf(ep, model));
+  // Llamadas internas con think:false (resúmenes, pruebas): solo llama-server entiende este parámetro.
+  else if (typeof think === 'boolean' && supportsThinkToggle(ep)) payload.chat_template_kwargs = { enable_thinking: think };
   // Herramientas nativas (function calling de OpenAI): el servidor interpreta la plantilla del modelo.
   if (tools?.length) payload.tools = tools;
   if (wantsStreamUsage(ep)) payload.stream_options = { include_usage: true };

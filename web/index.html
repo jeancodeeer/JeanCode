@@ -41,6 +41,23 @@
 </svg>
 
 <!-- SPLASH: este equipo no tiene una API registrada -->
+<!-- VERSIÓN NUEVA (escritorio y móvil): update.js decide, app.js la muestra -->
+<div id="update-splash" class="update-splash" role="dialog" aria-modal="true" aria-labelledby="upd-version" hidden>
+  <div class="upd-col">
+    <p class="upd-kicker">Nueva versión de JeanCode</p>
+    <h1 class="upd-version" id="upd-version">0.0.0</h1>
+    <p class="upd-kind" id="upd-kind"></p>
+    <p class="upd-from" id="upd-from"></p>
+    <div class="upd-notes" id="upd-notes"></div>
+    <div class="upd-actions">
+      <a class="btn primary big" id="upd-get" href="#" target="_blank" rel="noopener">Descargar</a>
+      <button class="btn" type="button" id="upd-later">Más tarde</button>
+      <button class="btn ghost" type="button" id="upd-skip">Omitir esta versión</button>
+    </div>
+    <p class="upd-file" id="upd-file"></p>
+  </div>
+</div>
+
 <div id="splash" class="splash" hidden>
   <main class="splash-col">
     <div class="logo-slot" data-logo aria-label="Logo de JeanCode"></div>
@@ -170,7 +187,7 @@
           <div class="stream" id="code-stream">
             <div class="empty">
               <h2 class="empty-title">Describe tu proyecto</h2>
-              <p class="muted">Jean escribe los archivos; los revisas, los editas y los descargas en .zip. Nada se ejecuta en tu PC.</p>
+              <p class="muted">Jean escribe los archivos; los revisas, los editas, los ejecutas en EJECUTAR (el proyecto entero, aislado) y los descargas en .zip.</p>
               <div class="chips">
                 <button class="chip" data-prompt="Una landing page en HTML/CSS para una cafetería, en un solo index.html con estilos en styles.css.">Landing page</button>
                 <button class="chip" data-prompt="Una API REST en Node.js con Express para una lista de tareas, con package.json y README.">API con Express</button>
@@ -189,12 +206,29 @@
             <div class="viewer">
               <div class="viewer-tabs" data-impeccable-ignore="cramped-padding">
                 <button class="vt active" data-vt="source">Código</button>
-                <button class="vt" data-vt="preview">Vista previa</button>
+                <button class="vt" data-vt="preview" title="Ejecuta el proyecto entero: la página con sus JS y CSS, o el programa con sus módulos y archivos">Ejecutar</button>
                 <span class="viewer-path" id="viewer-path">—</span>
                 <button class="icon-btn" id="dl-file" aria-label="Descargar este archivo"><svg class="i"><use href="#i-down"/></svg></button>
               </div>
               <textarea id="viewer-src" class="viewer-src" spellcheck="false" aria-label="Contenido del archivo"></textarea>
-              <iframe id="viewer-preview" class="viewer-preview" sandbox="allow-scripts" title="Vista previa" hidden></iframe>
+              <div class="viewer-run" id="viewer-run" hidden>
+                <div class="run-bar" data-impeccable-ignore="cramped-padding">
+                  <select id="run-entry" class="run-entry" aria-label="Archivo que se ejecuta"></select>
+                  <div class="seg run-where" id="run-where" role="radiogroup" aria-label="Dónde se ejecuta" hidden>
+                    <button type="button" data-where="pc" role="radio" aria-checked="true" title="Con el programa instalado en tu PC (pide permiso)">PC</button>
+                    <button type="button" data-where="web" role="radio" aria-checked="false" title="Aislado, dentro de JeanCode">Navegador</button>
+                  </div>
+                  <span class="run-status" id="run-status" role="status" aria-live="polite"></span>
+                  <button class="btn sm" type="button" id="run-restart">Reiniciar</button>
+                  <button class="btn sm" type="button" id="run-stop">Detener</button>
+                </div>
+                <!-- aislado: origen opaco, sin acceso a claves, historial ni almacenamiento de JeanCode -->
+                <iframe id="viewer-preview" class="viewer-preview" sandbox="allow-scripts allow-forms allow-modals" title="Proyecto en ejecución"></iframe>
+                <details class="run-log" id="run-log" hidden>
+                  <summary>Consola <span id="run-log-n"></span><button type="button" class="run-log-clear" id="run-log-clear">Limpiar</button></summary>
+                  <pre id="run-log-body"></pre>
+                </details>
+              </div>
             </div>
           </div>
         </div>
@@ -247,7 +281,11 @@
       <div class="composer-box">
         <textarea id="input" rows="1" placeholder="Escribe a Jean…" aria-label="Mensaje" aria-autocomplete="list" aria-controls="popup"></textarea>
         <div class="composer-row">
-          <button class="toggle" id="think-btn" type="button" aria-pressed="false" title="Razonar antes de responder: mejor en tareas difíciles, mucho más lento en CPU">Razonar</button>
+          <!-- modo de razonamiento: solo lo que admite el modelo elegido (reasoning.js) -->
+          <details class="menu up reason-menu" id="reason-menu">
+            <summary class="toggle" id="think-btn" title="Cuánto razona el modelo antes de responder">Normal</summary>
+            <div class="menu-list" role="menu" aria-label="Modo de razonamiento" id="reason-list"></div>
+          </details>
           <div class="ctx" id="ctx-meter" title="Contexto usado">
             <span class="ctx-bar"><i id="ctx-fill"></i></span><span class="mono" id="ctx-text">0%</span>
           </div>

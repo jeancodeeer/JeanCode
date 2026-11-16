@@ -198,7 +198,7 @@ To see the window QEMU needs a graphical display (in WSL: `sudo apt install qemu
 <table>
 <tr>
 <td width="33%" valign="top"><b>CHAT</b> · web + desktop<br>Streaming Markdown, code blocks, collapsible reasoning, per-answer token usage.</td>
-<td width="33%" valign="top"><b>CODE</b> · web + desktop<br>Describe a project; every file is written for you. File tree, live preview, download as <code>.zip</code>. Nothing runs on your machine.</td>
+<td width="33%" valign="top"><b>CODE</b> · web + desktop<br>Describe a project; every file is written for you. File tree, <b>RUN</b> the whole project (HTML with its JS/CSS, Python, JavaScript, Batch… sandboxed; on desktop, any installed language, with your permission), download as <code>.zip</code>.</td>
 <td width="33%" valign="top"><b>AGENT</b> · desktop<br>A coding agent in the style of Claude Code and OpenCode, working inside the folder you choose.</td>
 </tr>
 </table>

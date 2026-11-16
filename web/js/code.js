@@ -1,5 +1,6 @@
 // Modo CODE (estilo Abacus): el modelo devuelve archivos completos en bloques marcados,
-// que se reflejan en el árbol de archivos mientras llegan. No se ejecuta nada en la PC.
+// que se reflejan en el árbol de archivos mientras llegan. La pestaña EJECUTAR (run.js) corre el
+// proyecto entero aislado; en el escritorio, también en el PC con permiso.
 
 export const CODE_SYSTEM = `Eres Jean, un generador de proyectos de software.
 Cuando el usuario describa o pida cambios en un proyecto, responde con una explicación breve
@@ -14,6 +15,7 @@ Reglas:
 - Rutas relativas, con "/", sin "..".
 - Escribe siempre el archivo entero, nunca fragmentos ni "...resto igual".
 - Incluye lo necesario para ejecutar el proyecto (package.json, requirements.txt, README.md).
+- Usa un punto de entrada claro (index.html, main.py, index.js, main.bat…): JeanCode lo ejecuta con todos sus archivos.
 - No pongas los archivos dentro de bloques \`\`\`.`;
 
 const FILE_RE = /<<<FILE\s+([^>\n]+?)\s*>>>\n?([\s\S]*?)(?:<<<END>>>|$)/g;
@@ -41,7 +43,9 @@ export function parseFiles(text) {
     const p = safePath(m[1]);
     if (p) deletes.push(p);
   }
-  const prose = text.replace(FILE_RE, (_, p) => `\n\`${safePath(p) || p}\` · escrito\n`).replace(DEL_RE, (_, p) => `\n\`${p}\` · borrado\n`).trim();
+  // mientras llega, el archivo en curso dice "escribiendo… N líneas" y los terminados "escrito"
+  const prose = text.replace(FILE_RE, (m, p, body) => (m.endsWith('<<<END>>>')
+    ? `\n\`${safePath(p) || p}\` · escrito\n` : `\n\`${safePath(p) || p}\` · escribiendo… ${body.split('\n').length} líneas\n`)).replace(DEL_RE, (_, p) => `\n\`${p}\` · borrado\n`).trim();
   return { files, deletes, prose, open };
 }
 

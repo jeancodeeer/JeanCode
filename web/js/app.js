@@ -4,7 +4,8 @@ import { VERSION, isNewer } from './version.js';
 import { store } from './store.js';
 import { getEndpoints, saveEndpoints, addEndpoint, probe, generateKey, discoverSiblings, detectLocal, ollamaPull } from './api.js';
 import { renderMarkdown, esc } from './md.js';
-import { CODE_SYSTEM, parseFiles, projectContext, buildPreview } from './code.js';
+import { CODE_SYSTEM, parseFiles, projectContext } from './code.js';
+import { langOf, canRun, entryFor, runnableFiles, buildRunDoc, dependencies } from './run.js';
 import { makeZip, downloadBlob } from './zip.js';
 import { agentSystem, runAgent, stripToolBlocks, STYLES, toolSchemasFor } from './agent.js';
 import { BUILTIN, PROMPTS, matchCommands, parseCommand, expandCustom, estimateTokens, CONTEXT_LIMIT } from './commands.js';
@@ -12,6 +13,8 @@ import { lineDiff, diffStats } from './diff.js';
 import { PROVIDERS, providerById, providerOf, LOCAL_CANDIDATES, OLLAMA_SUGGESTED } from './providers.js';
 import { AUTO, modelKey, chat as routedChat, probeEndpoint, healthOf, validateEndpoint, pickAuto, visibleModels, resolveSaved, formatLog, routeLog, FALLBACK_POLICIES, fallbackPolicy, decide, routeFor, setRouteFor, checkEndpoint, exportConfig, KIND_LABEL, formatTrace, fallbackChain, allowPaidAuto, where, latencyOf } from './router.js';
 import { capsOf, describeCaps, billingOf, fmtCtx } from './capabilities.js';
+import { reasoningOf, resolveMode, MODES } from './reasoning.js';
+import { platformOf, updateFrom, KIND_TEXT } from './update.js';
 import { normalizePolicy, describeAction, riskOf, actionKey, needsTerminalApproval, INPUT_TOOLS } from './computer.js';
 import { SLOTS, controlUrlFrom, hfSearch, hfFiles, control, gb } from './hf.js';
 import { initApps } from './apps.js';
@@ -37,6 +40,15 @@ const state = {
   abort: null,
   file: null,
   viewerTab: 'source',
+  run: null,              // ejecución en curso de EJECUTAR: { token, entry, thread, version, id (PC) }
+  runEntry: null,         // archivo de entrada elegido (se deduce del archivo abierto si falta)
+  runWhere: store.get('runWhere', 'pc'), // escritorio: 'pc' (programa instalado) o 'web' (aislado)
+  runAllowed: new Set(),  // comandos permitidos en esta sesión ("permitir en esta sesión")
+  runStorage: {},         // localStorage simulado de cada proyecto, entre ejecuciones
+  filesVersion: 0,        // sube con cada cambio de archivos: EJECUTAR se reinicia si cambió
+  runTimer: null,
+  runEvents: new Map(),   // eventos del PC que llegan antes de conocer el id de la ejecución
+  codeStreaming: false,   // llegan archivos del modelo: EJECUTAR espera (salvo HTML, que se refresca)
   workspace: store.get('workspace', null),
   perm: store.get('perm', 'ask'),
   agent: store.get('agent', 'build'),
@@ -87,19 +99,64 @@ async function enterApp() {
   await refreshModels();
   renderThreads();
   openThread(state.threads.find((t) => t.mode === state.mode)?.id || null);
-  if (desktop) checkUpdate();
 }
 
-/** Escritorio: avisa una vez por sesión si hay una versión publicada más nueva. La web se actualiza sola. */
-async function checkUpdate() {
-  if (sessionStorage.getItem('jeancode.updateChecked')) return;
-  sessionStorage.setItem('jeancode.updateChecked', '1');
+/*
+ * Escritorio y móvil: al abrir, al volver a la app y cada 6 h se mira la última release de GitHub.
+ * Si es más nueva, pantalla completa con la versión (1.2.3, 1.3.0…), qué tipo de salto es, las
+ * novedades y la descarga de ESTA plataforma. La web no la necesita: se actualiza sola.
+ */
+const UPDATE_PLATFORM = platformOf({ desktop: !!desktop, capacitor: window.Capacitor || null, ua: navigator.userAgent });
+const UPDATE_EVERY = 6 * 3600 * 1000;
+async function checkUpdate({ force = false } = {}) {
+  if (!UPDATE_PLATFORM) return null;
+  if (!force && Date.now() - store.get('updateCheckedAt', 0) < 30 * 60 * 1000 && !store.get('updatePending', null)) return null;
+  let upd = null;
   try {
-    const res = await fetch(CONFIG.releasesApi, { headers: { Accept: 'application/vnd.github+json' } });
-    if (!res.ok) return;
-    const rel = await res.json();
-    if (isNewer(rel.tag_name)) toast(`JeanCode ${rel.tag_name.replace(/^v/, '')} disponible · Más → Descargar la app`);
-  } catch { /* sin red: nada que avisar */ }
+    const res = await fetch(CONFIG.releasesApi, { headers: { Accept: 'application/vnd.github+json' }, cache: 'no-store' });
+    if (!res.ok) return null;
+    store.set('updateCheckedAt', Date.now());
+    upd = updateFrom(await res.json(), { platform: UPDATE_PLATFORM, skipped: force ? null : store.get('updateSkipped', null) });
+  } catch { return null; } // sin red: nada que avisar
+  store.set('updatePending', upd ? upd.version : null);
+  if (!upd) return null;
+  const snooze = store.get('updateSnooze', null);
+  if (!force && snooze?.version === upd.version && Date.now() < snooze.until) return upd;
+  showUpdate(upd);
+  return upd;
+}
+
+function showUpdate(upd) {
+  const d = $('#update-splash');
+  $('#upd-version').textContent = upd.version;
+  $('#upd-kind').textContent = KIND_TEXT[upd.kind];
+  $('#upd-from').innerHTML = `Tienes la <b>${esc(upd.current)}</b>. ${upd.date ? `Publicada el ${esc(new Date(upd.date).toLocaleDateString('es', { day: 'numeric', month: 'long', year: 'numeric' }))}.` : ''}`;
+  $('#upd-notes').innerHTML = upd.notes ? renderMarkdown(upd.notes.slice(0, 6000)) : '';
+  const get = $('#upd-get');
+  get.href = upd.url || CONFIG.releasesUrl;
+  get.textContent = `Descargar ${upd.version}`;
+  $('#upd-file').innerHTML = (upd.asset ? `${esc(upd.asset.name)} · ${(upd.asset.size / 1048576).toFixed(0)} MB · ` : '')
+    + `<a href="${esc(upd.page || CONFIG.releasesUrl)}" target="_blank" rel="noopener">Todas las descargas</a>`
+    + (UPDATE_PLATFORM === 'ios' ? ' · instálala con AltStore o Sideloadly' : '')
+    + (UPDATE_PLATFORM === 'android' ? ' · al abrir el .apk, Android pedirá permiso para instalar' : '');
+  d.dataset.version = upd.version;
+  d.hidden = false;
+  get.focus();
+}
+function closeUpdate(how) {
+  const d = $('#update-splash');
+  const v = d.dataset.version;
+  if (how === 'skip') store.set('updateSkipped', v);
+  if (how === 'later') store.set('updateSnooze', { version: v, until: Date.now() + 24 * 3600 * 1000 });
+  d.hidden = true;
+}
+$('#upd-later').addEventListener('click', () => closeUpdate('later'));
+$('#upd-skip').addEventListener('click', () => { closeUpdate('skip'); toast('NO SE VOLVERÁ A AVISAR DE ESTA VERSIÓN'); });
+$('#upd-get').addEventListener('click', () => setTimeout(() => closeUpdate('later'), 300));
+$('#update-splash').addEventListener('keydown', (e) => { if (e.key === 'Escape') closeUpdate('later'); });
+if (UPDATE_PLATFORM) {
+  setInterval(() => checkUpdate(), UPDATE_EVERY);
+  document.addEventListener('visibilitychange', () => { if (!document.hidden && Date.now() - store.get('updateCheckedAt', 0) > UPDATE_EVERY) checkUpdate(); });
 }
 
 /** Diagnóstico claro de una conexión fallida (queja típica de OpenCode: errores crípticos de proveedor). */
@@ -289,6 +346,7 @@ function applyRoute() {
     opt.textContent = pick ? `AUTO · ${pick.id.toUpperCase()}` : 'AUTO';
   }
   renderRouteCard();
+  renderReasoning();
 }
 
 /** Descartes agrupados por motivo: "3 modelos · es de pago y …" en vez de una lista interminable. */
@@ -412,6 +470,7 @@ $('#model-select').addEventListener('change', (e) => {
   if (m) {
     setRouteFor(state.mode, { routing: 'model', target: modelKey(m) });
     renderRouteCard();
+    renderReasoning();
     if (/fenix/i.test(m.id) && !store.get('fenixWarned', false)) {
       store.set('fenixWarned', true);
       toast('FÉNIX EN CPU RESPONDE LENTO: ÚSALO PARA TAREAS DIFÍCILES');
@@ -577,7 +636,7 @@ function openThread(id, { keepTop = false } = {}) {
     }
     if (keepTop) el.scrollTop = el.scrollHeight - prevHeight + prevTop;
   }
-  if (state.mode === 'code') { state.file = null; renderFiles(); }
+  if (state.mode === 'code') { state.file = null; state.runEntry = null; stopRun(); renderFiles(); }
   if (state.mode === 'agent') renderTodos(t?.todos || []);
   renderThreads();
   updateContext();
@@ -622,16 +681,49 @@ function setUsage(row, u) {
   f.textContent = `↑ ${fmtTok(u.prompt)} · ↓ ${fmtTok(u.completion)} tokens${u.tps ? ` · ${u.tps.toFixed(1)} tok/s` : ''}`;
 }
 
-/** Streaming: como mucho un redibujo por fotograma (antes se redibujaba entero con cada token). */
+/*
+ * Streaming con aparición progresiva (como ChatGPT): el texto que llega se guarda y se va mostrando
+ * a ritmo constante, acelerando si se acumula, en vez de aparecer a trozos. Como mucho un redibujo
+ * por fotograma. Sin animación si el sistema pide movimiento reducido o el mensaje no venía en streaming.
+ */
+const REDUCED = window.matchMedia?.('(prefers-reduced-motion: reduce)');
 function updateMessage(row, content, reasoning = '', streaming = false) {
   row._pending = { content, reasoning, streaming };
-  if (!streaming) { if (row._raf) { cancelAnimationFrame(row._raf); row._raf = null; } renderRow(row); return; }
+  if (streaming) row._animated = true;
+  if (reasoning && !row._thinkStart) row._thinkStart = performance.now();
+  if (reasoning && !row._thinkEnd && (stripVisible(content).trim() || !streaming)) row._thinkEnd = performance.now();
+  if (!row._animated || REDUCED?.matches || (!streaming && !row._raf)) { row._shown = content.length; if (row._raf) { cancelAnimationFrame(row._raf); row._raf = null; } renderRow(row); return; }
+  if (row._shown == null || row._shown > content.length) row._shown = Math.min(row._shown ?? 0, content.length);
   if (row._raf) return;
-  row._raf = requestAnimationFrame(() => { row._raf = null; renderRow(row); });
+  const tick = () => {
+    row._raf = null;
+    const p = row._pending;
+    const backlog = p.content.length - row._shown;
+    if (backlog > 0) {
+      // ~3 caracteres por fotograma con el flujo al día; si se acumula, alcanza en ~0,4 s
+      row._shown += Math.max(3, Math.ceil(backlog / 24));
+      if (row._shown > p.content.length) row._shown = p.content.length;
+      // no cortar dentro de una palabra: el texto aparece palabra a palabra
+      const next = p.content.slice(row._shown).search(/[\s.,;:!?)\]}>]/);
+      if (next > 0 && next < 18) row._shown = Math.min(p.content.length, row._shown + next);
+    }
+    renderRow(row);
+    if (row._shown < p.content.length || p.streaming) row._raf = requestAnimationFrame(tick);
+  };
+  row._raf = requestAnimationFrame(tick);
 }
+// texto que se ve de verdad (sin bloques de archivos ni de herramientas): decide cuándo acabó de pensar
+function stripVisible(content) {
+  if (state.mode === 'code') return parseFiles(content).prose;
+  if (state.mode === 'agent') return stripToolBlocks(content);
+  return content.replace(/<think>[\s\S]*?(<\/think>|$)/, '');
+}
+const secs = (ms) => (ms < 10000 ? (ms / 1000).toFixed(1) : Math.round(ms / 1000)) + ' s';
 
 function renderRow(row) {
-  const { content, reasoning, streaming } = row._pending;
+  const { content: full, reasoning, streaming: arriving } = row._pending;
+  const content = row._shown != null && row._shown < full.length ? full.slice(0, row._shown) : full;
+  const streaming = arriving || content.length < full.length;
   const b = $('.bubble', row);
   const role = ['user', 'tool', 'error', 'system'].find((r) => row.classList.contains(r)) || 'assistant';
   if (role !== 'assistant') b.textContent = content;
@@ -639,7 +731,21 @@ function renderRow(row) {
     let shown = content;
     if (state.mode === 'code') shown = parseFiles(content).prose;
     if (state.mode === 'agent') shown = stripToolBlocks(content);
-    b.innerHTML = renderMarkdown(shown, reasoning) || (streaming ? '' : '<p class="muted">(usando herramientas…)</p>');
+    // razonamiento en directo: abierto mientras piensa, se pliega al empezar la respuesta (el usuario manda si lo toca)
+    const thinking = !!reasoning && streaming && !row._thinkEnd;
+    const dur = row._thinkStart ? (row._thinkEnd || performance.now()) - row._thinkStart : 0;
+    const label = thinking ? `PENSANDO… ${secs(dur)}` : dur >= 500 ? `RAZONÓ ${secs(dur)}` : 'RAZONAMIENTO';
+    const prevThink = $('.think', b);
+    const prevScroll = prevThink ? $('.think-body', prevThink)?.scrollTop : 0;
+    b.innerHTML = renderMarkdown(shown, reasoning, { open: row._thinkOpen ?? thinking, label, live: thinking })
+      || (streaming ? '<p class="muted waiting">Escribiendo…</p>' : '<p class="muted">(usando herramientas…)</p>');
+    const th = $('.think', b);
+    if (th) {
+      const body = $('.think-body', th);
+      if (body) body.scrollTop = thinking ? body.scrollHeight : prevScroll;
+      // solo cuenta lo que hace el usuario (el atributo open de cada redibujo también dispara 'toggle')
+      $('summary', th).addEventListener('click', () => { row._thinkOpen = !th.open; });
+    }
   }
   b.classList.toggle('cursor', streaming);
   // lectores de pantalla: no se anuncia cada trozo del streaming, solo el final (región #sr-live)
@@ -712,17 +818,48 @@ async function regenerate(row, how, modelKeyWanted) {
   }
 }
 
+/*
+ * Línea de herramienta del agente. Aparece al EMPEZAR (con lo que hace: el comando, el archivo…) y
+ * se completa al terminar con ✓/✕, la duración y el resultado. Así se ve en directo qué ejecuta.
+ */
+const toolRows = new WeakMap();
+const CMD_TOOLS = new Set(['run_command', 'start_process']);
+function toolTarget(call) {
+  return PC_TOOLS.has(call.tool) ? describeAction(call.tool, call.args)
+    : call.args?.command || call.args?.path || call.args?.pattern || call.args?.url || call.args?.name || call.args?.from || call.args?.id || '';
+}
 function addToolLine(call, result, nested) {
   const el = streamEl();
-  const row = document.createElement('details');
-  row.className = 'tool-line' + (nested ? ' nested' : '');
-  const target = PC_TOOLS.has(call.tool) ? describeAction(call.tool, call.args)
-    : call.args.path || call.args.pattern || call.args.command || call.args.url || call.args.name || call.args.from || call.args.id || '';
-  const bad = /^(ERROR|DENEGADO|RECHAZADO)/.test(String(result));
-  row.innerHTML = `<summary><span class="tl-name">${esc(call.tool)}</span><span class="tl-arg mono">${esc(String(target).slice(0, 120))}</span>${bad ? '<span class="tl-bad">✕</span>' : '<span class="tl-ok">✓</span>'}</summary><pre></pre>`;
-  $('pre', row).textContent = String(result).slice(0, 4000);
-  el.appendChild(row);
-  el.scrollTop = el.scrollHeight;
+  let row = toolRows.get(call);
+  if (!row) {
+    row = document.createElement('details');
+    row.className = 'tool-line' + (nested ? ' nested' : '');
+    const target = String(toolTarget(call));
+    row.innerHTML = `<summary><span class="tl-name"></span><span class="tl-arg mono"></span><span class="tl-time mono"></span><span class="tl-state"></span></summary><pre></pre>`;
+    $('.tl-name', row).textContent = call.tool;
+    $('.tl-arg', row).textContent = (CMD_TOOLS.has(call.tool) ? '$ ' : '') + target.slice(0, 160);
+    $('.tl-arg', row).title = target;
+    row._t0 = performance.now();
+    toolRows.set(call, row);
+    el.appendChild(row);
+  }
+  const pending = result === null || result === undefined;
+  row.classList.toggle('running', pending);
+  const st = $('.tl-state', row);
+  if (pending) {
+    st.className = 'tl-state tl-run';
+    $('pre', row).textContent = CMD_TOOLS.has(call.tool) ? `$ ${call.args?.command || ''}\n(ejecutando…)` : JSON.stringify(call.args || {}, null, 2).slice(0, 2000);
+    clearInterval(row._timer);
+    row._timer = setInterval(() => { if (!row.isConnected) { clearInterval(row._timer); return; } $('.tl-time', row).textContent = secs(performance.now() - row._t0); }, 100);
+  } else {
+    clearInterval(row._timer);
+    const bad = /^(ERROR|DENEGADO|RECHAZADO)/.test(String(result));
+    st.className = `tl-state ${bad ? 'tl-bad' : 'tl-ok'}`;
+    st.textContent = bad ? '✕' : '✓';
+    $('.tl-time', row).textContent = secs(performance.now() - row._t0);
+    $('pre', row).textContent = String(result).slice(0, 4000);
+  }
+  if (el.scrollHeight - el.scrollTop - el.clientHeight < 200) el.scrollTop = el.scrollHeight;
 }
 
 document.addEventListener('click', async (e) => {
@@ -1388,7 +1525,7 @@ async function sendChat(t, m, { regen = null } = {}) {
   };
   try {
     const r = await routedChat(m, {
-      signal: state.abort.signal, think: state.think,
+      signal: state.abort.signal, reasoning: reasoningFor(m),
       messages: [{ role: 'system', content: sys }, ...history],
       onDelta: (d) => { text += d; paint(); },
       onReasoning: (d) => { reasoning += d; paint(); },
@@ -1435,6 +1572,11 @@ function applyFiles(t, base, text, final) {
   if (open && open !== state.file) state.file = open;
   if (final) state.file = ['index.html', 'README.md'].find((p) => p in files) || state.file;
   if (!state.file || !(state.file in next)) state.file = Object.keys(files)[0] || Object.keys(next)[0] || null;
+  if (Object.keys(files).length || deletes.length) state.filesVersion++;
+  // mientras llega la respuesta solo se refrescan las páginas HTML (cada 1,5 s); el resto, al terminar
+  state.codeStreaming = !final;
+  if (final) { if (state.mode === 'code' && state.viewerTab === 'preview') scheduleRun(0); }
+  else if (state.viewerTab === 'preview' && langOf(currentEntry())?.web === 'html') scheduleRun(1500, true);
   renderFiles();
 }
 
@@ -1460,10 +1602,10 @@ function renderFiles() {
   const src = $('#viewer-src');
   $('#viewer-path').textContent = state.file || '—';
   if (document.activeElement !== src) src.value = state.file ? files[state.file] ?? '' : '';
-  const isHtml = state.file && /\.html?$/i.test(state.file);
-  $('[data-vt="preview"]').disabled = !isHtml;
-  if (state.viewerTab === 'preview' && isHtml) $('#viewer-preview').srcdoc = buildPreview(files, state.file) || '';
-  else if (state.viewerTab === 'preview') setViewerTab('source');
+  const any = runnableFiles(files, { desktop: !!desktop }).length > 0;
+  $('[data-vt="preview"]').disabled = !any;
+  if (state.viewerTab === 'preview' && !any) setViewerTab('source');
+  else if (state.viewerTab === 'preview') { updateRunBar(files); if (!state.runTimer && !state.codeStreaming && needsRun()) startRun(); }
   if (t && $('#project-name').value === 'mi-proyecto' && t.title !== 'NUEVA CONVERSACIÓN') {
     $('#project-name').value = t.title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 32) || 'mi-proyecto';
   }
@@ -1473,18 +1615,205 @@ function setViewerTab(tab) {
   state.viewerTab = tab;
   $$('.vt').forEach((b) => b.classList.toggle('active', b.dataset.vt === tab));
   $('#viewer-src').hidden = tab !== 'source';
-  $('#viewer-preview').hidden = tab !== 'preview';
+  $('#viewer-run').hidden = tab !== 'preview';
   if (tab === 'preview') renderFiles();
 }
 $$('.vt').forEach((b) => b.addEventListener('click', () => setViewerTab(b.dataset.vt)));
 $('#file-tree').addEventListener('click', (e) => {
   const b = e.target.closest('[data-file]');
-  if (b) { state.file = b.dataset.file; renderFiles(); }
+  if (!b) return;
+  state.file = b.dataset.file;
+  // abrir un archivo ejecutable (o una dependencia de una página) lo convierte en lo que se ejecuta
+  const files = thread()?.files || {};
+  const opts = { desktop: !!desktop };
+  if (canRun(langOf(state.file), opts) || Object.keys(files).some((p) => /\.html?$/i.test(p) && dependencies(files, p).includes(state.file))) {
+    state.runEntry = entryFor(files, state.file, { ...opts, explicit: true });
+  }
+  renderFiles();
 });
 $('#viewer-src').addEventListener('input', (e) => {
   const t = thread();
-  if (t && state.file) { t.files[state.file] = e.target.value; saveThreads(); }
+  if (t && state.file) { t.files[state.file] = e.target.value; state.filesVersion++; saveThreads(); }
 });
+
+/* ------------------------------------------------------------ EJECUTAR */
+// El proyecto entero se ejecuta en un iframe aislado (run.js + sandbox.js) o, en el escritorio,
+// con el programa del PC (desktop/lib/runner.js) tras pedir permiso. La salida vuelve por postMessage.
+function NOTE(text) {
+  return `<!doctype html><body style="margin:0;height:100vh;display:grid;place-items:center;background:#000;color:#7f7e78;font:500 11px/1.6 ui-monospace,Consolas,monospace;letter-spacing:.12em;text-transform:uppercase;text-align:center;padding:0 16px">${esc(text)}</body>`;
+}
+
+function currentEntry() {
+  const files = thread()?.files || {};
+  if (!state.runEntry || !(state.runEntry in files)) state.runEntry = entryFor(files, state.file, { desktop: !!desktop });
+  return state.runEntry;
+}
+function needsRun() {
+  const t = thread();
+  return !!t && (!state.run || state.run.entry !== currentEntry() || state.run.thread !== t.id || state.run.version !== state.filesVersion);
+}
+function scheduleRun(ms, onlyIfChanged = false) {
+  if (onlyIfChanged && state.runTimer) return; // durante la respuesta: como mucho una vez cada `ms`
+  clearTimeout(state.runTimer);
+  state.runTimer = setTimeout(() => { state.runTimer = null; if (state.viewerTab === 'preview' && (!onlyIfChanged || needsRun())) startRun(); }, ms);
+}
+function pcFor(lang) { return !!desktop && !!lang?.pc && (!lang.web || state.runWhere === 'pc'); }
+function setRunStatus(text) { $('#run-status').textContent = text || ''; }
+
+function updateRunBar(files) {
+  const opts = { desktop: !!desktop };
+  const entry = currentEntry();
+  const list = runnableFiles(files, opts);
+  const sel = $('#run-entry');
+  const html = list.map((p) => `<option value="${esc(p)}">${esc(p)} · ${esc(langOf(p).label)}</option>`).join('');
+  if (sel.dataset.html !== html) { sel.innerHTML = html; sel.dataset.html = html; }
+  sel.value = entry || '';
+  const lang = langOf(entry);
+  const both = !!desktop && !!lang?.pc && !!lang?.web;
+  $('#run-where').hidden = !both;
+  $$('#run-where button').forEach((b) => { const on = b.dataset.where === (both ? state.runWhere : 'web'); b.classList.toggle('active', on); b.setAttribute('aria-checked', on); });
+}
+
+function clearRunLog() {
+  $('#run-log-body').textContent = '';
+  $('#run-log-n').textContent = '';
+  $('#run-log').hidden = true;
+  $('#run-log').classList.remove('has-error');
+  clearRunLog.n = 0;
+}
+function appendRunLog(level, text) {
+  const body = $('#run-log-body');
+  const line = document.createElement('span');
+  line.className = `l-${level}`;
+  line.textContent = `${text}\n`;
+  body.append(line);
+  if (body.childNodes.length > 500) body.firstChild.remove();
+  clearRunLog.n = (clearRunLog.n || 0) + 1;
+  $('#run-log-n').textContent = `· ${clearRunLog.n}`;
+  $('#run-log').hidden = false;
+  if (level === 'error') $('#run-log').classList.add('has-error');
+  body.scrollTop = body.scrollHeight;
+}
+
+function stopRun(note) {
+  clearTimeout(state.runTimer);
+  state.runTimer = null;
+  const r = state.run;
+  if (r?.id && desktop) desktop.run.stop(r.id).catch(() => {});
+  state.run = null;
+  if (note) { $('#viewer-preview').srcdoc = NOTE(note); setRunStatus(note); }
+}
+
+async function startRun() {
+  const t = thread();
+  const files = t?.files || {};
+  stopRun();
+  const entry = currentEntry();
+  const frame = $('#viewer-preview');
+  updateRunBar(files);
+  clearRunLog();
+  if (!entry) { frame.srcdoc = NOTE('Nada que ejecutar todavía'); setRunStatus(''); return; }
+  const lang = langOf(entry);
+  const token = crypto.randomUUID();
+  state.run = { token, entry, thread: t.id, version: state.filesVersion, id: null, lang };
+  if (pcFor(lang)) return runOnPc(files, entry, lang, token);
+  runInFrame(files, entry, lang, token);
+}
+
+function runInFrame(files, entry, lang, token) {
+  const t = thread();
+  const doc = buildRunDoc(files, entry, { token, storage: state.runStorage[t?.id] || {}, desktop: !!desktop });
+  if (!doc) {
+    $('#viewer-preview').srcdoc = NOTE(desktop ? `${lang?.label || entry}: no hay forma de ejecutarlo` : `${lang?.label || entry} solo se ejecuta en la app de escritorio (con el programa instalado en tu PC)`);
+    setRunStatus('');
+    return;
+  }
+  $('#viewer-preview').srcdoc = doc.srcdoc;
+  setRunStatus(doc.mode === 'html' ? `${entry} · ${Object.keys(files).length} archivos` : doc.mode === 'python' ? 'Python · navegador' : 'en marcha · navegador');
+}
+
+async function runOnPc(files, entry, lang, token) {
+  const frame = $('#viewer-preview');
+  const plan = await desktop.run.plan({ files, entry, lang: lang.id });
+  if (state.run?.token !== token) return;
+  if (!plan.ok) {
+    if (lang.web) { runInFrame(files, entry, lang, token); return; }
+    frame.srcdoc = NOTE(plan.reason);
+    setRunStatus('');
+    return;
+  }
+  const key = `${lang.id}\n${plan.command}`;
+  if (!state.runAllowed.has(key)) {
+    frame.srcdoc = NOTE('Esperando tu permiso');
+    const ok = await confirmDialog({ title: 'EJECUTAR COMANDO EN TU PC', command: plan.command, where: `copia temporal del proyecto · ${plan.cwd === '.' ? 'raíz' : plan.cwd}`, allowAlways: true, alwaysLabel: 'PERMITIR EN ESTA SESIÓN' });
+    if (state.run?.token !== token) return;
+    if (!ok) { stopRun('No se ejecutó'); if (lang.web) setRunStatus('no se ejecutó · prueba NAVEGADOR'); return; }
+    if (ok === 'always') state.runAllowed.add(key);
+  }
+  const doc = buildRunDoc({}, entry, { token, remote: true, title: `${lang.label} · ${entry} · PC` });
+  await new Promise((r) => { frame.addEventListener('load', r, { once: true }); frame.srcdoc = doc.srcdoc; });
+  if (state.run?.token !== token) return;
+  setRunStatus(`en tu PC · ${plan.command}`);
+  try {
+    const { id } = await desktop.run.start({ files, entry, lang: lang.id });
+    if (state.run?.token !== token) { desktop.run.stop(id).catch(() => {}); return; }
+    state.run.id = id;
+    (state.runEvents.get(id) || []).forEach((ev) => onRunEvent(id, ev));
+    state.runEvents.delete(id);
+  } catch (err) {
+    frame.contentWindow?.postMessage({ jc: 'host', type: 'out', text: `${err.message}\n`, err: true }, '*');
+  }
+}
+
+function onRunEvent(id, ev) {
+  const r = state.run;
+  if (!r || r.id !== id) { if (!r?.id) { const l = state.runEvents.get(id) || []; l.push(ev); state.runEvents.set(id, l.slice(-500)); } return; }
+  const post = (m) => $('#viewer-preview').contentWindow?.postMessage({ jc: 'host', ...m }, '*');
+  if (ev.type === 'out') post({ type: 'out', text: ev.text, err: ev.err });
+  else if (ev.type === 'missing') {
+    post({ type: 'note', text: `\nNo se encontró ${ev.cmd} en tu PC.${r.lang?.web ? ' Se ejecuta en el navegador.' : ' Instálalo y vuelve a ejecutar.'}\n` });
+    if (r.lang?.web) { const files = thread()?.files || {}; setTimeout(() => { if (state.run === r) runInFrame(files, r.entry, r.lang, r.token); }, 900); }
+  } else if (ev.type === 'exit') {
+    post({ type: 'exit', code: ev.code });
+    r.id = `${id}:fin`;
+    setRunStatus(ev.code ? `terminó · código ${ev.code}` : 'terminó');
+  }
+}
+if (desktop?.run) desktop.run.onEvent(onRunEvent);
+
+window.addEventListener('message', (e) => {
+  const frame = $('#viewer-preview');
+  const r = state.run;
+  const m = e.data;
+  if (!frame || e.source !== frame.contentWindow || !r || !m || m.jc !== r.token) return; // solo el iframe actual
+  const files = thread()?.files || {};
+  switch (m.type) {
+    case 'log': appendRunLog(m.level === 'error' ? 'error' : m.level === 'warn' ? 'warn' : 'log', String(m.text).slice(0, 4000)); break;
+    case 'storage': if (m.data && typeof m.data === 'object') state.runStorage[r.thread] = m.data; break;
+    case 'exit': setRunStatus(m.code ? `terminó · código ${m.code}` : 'terminó'); break;
+    case 'stdin': if (r.id && desktop) desktop.run.input(r.id, String(m.text)); break;
+    case 'external': if (/^https?:\/\//i.test(m.url)) window.open(m.url, '_blank', 'noopener'); break;
+    case 'nav': {
+      const p = String(m.path);
+      if (!(p in files)) { toast(`NO EXISTE ${p.toUpperCase()}`); break; }
+      state.file = p;
+      if (canRun(langOf(p), { desktop: !!desktop })) state.runEntry = p;
+      else setViewerTab('source');
+      renderFiles();
+      break;
+    }
+    default: break;
+  }
+});
+$('#run-entry').addEventListener('change', (e) => { state.runEntry = e.target.value; startRun(); });
+$('#run-restart').addEventListener('click', () => startRun());
+$('#run-stop').addEventListener('click', () => { if (state.run) stopRun('Detenido'); });
+$$('#run-where button').forEach((b) => b.addEventListener('click', () => {
+  state.runWhere = b.dataset.where;
+  store.set('runWhere', state.runWhere);
+  startRun();
+}));
+$('#run-log-clear').addEventListener('click', (e) => { e.preventDefault(); clearRunLog(); });
 $('#dl-zip').addEventListener('click', () => {
   const t = thread();
   if (!t || !Object.keys(t.files || {}).length) { toast('NO HAY ARCHIVOS TODAVÍA'); return; }
@@ -1633,7 +1962,7 @@ async function sendAgent(t, m, text, turn) {
 
   let row = null;
   const ctx = {
-    ep: m.ep, model: m.id, desktop, workspace: state.workspace, mode: state.perm, agent: state.agent, sys, think: state.think,
+    ep: m.ep, model: m.id, desktop, workspace: state.workspace, mode: state.perm, agent: state.agent, sys, reasoning: reasoningFor(m),
     // el agente pide cada paso al enrutador; si cambia de backend, los pasos siguientes siguen en el nuevo
     chat: (o) => routedChat({ id: o.model, ep: o.ep }, o, routeCtx((to) => { ctx.ep = to.ep; ctx.model = to.id; })).then((r) => r.text),
     signal: state.abort.signal, confirm: confirmWithAttention, isAllowed, allowCommand, hooks: engine, runHooks: engine.text, computer,
@@ -1648,7 +1977,8 @@ async function sendAgent(t, m, text, turn) {
         if (ev.nested) $('.who', row).textContent = 'SUBAGENTE';
         if (!stripToolBlocks(ev.text) && !ev.reasoning) row.remove();
       }
-      if (ev.type === 'tool-end') addToolLine(ev.call, ev.result, ev.nested);
+      if (ev.type === 'tool-start') addToolLine(ev.call, null, ev.nested);
+      if (ev.type === 'tool-end') addToolLine(ev.call, ev.result ?? '', ev.nested);
       if (ev.type === 'subagent-start') addMessage('system', `SUBAGENTE${ev.agent ? ` ${ev.agent.toUpperCase()}` : ''} LANZADO · ${String(ev.task).slice(0, 300)}`);
       if (ev.type === 'subagent-end') addMessage('system', subagentSummary(ev));
       if (ev.type === 'todos' && !ev.nested) { t.todos = ev.todos; renderTodos(ev.todos); }
@@ -1709,13 +2039,13 @@ streamElAll().forEach((el) => el.addEventListener('click', async (e) => {
 
 function streamElAll() { return [$('#chat-stream'), $('#code-stream'), $('#agent-stream')]; }
 
-function confirmDialog({ title, command, path, before, after, allowAlways = false, alwaysLabel = '' }) {
+function confirmDialog({ title, command, path, before, after, allowAlways = false, alwaysLabel = '', where = null }) {
   return new Promise((resolve) => {
     const d = $('#panel-confirm');
     $('#confirm-title').textContent = title;
     const body = $('#confirm-body');
     if (command != null) {
-      $('#confirm-path').textContent = state.workspace || '';
+      $('#confirm-path').textContent = where ?? state.workspace ?? '';
       body.innerHTML = `<pre class="cmd">${title.includes('COMANDO') || title.includes('PROCESO') ? '$ ' : ''}${esc(command)}</pre>`;
     } else {
       const ops = lineDiff(before, after);
@@ -2443,12 +2773,43 @@ if (desktop) {
 }
 
 /* ------------------------------------------------------------------ init */
-function setThink(on) {
-  state.think = on;
-  store.set('think', on);
-  $('#think-btn').setAttribute('aria-pressed', String(on));
+/* Modo de razonamiento (NORMAL / PENSAR / ESFUERZO). Se recuerda por modelo; si el modelo no admite
+   el modo guardado se usa el más parecido. reasoning.js decide qué ofrece cada modelo y cómo se pide. */
+function reasoningFor(m) {
+  if (!m) return undefined;
+  const info = reasoningOf(m.ep, m.id, capsOf(m.ep, m.id));
+  const saved = store.get('reasoningModes', {})[modelKey(m)] ?? store.get('reasoningLast', state.think ? 'think' : 'normal');
+  return resolveMode(saved, info) || undefined;
 }
-$('#think-btn').addEventListener('click', () => { setThink(!state.think); toast(state.think ? 'RAZONAR: SÍ (MÁS LENTO)' : 'RAZONAR: NO (MÁS RÁPIDO)'); });
+function renderReasoning() {
+  const m = currentModel();
+  const btn = $('#think-btn');
+  const list = $('#reason-list');
+  if (!btn || !list) return;
+  const info = m ? reasoningOf(m.ep, m.id, capsOf(m.ep, m.id)) : { modes: [] };
+  const cur = m ? reasoningFor(m) : null;
+  const effort = cur && !['normal', 'think'].includes(cur);
+  btn.textContent = !info.modes.length ? (info.always ? 'Razona siempre' : 'Normal') : effort ? `Esfuerzo · ${MODES[cur].short}` : MODES[cur].label;
+  btn.classList.toggle('on', !!cur && cur !== 'normal');
+  btn.title = m ? `${m.id}: ${info.modes.length ? 'elige cuánto razona antes de responder' : info.always ? 'este modelo razona siempre; verás su razonamiento' : 'este modelo no tiene modo de razonamiento regulable'}` : 'Sin modelo';
+  list.innerHTML = (info.modes.length
+    ? info.modes.map((k) => `<button type="button" role="menuitemradio" aria-checked="${k === cur}" data-reason="${k}"><span>${esc(MODES[k].label)}</span><small>${esc(MODES[k].title)}</small></button>`).join('')
+    : '')
+    + `<div class="menu-note">${esc(m ? m.id : 'Sin modelo')} · ${info.modes.length ? (info.always ? 'siempre razona: eliges cuánto' : 'el razonamiento se ve mientras llega') : info.always ? 'razona siempre: verás su razonamiento' : 'sin razonamiento regulable'}</div>`;
+}
+$('#reason-list').addEventListener('click', (e) => {
+  const b = e.target.closest('[data-reason]');
+  const m = currentModel();
+  if (!b || !m) return;
+  const modes = store.get('reasoningModes', {});
+  modes[modelKey(m)] = b.dataset.reason;
+  store.set('reasoningModes', modes);
+  store.set('reasoningLast', b.dataset.reason);
+  $('#reason-menu').open = false;
+  renderReasoning();
+  toast(`RAZONAMIENTO: ${MODES[b.dataset.reason].label.toUpperCase()}`);
+});
+function setThink(on) { state.think = on; } // compatibilidad: el estado antiguo solo sirve de valor inicial
 
 function applyBrand() {
   if (!BRAND.logo) return;
@@ -2489,6 +2850,7 @@ if ('serviceWorker' in navigator && location.protocol.startsWith('http') && !des
   window.addEventListener('pagehide', () => { saveThreadsNow(state.threads.slice(0, 200)); });
   if (getEndpoints().length) await enterApp();
   else showSplash();
+  setTimeout(() => checkUpdate(), 1500); // escritorio y móvil, también antes de conectar una API
 })();
 
 // la tarjeta de ruta se recalcula al abrirla (la conversación pudo crecer y cambiar lo que cabe)

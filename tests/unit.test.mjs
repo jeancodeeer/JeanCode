@@ -741,3 +741,105 @@ test('proveedores: CORS según lo comprobado en vivo y cabecera de Anthropic', a
   assert.equal(P.adapterOf({ provider: 'anthropic' }).headers()['anthropic-dangerous-direct-browser-access'], 'true');
   assert.deepEqual(P.adapterOf({ provider: 'groq' }).headers(), {}, 'nadie más recibe esa cabecera');
 });
+
+/* ---------------- EJECUTAR (run.js, sandbox.js, batch.js, desktop/lib/runner.js) ---------------- */
+import { langOf, entryFor, runnableFiles, dependencies, buildRunDoc } from '../web/js/run.js';
+import { jcNorm, jcCss, jcImports } from '../web/js/sandbox.js';
+import { jcBatch } from '../web/js/batch.js';
+const runner = require('../desktop/lib/runner.js');
+
+test('EJECUTAR: rutas, CSS e imports se resuelven dentro del proyecto', () => {
+  assert.equal(jcNorm('js/app.js', '../css/a.css?v=1'), 'css/a.css');
+  assert.equal(jcNorm('a/b.html', '/img/x.svg'), 'img/x.svg');
+  assert.equal(jcNorm('index.html', 'https://x.com/a.js'), null);
+  assert.equal(jcNorm('index.html', '#top'), null);
+  const link = (p, k) => (p ? `blob:${k}:${p}` : null);
+  assert.equal(jcCss('@import "b.css"; a{background:url(../img/x.svg)}', 'css/a.css', link), '@import url("blob:css:css/b.css"); a{background:url("blob:raw:img/x.svg")}');
+  assert.equal(jcImports("import { a } from './u.js'; import 'lodash'; const m = import('../m.js');", 'js/app.js', link),
+    "import { a } from 'blob:module:js/u.js'; import 'lodash'; const m = import('blob:module:m.js');");
+});
+
+test('EJECUTAR: el archivo de entrada y sus dependencias', () => {
+  const f = {
+    'index.html': '<link rel="stylesheet" href="css/s.css"><script type="module" src="js/a.js"></script>',
+    'css/s.css': 'body{}', 'js/a.js': "import './b.js'; fetch('data.json')", 'js/b.js': '', 'data.json': '{}',
+    'tools/build.py': 'print(1)', 'README.md': '# hola',
+  };
+  assert.deepEqual(dependencies(f, 'index.html').sort(), ['css/s.css', 'data.json', 'index.html', 'js/a.js', 'js/b.js']);
+  assert.equal(entryFor(f, 'js/b.js'), 'index.html', 'una dependencia ejecuta la página que la usa');
+  assert.equal(entryFor(f, 'tools/build.py'), 'tools/build.py');
+  assert.equal(entryFor(f, 'README.md'), 'index.html', 'un README abierto no quita el sitio a la página');
+  assert.equal(entryFor(f, 'README.md', { explicit: true }), 'README.md');
+  assert.equal(runnableFiles({ 'a.rb': '', 'b.md': '' })[0], 'b.md', 'sin escritorio Ruby no se ejecuta');
+  assert.equal(runnableFiles({ 'a.rb': '', 'b.md': '' }, { desktop: true })[0], 'a.rb');
+  assert.equal(langOf('x.BAT').id, 'batch');
+  const doc = buildRunDoc({ 'index.html': '</script><script>alert(1)</script>' }, 'index.html', { token: 't' });
+  assert.equal(doc.mode, 'html');
+  assert.equal(doc.srcdoc.match(/<\/script/g).length, 1, 'el contenido del proyecto no puede cerrar el script de arranque');
+  assert.equal(buildRunDoc({ 'a.rb': '' }, 'a.rb', { token: 't' }), null);
+});
+
+test('EJECUTAR: intérprete Batch', async () => {
+  let out = '';
+  const io = { write: (t) => { out += t; }, readLine: async () => 'Ana', clear() {}, title() {}, colors() {} };
+  const files = {
+    'main.bat': '@echo off\nsetlocal enabledelayedexpansion\nset /a t=0\nfor /l %%i in (1,1,4) do (\n  set /a t+=%%i\n)\necho total=!t!\ncall :doble 21\necho doble=%r%\nset /p n=Nombre: \nif /i "%n%"=="ana" (echo hola Ana) else (echo quien)\necho guardado > out.txt\ntype out.txt\ncall sub\\otro.bat x\nexit /b 4\n:doble\nset /a r=%1*2\ngoto :eof',
+    'sub/otro.bat': '@echo otro %1 %~n0',
+  };
+  const code = await jcBatch(files, 'main.bat', io);
+  assert.equal(code, 4);
+  assert.equal(out, 'total=10\ndoble=42\nNombre: hola Ana\nguardado \notro x otro\n');
+});
+
+test('EJECUTAR en el PC: comandos según el lenguaje, dentro de la copia', () => {
+  const p = runner.plan({ files: { 'src/main.c': '', 'src/u.c': '', 'x.c': '' }, entry: 'src/main.c', lang: 'c' });
+  assert.equal(p.ok, true);
+  assert.match(p.command, /main\.c u\.c -o/, 'compila todos los .c de la carpeta');
+  assert.equal(p.cwd, 'src');
+  assert.equal(runner.plan({ files: {}, entry: 'a.xyz', lang: 'nada' }).ok, false);
+  const java = runner.stepsFor('java', 'Main.java', { 'Main.java': 'package app.demo;\nclass Main {}' });
+  assert.deepEqual(java[1][0].args.slice(-1), ['app.demo.Main']);
+});
+
+/* ---------------- razonamiento por modelo y aviso de versión nueva ---------------- */
+import { reasoningOf, resolveMode, applyReasoning } from '../web/js/reasoning.js';
+import { platformOf, pickAsset, changeKind, updateFrom } from '../web/js/update.js';
+
+test('razonamiento: cada modelo ofrece lo suyo y se pide a su manera', () => {
+  const ep = (provider) => ({ id: provider, provider, url: 'x' });
+  assert.deepEqual(reasoningOf(ep('jean'), 'jean-grey').modes, ['normal', 'think']);
+  assert.deepEqual(reasoningOf(ep('openai'), 'o3-mini').modes, ['low', 'medium', 'high']);
+  assert.deepEqual(reasoningOf(ep('openai'), 'gpt-5').modes, ['minimal', 'low', 'medium', 'high']);
+  assert.deepEqual(reasoningOf(ep('openai'), 'gpt-4o').modes, [], 'sin razonamiento regulable');
+  assert.equal(reasoningOf(ep('deepseek'), 'deepseek-reasoner').always, true);
+  const body = { model: 'x', temperature: 0.2 };
+  assert.deepEqual(applyReasoning(body, ep('jean'), 'jean-grey', 'think'), { model: 'x', temperature: 0.2, chat_template_kwargs: { enable_thinking: true } });
+  assert.deepEqual(applyReasoning(body, ep('openai'), 'o3-mini', 'high'), { model: 'x', reasoning_effort: 'high' }, 'sin temperature');
+  assert.deepEqual(applyReasoning(body, ep('openrouter'), 'openai/gpt-oss-120b', 'low').reasoning, { effort: 'low' });
+  const a = applyReasoning(body, ep('anthropic'), 'claude-sonnet-4-5', 'medium');
+  assert.equal(a.thinking.budget_tokens, 8192);
+  assert.ok(a.max_tokens > 8192 && !('temperature' in a));
+  assert.deepEqual(applyReasoning(body, ep('groq'), 'gpt-4o', 'high'), body, 'un modelo sin razonamiento no cambia');
+  assert.equal(resolveMode('think', { modes: ['low', 'medium', 'high'] }), 'medium', 'PENSAR → esfuerzo medio');
+  assert.equal(resolveMode('high', { modes: ['normal', 'think'] }), 'think');
+  assert.equal(resolveMode('normal', { modes: ['low', 'high'] }), 'low');
+});
+
+test('versión nueva: plataforma, descarga y tipo de salto', () => {
+  assert.equal(platformOf({ desktop: false }), null, 'la web se actualiza sola');
+  assert.equal(platformOf({ capacitor: { isNativePlatform: () => true, getPlatform: () => 'android' } }), 'android');
+  assert.equal(platformOf({ desktop: true, ua: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Electron/38' }), 'win');
+  const assets = [{ name: 'JeanCode-1.3.0-android.apk', size: 1 }, { name: 'JeanCode-Setup-1.3.0.exe', size: 2, browser_download_url: 'https://dl/JeanCode-Setup-1.3.0.exe' }, { name: 'JeanCode-1.3.0-arm64.dmg', size: 3 }];
+  assert.equal(pickAsset(assets, 'android').name, 'JeanCode-1.3.0-android.apk');
+  assert.equal(pickAsset(assets, 'linux'), null);
+  assert.equal(changeKind('1.2.2', '1.2.3'), 'parche');
+  assert.equal(changeKind('1.2.2', '1.3.0'), 'menor');
+  assert.equal(changeKind('1.2.2', '2.0.0'), 'mayor');
+  const rel = { tag_name: 'v1.3.0', assets, body: '## Novedades', html_url: 'https://github.com/x/releases/tag/v1.3.0' };
+  const u = updateFrom(rel, { platform: 'win', current: '1.2.2' });
+  assert.equal(u.version, '1.3.0');
+  assert.match(u.url, /\.exe$/);
+  assert.equal(updateFrom(rel, { platform: 'win', current: '1.3.0' }), null, 'misma versión');
+  assert.equal(updateFrom(rel, { platform: 'win', current: '1.2.2', skipped: '1.3.0' }), null, 'omitida');
+  assert.equal(updateFrom({ ...rel, prerelease: true }, { platform: 'win', current: '1.2.2' }), null);
+});
