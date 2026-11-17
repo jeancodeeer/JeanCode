@@ -1,8 +1,8 @@
 // Mini agente del móvil: el agente de JeanCode trabajando DENTRO del teléfono (archivos, comandos y pantalla), con el
 // modelo que tengas conectado en la app. Mismo motor que el agente del PC (runAgent); el "escritorio" es el ayudante
 // del teléfono: Shizuku en Android (modo desarrollador) o jeancode_helper.py en un iPhone con jailbreak.
-import { deviceBackend, platformOf } from './device.js';
-import { createPhoneDesktop, createPhoneScreen } from './shim.js';
+import { deviceBackend, platformOf, nativeGetText } from './device.js';
+import { createPhoneDesktop, createPhoneScreen, createIosScreen } from './shim.js';
 
 const DEFAULT_ROOT = { android: '/sdcard/JeanCode', ios: '/var/mobile/JeanCode' };
 
@@ -14,7 +14,8 @@ export function phoneRules(kind, screen) {
   return [
     `ESTÁS EN ${where}`,
     'La carpeta de trabajo está en el almacenamiento del teléfono; las rutas de archivos son relativas a ella.',
-    screen ? 'PANTALLA: no hay ventanas ni ratón. open_application abre una app por paquete (com.android.settings) o una URL; inspect_screen lista los controles con sus coordenadas; mouse_click toca; scroll desliza (negativo = bajar); key_press ["back"], ["home"], ["enter"], ["recents"]; type_text escribe en el campo con el foco. Mientras actúas, JeanCode queda en segundo plano: cuando termines, vuelve con open_application io.github.jeancodeeer.jeancode.' : '',
+    screen && kind === 'android' ? 'PANTALLA: no hay ventanas ni ratón. open_application abre una app por paquete (com.android.settings) o una URL; inspect_screen lista los controles con sus coordenadas; mouse_click toca; scroll desliza (negativo = bajar); key_press ["back"], ["home"], ["enter"], ["recents"]; type_text escribe en el campo con el foco. Mientras actúas, JeanCode queda en segundo plano: cuando termines, vuelve con open_application io.github.jeancodeeer.jeancode.' : '',
+    screen && kind === 'ios' ? 'PANTALLA (iPhone): no se pueden leer los controles: mira con screenshot y toca con mouse_click en las coordenadas de la captura. open_application abre por identificador (com.apple.Preferences) o URL; scroll desliza; key_press ["home"], ["enter"], ["backspace"]; type_text escribe solo ASCII en el campo con el foco. Para volver: open_application io.github.jeancodeeer.jeancode.' : '',
     'NUNCA desinstales apps, borres datos de apps, cambies ajustes de seguridad, bloqueo o red, ni toques pantallas de pago, contraseñas o códigos: si hace falta, detente y pregúntale al usuario.',
   ].filter(Boolean).join('\n');
 }
@@ -29,7 +30,13 @@ export function initPhoneAgent(deps) {
   const kind = platformOf();
   if (!view || !['android', 'ios'].includes(kind)) return null;
   const st = { busy: false, abort: null, messages: store.get('deviceThread', []), info: '', ready: false };
-  const backend = () => deviceBackend({ iosToken: store.get('iosHelperToken', ''), iosUrl: store.get('iosHelperUrl', '') || undefined });
+  // una instancia por token: recuerda lo que dijo status() (p. ej. si el iPhone tiene la pantalla disponible)
+  let cached = null;
+  const backend = () => {
+    const key = `${store.get('iosHelperToken', '')}|${store.get('iosHelperUrl', '')}`;
+    if (!cached || cached.key !== key) cached = { key, dev: deviceBackend({ iosToken: store.get('iosHelperToken', ''), iosUrl: store.get('iosHelperUrl', '') || undefined }) };
+    return cached.dev;
+  };
   const root = () => ($('#dv-root').value.trim() || DEFAULT_ROOT[kind]).replace(/\/+$/, '');
 
   /* ---------------- estado del ayudante ---------------- */
@@ -104,16 +111,23 @@ export function initPhoneAgent(deps) {
     if (!m) { toast('CONECTA UNA API EN AJUSTES PARA USAR EL AGENTE'); return; }
     if (!(await check())) { toast('EL AYUDANTE DEL TELÉFONO NO ESTÁ LISTO'); return; }
     const dev = backend();
-    const d = createPhoneDesktop(dev);
+    const d = createPhoneDesktop(dev, { fetchText: nativeGetText });
     const ws = root();
     store.set('deviceRoot', ws);
     await d.shell.run(ws, 'true').catch(() => {}); // crea la carpeta de trabajo si no existe
     const vision = deps.capsOf(m.ep, m.id)?.vision !== false;
-    const computer = dev.screen && $('#dv-screen').checked ? createPhoneScreen(dev, { permit, vision }) : null;
+    // en el iPhone no hay lectura de controles: sin un modelo que vea imágenes, la pantalla no sirve
+    if (kind === 'ios' && dev.screen && $('#dv-screen').checked && !vision) toast('EN IPHONE, CONTROLAR LA PANTALLA NECESITA UN MODELO QUE VEA IMÁGENES');
+    const wantScreen = dev.screen && $('#dv-screen').checked && (kind === 'android' || vision);
+    const computer = wantScreen ? (kind === 'android' ? createPhoneScreen : createIosScreen)(dev, { permit, vision }) : null;
     if (computer) await computer.refresh().catch(() => {});
     // con la pantalla bajo control, JeanCode puede quedar detrás de otra app: se vuelve a él para preguntar
-    front = computer && kind === 'android'
-      ? async () => { if (document.hidden) { await dev.exec('am start -n io.github.jeancodeeer.jeancode/.MainActivity', 8000).catch(() => {}); await new Promise((r) => setTimeout(r, 800)); } }
+    front = computer
+      ? async () => {
+        if (!document.hidden) return;
+        await dev.exec(kind === 'android' ? 'am start -n io.github.jeancodeeer.jeancode/.MainActivity' : 'uiopen --bundleid io.github.jeancodeeer.jeancode', 8000).catch(() => {});
+        await new Promise((r) => setTimeout(r, 800));
+      }
       : null;
     const perm = $('#dv-perm').value;
     const allow = store.get(`allow:device:${ws}`, []);

@@ -39,8 +39,39 @@ export function globToRegex(glob) {
   return new RegExp(`^${re}$`);
 }
 
+/** ¿Dirección de este equipo o de una red privada? (como assertPublic del escritorio, sobre la URL escrita) */
+export function isPrivateHost(host) {
+  const h = String(host).toLowerCase().replace(/^\[|\]$/g, '');
+  if (/^(localhost|.*\.localhost|.*\.local|.*\.internal|.*\.lan|.*\.home\.arpa)$/.test(h) || h === '' || h === '0.0.0.0') return true;
+  const v4 = h.match(/^(\d+)\.(\d+)\.(\d+)\.(\d+)$/);
+  if (v4) {
+    const [a, b] = [+v4[1], +v4[2]];
+    return a === 10 || a === 127 || a === 0 || (a === 169 && b === 254) || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) || (a === 100 && b >= 64 && b <= 127) || a >= 224;
+  }
+  if (h.includes(':')) return h === '::1' || h === '::' || /^(fc|fd|fe8|fe9|fea|feb)/.test(h) || h.startsWith('::ffff:');
+  return false;
+}
+
+/** webfetch del móvil: misma salida que el del escritorio. fetchText(url) → { status, url, type, text } (red nativa). */
+export async function webfetch(url, fetchText) {
+  if (!fetchText) return 'ERROR: webfetch no está disponible aquí.';
+  let u;
+  try { u = new URL(url); } catch { return 'ERROR: URL inválida'; }
+  if (!['http:', 'https:'].includes(u.protocol)) return 'ERROR: solo http y https';
+  if (isPrivateHost(u.hostname)) return 'ERROR: por seguridad, webfetch no abre direcciones locales ni de redes privadas.';
+  const r = await fetchText(u.href);
+  if (r.url && isPrivateHost(new URL(r.url).hostname)) return 'ERROR: la página redirigió a una dirección privada; no se lee.';
+  let text = String(r.text ?? '');
+  if (/html/i.test(r.type || '') || /^\s*<(!doctype|html)/i.test(text)) {
+    text = text.replace(/<(script|style|noscript)[\s\S]*?<\/\1>/gi, ' ').replace(/<br\s*\/?>|<\/(p|div|h\d|li|tr)>/gi, '\n')
+      .replace(/<[^>]+>/g, ' ').replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>')
+      .replace(/[ \t]+/g, ' ').replace(/\n\s*\n+/g, '\n\n');
+  }
+  return `${r.status} ${r.url || u.href}\n\n${text.trim().slice(0, 40000)}`;
+}
+
 /** Un "desktop" para agent.js sobre el ayudante del teléfono. root = carpeta de trabajo (p. ej. /sdcard/JeanCode). */
-export function createPhoneDesktop(dev) {
+export function createPhoneDesktop(dev, { fetchText = null } = {}) {
   const sh = async (cmd, timeout = 60000) => {
     const r = await dev.exec(cmd, timeout);
     return { code: r.code ?? -1, out: String(r.out ?? ''), err: String(r.err ?? '') };
@@ -131,11 +162,60 @@ export function createPhoneDesktop(dev) {
     cancel: async () => {},
   };
 
-  const unsupported = (what) => async () => `ERROR: ${what} no está disponible en el agente del móvil.`;
+  /* Procesos en segundo plano (servidores, watchers): sh -c en su propio grupo (setsid, o nohup si no hay), con la
+     salida en <carpeta>/.jeancode-proc/<id>.log y el pid en <id>.pid. Al terminar se anota su código de salida. */
+  const procs = new Map(); // id → { dir, command, started }
+  let procSeq = 0;
+  const MAX_PROCS = 4;
+  const procFiles = (p, id) => ({ log: `${p.dir}/${id}.log`, pid: `${p.dir}/${id}.pid` });
+  const procState = async (id) => {
+    const p = procs.get(id);
+    if (!p) throw new Error(`no hay ningún proceso ${id}. Los que hay: ${[...procs.keys()].join(', ') || 'ninguno'}`);
+    const f = procFiles(p, id);
+    const r = await sh(`pid=$(cat ${sq(f.pid)} 2>/dev/null); if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then echo vivo; else echo fin; fi; grep -o '__JEANCODE_EXIT__[0-9]*' ${sq(f.log)} 2>/dev/null | tail -n 1`);
+    const [state, exit] = r.out.trim().split('\n');
+    return { p, f, running: state === 'vivo', exit: exit ? exit.replace('__JEANCODE_EXIT__', '') : null };
+  };
+  const tailLog = async (f, n) => (await sh(`tail -c ${Math.min(Math.max(Number(n) || 4000, 200), 60000)} ${sq(f.log)} 2>/dev/null`)).out.replace(/__JEANCODE_EXIT__\d+\n?/g, '');
+  const proc = {
+    async start(root, command) {
+      let alive = 0;
+      for (const id of procs.keys()) if ((await procState(id).catch(() => ({}))).running) alive++;
+      if (alive >= MAX_PROCS) return `ERROR: ya hay ${MAX_PROCS} procesos en segundo plano: detén alguno (stop_process).`;
+      const id = `p${++procSeq}`;
+      const dir = insidePath(root, '.jeancode-proc');
+      const p = { dir, command, started: Date.now() };
+      const f = procFiles(p, id);
+      // en un subshell: aunque el comando haga `exit N`, se anota su código de salida
+      const job = `(\n${command}\n)\necho "__JEANCODE_EXIT__$?"`;
+      await must(`mkdir -p ${sq(dir)} && cd ${sq(insidePath(root, '.'))} && : > ${sq(f.log)} && `
+        + `if command -v setsid >/dev/null 2>&1; then setsid sh -c ${sq(job)} >> ${sq(f.log)} 2>&1 < /dev/null & else nohup sh -c ${sq(job)} >> ${sq(f.log)} 2>&1 < /dev/null & fi; echo $! > ${sq(f.pid)}`, 'no se pudo iniciar el proceso');
+      procs.set(id, p);
+      await new Promise((r) => setTimeout(r, 1500)); // primeras líneas (puerto, errores de arranque)
+      const s = await procState(id);
+      return `${id} iniciado: ${command}\n${s.running ? '' : `(terminó enseguida, salida ${s.exit ?? '?'})\n`}${(await tailLog(f, 3000)).trim()}`;
+    },
+    async output(id, tail) {
+      const s = await procState(id).catch((e) => ({ error: e.message }));
+      if (s.error) return `ERROR: ${s.error}`;
+      return `${id} (${s.running ? 'en marcha' : `terminado, salida ${s.exit ?? '?'}`}) · ${s.p.command}\n${(await tailLog(s.f, tail)).trim() || '(sin salida todavía)'}`;
+    },
+    async stop(id) {
+      const s = await procState(id).catch((e) => ({ error: e.message }));
+      if (s.error) return `ERROR: ${s.error}`;
+      if (s.running) {
+        // al grupo entero (setsid) y, si no, al proceso; a los 2 s, KILL
+        await sh(`pid=$(cat ${sq(s.f.pid)}); kill -TERM -"$pid" 2>/dev/null || kill -TERM "$pid" 2>/dev/null; sleep 2; kill -0 "$pid" 2>/dev/null && { kill -KILL -"$pid" 2>/dev/null || kill -KILL "$pid"; }; true`, 15000);
+      }
+      const out = (await tailLog(s.f, 1500)).trim();
+      procs.delete(id);
+      return `${id} detenido.${out ? `\nÚltimas líneas:\n${out}` : ''}`;
+    },
+  };
+
   return {
-    fs, shell,
-    proc: { start: unsupported('los procesos en segundo plano'), output: unsupported('los procesos en segundo plano'), stop: unsupported('los procesos en segundo plano') },
-    web: { fetch: unsupported('webfetch') },
+    fs, shell, proc,
+    web: { fetch: (url) => webfetch(url, fetchText) },
     skills: { list: async () => [], read: async () => { throw new Error('las skills están en el PC'); } },
     system: {
       async info() {
@@ -297,5 +377,81 @@ export function createPhoneScreen(dev, { permit, vision = true, modelWidth = 540
     }
   }
 
+  return { vision, screen, permit, act, refresh: size };
+}
+
+/* ---------------------------------------------------------------- pantalla del iPhone (jailbreak, experimental) */
+const IOS_KEYS = { enter: 'enter', return: 'enter', home: 'home', escape: 'escape', esc: 'escape', backspace: 'backspace', delete: 'backspace', del: 'backspace',
+  tab: 'tab', space: 'space', up: 'up', down: 'down', left: 'left', right: 'right', volume_up: 'volumeup', volume_down: 'volumedown' };
+
+/**
+ * ctx.computer sobre un iPhone con jailbreak: jeancode-hid (toques, deslizar, teclas, capturas) y uiopen (abrir apps).
+ * iOS no deja leer los controles de otras apps sin un tweak, así que el agente trabaja con capturas: necesita un
+ * modelo que vea imágenes. Coordenadas del modelo = las de la captura (modelWidth de ancho); aquí se pasan a puntos.
+ */
+export function createIosScreen(dev, { permit, vision = true, modelWidth = 540 } = {}) {
+  const screen = { modelWidth, modelHeight: 1170, pointsWidth: 390, pointsHeight: 844 };
+  const sh = (cmd, t = 20000) => dev.exec(cmd, t);
+  const hid = async (args) => {
+    const r = await sh(`jeancode-hid ${args}`);
+    if (r.code !== 0) throw new Error(`jeancode-hid: ${String(r.err || r.out).trim().slice(0, 200) || `salida ${r.code}`}`);
+    return r.out;
+  };
+  const toPoints = (x, y) => [((Number(x) * screen.pointsWidth) / screen.modelWidth).toFixed(1), ((Number(y) * screen.pointsHeight) / screen.modelHeight).toFixed(1)];
+  async function size() {
+    const m = String(await hid('size')).match(/(\d+) (\d+)/);
+    if (m) { screen.pointsWidth = +m[1]; screen.pointsHeight = +m[2]; screen.modelHeight = Math.round((screen.pointsHeight * screen.modelWidth) / screen.pointsWidth); }
+  }
+  const noTree = 'ERROR: en el iPhone no se pueden leer los controles de las apps. Usa screenshot para ver la pantalla y mouse_click con sus coordenadas.';
+
+  async function act(tool, a = {}) {
+    try {
+      if (!screen.ready) { await size(); screen.ready = true; }
+      switch (tool) {
+        case 'screenshot': {
+          const s = await dev.screenshot(screen.modelWidth);
+          if (!s?.b64) return 'ERROR: no se pudo capturar la pantalla (¿jeancode-hid está instalado y firmado?).';
+          screen.modelHeight = s.height || screen.modelHeight;
+          return { text: `Captura de ${screen.modelWidth}×${screen.modelHeight} (coordenadas de esta imagen).`, image: `data:${s.mime};base64,${s.b64}` };
+        }
+        case 'inspect_screen': case 'read_text': case 'click_element': case 'click_text': case 'set_text': case 'wait_for': return noTree;
+        case 'list_windows': return 'iOS no expone la app en primer plano sin un tweak: haz screenshot para verla.';
+        case 'mouse_move': return 'En el iPhone no hay ratón: usa mouse_click (tocar).';
+        case 'mouse_click': { const [x, y] = toPoints(a.x, a.y); await hid(`tap ${x} ${y}`); if (a.double) await hid(`tap ${x} ${y}`); return `Tocado en (${a.x}, ${a.y}).`; }
+        case 'mouse_drag': { const [x, y] = toPoints(a.x, a.y); const [x2, y2] = toPoints(a.toX, a.toY); await hid(`swipe ${x} ${y} ${x2} ${y2} 400`); return 'Deslizado.'; }
+        case 'scroll': {
+          const n = Math.max(-30, Math.min(30, Number(a.clicks) || 0)) || -3;
+          const cx = screen.pointsWidth / 2, cy = screen.pointsHeight / 2, d = screen.pointsHeight * 0.06 * Math.abs(n);
+          const [ax, ay, bx, by] = a.horizontal ? [cx + (n > 0 ? -d : d) / 2, cy, cx + (n > 0 ? d : -d) / 2, cy] : [cx, cy + (n > 0 ? -d : d) / 2, cx, cy + (n > 0 ? d : -d) / 2];
+          await hid(`swipe ${ax.toFixed(1)} ${ay.toFixed(1)} ${bx.toFixed(1)} ${by.toFixed(1)} 300`);
+          return `Desplazado ${n}.`;
+        }
+        case 'type_text': await hid(`text ${sq(a.text)}`); return `Escritos ${String(a.text ?? '').length} caracteres (solo ASCII).`;
+        case 'key_press': {
+          const keys = (a.keys || []).map((k) => String(k).toLowerCase());
+          if (keys.length !== 1 || !IOS_KEYS[keys[0]]) return `ERROR: en el iPhone solo hay teclas sueltas: ${Object.keys(IOS_KEYS).join(', ')}.`;
+          for (let i = 0; i < Math.min(Number(a.repeat) || 1, 20); i++) await hid(`key ${IOS_KEYS[keys[0]]}`);
+          return `Pulsado ${keys[0]}.`;
+        }
+        case 'open_application': case 'focus_window': {
+          const target = String(a.target || a.title || '').trim();
+          if (/^[a-z][\w+.-]*:/i.test(target)) { const r = await sh(`uiopen ${sq(target)}`); return r.code === 0 ? `Abierto ${target}.` : `ERROR: uiopen: ${r.err || r.out}`; }
+          let bundle = target;
+          if (!/^[a-z][\w-]*(\.[\w-]+)+$/i.test(target)) {
+            // por nombre: lista de apps de uicache (bundle : ruta)
+            const r = await sh('uicache -l 2>/dev/null');
+            const q = target.toLowerCase().replace(/\s+/g, '');
+            const line = String(r.out).split('\n').find((l) => l.toLowerCase().replace(/\s+/g, '').includes(q));
+            bundle = (line || '').split(/\s*:\s*/)[0].trim();
+            if (!bundle) return `ERROR: no encuentro una app «${target}». Pasa su identificador (p. ej. com.apple.Preferences).`;
+          }
+          const r = await sh(`uiopen --bundleid ${sq(bundle)}`);
+          return r.code === 0 ? `Abierta ${bundle}.` : `ERROR: no se pudo abrir ${bundle}: ${String(r.err || r.out).trim().slice(0, 200)}`;
+        }
+        case 'wait': await new Promise((r) => setTimeout(r, Math.min(Math.max(Number(a.ms) || 1000, 100), 15000))); return 'Esperado.';
+        default: return `ERROR: ${tool} no está disponible en el iPhone.`;
+      }
+    } catch (e) { return `ERROR: ${e.message}`; }
+  }
   return { vision, screen, permit, act, refresh: size };
 }

@@ -1272,3 +1272,77 @@ test('móvil: el agente usa el ayudante del iPhone (Python real) para archivos y
   assert.match(await d.fs.trash(root, `docs/${name}`), /papelera/);
   assert.equal(fsx.readdirSync(join(tmp, '.papelera')).length, 1);
 });
+
+test('móvil: webfetch con la red nativa, como el del escritorio, sin direcciones privadas', async () => {
+  for (const h of ['localhost', '127.0.0.1', '10.1.2.3', '192.168.1.5', '172.20.0.1', '169.254.169.254', '[::1]', 'fd00::1', 'impresora.local', '100.64.0.1']) assert.equal(MS.isPrivateHost(h), true, h);
+  for (const h of ['example.com', '8.8.8.8', '172.32.0.1', 'docs.python.org']) assert.equal(MS.isPrivateHost(h), false, h);
+  const pages = {
+    'https://docs.example.com/x': { status: 200, url: 'https://docs.example.com/x', type: 'text/html', text: '<html><head><style>p{}</style><script>alert(1)</script></head><body><h1>Título</h1><p>Uno &amp; dos</p></body></html>' },
+    'https://corto.example/r': { status: 200, url: 'http://192.168.1.1/admin', type: 'text/html', text: 'router' },
+  };
+  const fetchText = async (u) => pages[u];
+  assert.equal(await MS.webfetch('https://docs.example.com/x', fetchText), '200 https://docs.example.com/x\n\nTítulo\n Uno & dos');
+  assert.match(await MS.webfetch('http://192.168.1.1/admin', fetchText), /redes privadas/);
+  assert.match(await MS.webfetch('https://corto.example/r', fetchText), /redirigió a una dirección privada/);
+  assert.match(await MS.webfetch('file:///etc/passwd', fetchText), /solo http/);
+  assert.match(await MS.webfetch('https://x.example', null), /no está disponible/);
+});
+
+test('móvil: procesos en segundo plano (arrancar, salida, código de salida y parar el grupo)', async (t) => {
+  const { spawn, execFileSync } = require('node:child_process');
+  const tmp = mkdtempSync(join(tmpdir(), 'jc-proc-'));
+  const port = 47900 + Math.floor(Math.random() * 90);
+  const win = process.platform === 'win32';
+  const env = { ...process.env, JEANCODE_HELPER_PORT: String(port), JEANCODE_HELPER_TOKEN_FILE: join(tmp, 'token'), JEANCODE_HELPER_SHELL: win ? 'C:\\Program Files\\Git\\bin\\bash.exe' : '/bin/sh' };
+  const py = win ? 'python' : 'python3';
+  const token = execFileSync(py, ['mobile/ios-helper/jeancode_helper.py', '--token'], { env }).toString().trim();
+  const helper = spawn(py, ['mobile/ios-helper/jeancode_helper.py'], { env });
+  t.after(() => helper.kill());
+  await new Promise((r) => helper.stdout.once('data', r));
+  const http = (url, body, headers) => fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json', ...headers }, body: JSON.stringify(body) }).then((r) => r.json());
+  const dev = MD.iosBackend({ url: `http://127.0.0.1:${port}`, token, http });
+  const d = MS.createPhoneDesktop(dev);
+  const root = win ? tmp.replace(/\\/g, '/') : tmp; // C:/… vale para bash (Git) y para Python
+  const started = await d.proc.start(root, 'i=0; while true; do echo "tick$i"; i=$((i+1)); sleep 0.3; done');
+  assert.match(started, /^p1 iniciado: .*\ntick0/);
+  await new Promise((r) => setTimeout(r, 1200));
+  const out = await d.proc.output('p1');
+  assert.match(out, /^p1 \(en marcha\)/);
+  assert.ok((out.match(/tick\d+/g) || []).length >= 5, 'la salida sigue llegando');
+  assert.match(await d.proc.stop('p1'), /^p1 detenido\./);
+  assert.match(await d.proc.output('p1'), /^ERROR: no hay ningún proceso p1/);
+  const quick = await d.proc.start(root, 'echo listo; exit 3');
+  assert.match(quick, /^p2 iniciado: .*\n\(terminó enseguida, salida 3\)\nlisto$/);
+  assert.match(await d.proc.output('p2'), /^p2 \(terminado, salida 3\)/);
+});
+
+test('móvil: pantalla del iPhone (jeancode-hid y uiopen): coordenadas, escapes y apps', async () => {
+  const cmds = [];
+  const dev = {
+    exec: async (cmd) => {
+      cmds.push(cmd);
+      if (cmd === 'jeancode-hid size') return { code: 0, out: '390 844 3\n', err: '' };
+      if (cmd.startsWith('uicache -l')) return { code: 0, out: 'com.apple.Preferences : /Applications/Preferences.app\ncom.apple.mobilesafari : /Applications/MobileSafari.app\n', err: '' };
+      return { code: 0, out: '', err: '' };
+    },
+    screenshot: async () => ({ b64: 'AAAA', mime: 'image/jpeg', width: 540, height: 1169 }),
+  };
+  const s = MS.createIosScreen(dev, { permit: async () => true });
+  await s.refresh();
+  assert.equal(s.screen.modelHeight, 1169, '390×844 puntos → 540×1169 en el modelo');
+  assert.equal((await s.act('screenshot')).image, 'data:image/jpeg;base64,AAAA');
+  await s.act('mouse_click', { x: 270, y: 584 });
+  assert.equal(cmds.at(-1), 'jeancode-hid tap 195.0 421.6', 'el centro de la captura es el centro de la pantalla en puntos');
+  await s.act('type_text', { text: "hola 'mundo' $(reboot)" });
+  assert.equal(cmds.at(-1), `jeancode-hid text 'hola '\\''mundo'\\'' $(reboot)'`, 'el texto va entre comillas: no se ejecuta');
+  await s.act('key_press', { keys: ['home'] });
+  assert.equal(cmds.at(-1), 'jeancode-hid key home');
+  assert.match(await s.act('key_press', { keys: ['ctrl', 'c'] }), /solo hay teclas sueltas/);
+  await s.act('open_application', { target: 'Safari' });
+  assert.equal(cmds.at(-1), "uiopen --bundleid 'com.apple.mobilesafari'", 'por nombre, con la lista de uicache');
+  await s.act('open_application', { target: 'https://example.com' });
+  assert.equal(cmds.at(-1), "uiopen 'https://example.com'");
+  assert.match(await s.act('inspect_screen'), /no se pueden leer los controles/);
+  const broken = MS.createIosScreen({ exec: async () => ({ code: 4, out: '', err: 'falta IOHIDEventSystemClientCreate en esta versión de iOS' }), screenshot: async () => null }, {});
+  assert.match(await broken.act('mouse_click', { x: 1, y: 1 }), /ERROR: jeancode-hid: falta IOHIDEventSystemClientCreate/, 'si el binario falla, el agente recibe el motivo');
+});

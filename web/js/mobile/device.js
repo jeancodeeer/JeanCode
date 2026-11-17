@@ -38,19 +38,27 @@ export function iosBackend({ url = IOS_HELPER_URL, token, http }) {
     if (r?.error) throw new Error(r.error);
     return r;
   };
-  return {
+  const SHOT = '/var/mobile/Library/JeanCode/pantalla.jpg';
+  const dev = {
     kind: 'ios',
     label: 'iPhone (ayudante de Python)',
+    screen: false, // true cuando el ayudante dice que jeancode-hid (pantalla, experimental) funciona
     status: async () => {
-      try { const s = await call('/status'); return { ready: true, ...s }; } catch (e) { return { ready: false, reason: String(e.message || e) }; }
+      try { const s = await call('/status'); dev.screen = !!s.screen; return { ready: true, ...s }; } catch (e) { return { ready: false, reason: String(e.message || e) }; }
     },
     request: async () => ({ granted: true }),
     exec: (cmd, timeoutMs = 120000) => call('/exec', { cmd, timeout: timeoutMs }),
     readFile: async (path) => (await call('/read', { path, maxBytes: MAX_READ })).b64,
     writeFile: (path, b64) => call('/write', { path, b64 }),
-    screenshot: async () => null, // la pantalla de iOS necesita un tweak aparte: aún no
-    screen: false,
+    /** Captura con jeancode-hid (IOSurface) reducida a maxWidth: { b64, mime, width, height, realWidth, realHeight } | null */
+    screenshot: async (maxWidth = 540) => {
+      const r = await dev.exec(`mkdir -p ${sq(SHOT.replace(/\/[^/]*$/, ''))} && jeancode-hid screenshot ${sq(SHOT)} ${Math.round(maxWidth)}`, 20000);
+      const m = String(r.out).match(/(\d+) (\d+) (\d+) (\d+)/);
+      if (r.code !== 0 || !m) return null;
+      return { b64: await dev.readFile(SHOT), mime: 'image/jpeg', width: +m[1], height: +m[2], realWidth: +m[3], realHeight: +m[4] };
+    },
   };
+  return dev;
 }
 
 /** POST JSON por la red nativa (sin CORS ni contenido mixto) o, en el navegador, con fetch. */
@@ -64,6 +72,18 @@ export async function nativePost(url, body, headers = {}) {
   const r = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json', ...headers }, body: JSON.stringify(body) });
   if (r.status === 401) throw new Error('token del ayudante incorrecto');
   return r.json();
+}
+
+/** GET de una página para webfetch: red nativa de la app (sin CORS). → { status, url, type, text } */
+export async function nativeGetText(url) {
+  const H = cap()?.Plugins?.CapacitorHttp;
+  if (H) {
+    const r = await H.request({ url, method: 'GET', headers: { 'User-Agent': 'JeanCode' }, responseType: 'text', connectTimeout: 15000, readTimeout: 20000 });
+    const type = Object.entries(r.headers || {}).find(([k]) => k.toLowerCase() === 'content-type')?.[1] || '';
+    return { status: r.status, url: r.url || url, type, text: typeof r.data === 'string' ? r.data : JSON.stringify(r.data) };
+  }
+  const r = await fetch(url, { signal: AbortSignal.timeout(20000) });
+  return { status: r.status, url: r.url, type: r.headers.get('content-type') || '', text: await r.text() };
 }
 
 /** El backend de este teléfono, o null si la app no corre en Android/iOS. */

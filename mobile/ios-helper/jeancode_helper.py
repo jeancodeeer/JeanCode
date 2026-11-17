@@ -28,6 +28,8 @@ MAX_BODY = 32 * 1024 * 1024
 MAX_OUT = 1024 * 1024
 # JEANCODE_HELPER_SHELL solo para probarlo fuera del iPhone (p. ej. con bash en un PC)
 SHELL = os.environ.get('JEANCODE_HELPER_SHELL') or ('/var/jb/bin/sh' if os.path.exists('/var/jb/bin/sh') else '/bin/sh')
+# donde install.sh deja el ayudante y jeancode-hid (pantalla)
+LIBEXEC = os.environ.get('JEANCODE_HELPER_LIBEXEC') or ('/var/jb/usr/libexec/jeancode' if os.path.isdir('/var/jb') else '/usr/libexec/jeancode')
 
 
 def load_token():
@@ -53,7 +55,7 @@ def run(cmd, timeout_ms):
     try:
         # el comando lo decide el agente (con tu permiso en la app): se pasa entero a sh -c, como un terminal
         p = subprocess.run([SHELL, '-c', cmd], capture_output=True, timeout=timeout,
-                           env={**os.environ, 'PATH': '/var/jb/usr/bin:/var/jb/bin:/usr/bin:/bin:/usr/sbin:/sbin:' + os.environ.get('PATH', '')})
+                           env={**os.environ, 'PATH': f'{LIBEXEC}:/var/jb/usr/bin:/var/jb/bin:/usr/bin:/bin:/usr/sbin:/sbin:' + os.environ.get('PATH', '')})
         return {'code': p.returncode, 'out': p.stdout[:MAX_OUT].decode('utf-8', 'replace'), 'err': p.stderr[:MAX_OUT].decode('utf-8', 'replace')}
     except subprocess.TimeoutExpired as e:
         out = (e.stdout or b'')[:MAX_OUT].decode('utf-8', 'replace')
@@ -94,7 +96,10 @@ class Handler(BaseHTTPRequestHandler):
             return self.reply(400, {'error': 'JSON no válido'})
         try:
             if self.path == '/status':
-                return self.reply(200, {'ok': True, 'user': run('id', 5000)['out'].strip(), 'system': run('uname -srm; sw_vers 2>/dev/null', 5000)['out'].strip()})
+                # screen: jeancode-hid compilado y funcionando (install.sh / build-hid.sh)
+                hid = os.path.join(LIBEXEC, 'jeancode-hid')
+                screen = os.access(hid, os.X_OK) and run('jeancode-hid size', 8000)['code'] == 0
+                return self.reply(200, {'ok': True, 'screen': screen, 'user': run('id', 5000)['out'].strip(), 'system': run('uname -srm; sw_vers 2>/dev/null', 5000)['out'].strip()})
             if self.path == '/exec':
                 return self.reply(200, run(str(data.get('cmd', '')), data.get('timeout')))
             if self.path == '/read':

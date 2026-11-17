@@ -10,6 +10,8 @@ PY="$PREFIX/usr/bin/python3"
 HERE=$(cd "$(dirname "$0")" && pwd)
 install -d "$PREFIX/usr/libexec/jeancode"
 install -m 755 "$HERE/jeancode_helper.py" "$PREFIX/usr/libexec/jeancode/jeancode_helper.py"
+# pantalla (opcional): compila jeancode-hid en el propio iPhone si hay clang, ldid y un SDK
+sh "$HERE/build-hid.sh"
 PLIST="$PREFIX/Library/LaunchDaemons/io.github.jeancodeeer.helper.plist"
 sed "s#@PREFIX@#$PREFIX#g" "$HERE/io.github.jeancodeeer.helper.plist" > "$PLIST"
 chmod 644 "$PLIST"; chown root:wheel "$PLIST"

@@ -10,7 +10,7 @@ privilegios** en el propio teléfono:
 | | AYUDANTE | QUÉ PUEDE |
 |---|---|---|
 | **Android** (modo desarrollador) | [Shizuku](https://github.com/RikkaApps/Shizuku): abre para JeanCode un proceso con permisos de *shell* (como `adb shell`) | archivos (almacenamiento compartido), comandos (`pm`, `am`, `dumpsys`, `settings get`…), pantalla (`uiautomator`, `input`, `screencap`) |
-| **iPhone** (jailbreak) | `mobile/ios-helper/jeancode_helper.py`, un servicio local de Python | archivos y comandos como el usuario `mobile`. La pantalla de iOS necesita un tweak aparte y todavía no está |
+| **iPhone** (jailbreak) | `mobile/ios-helper/jeancode_helper.py`, un servicio local de Python, y `jeancode-hid` para la pantalla | archivos y comandos como el usuario `mobile`; pantalla **experimental** (capturas, toques, deslizar, teclas, abrir apps) |
 
 ## Android
 
@@ -31,6 +31,22 @@ permiso. Puedes quitar el permiso en Shizuku cuando quieras.
    jailbreaks *rootless* (`/var/jb`) y *rootful*. Se queda en marcha con `launchd`.
 3. El instalador imprime un **token**: pégalo en JeanCode → **Móvil**.
 
+### Pantalla del iPhone (experimental)
+
+iOS no trae ninguna forma de tocar la pantalla ni de hacer capturas desde un comando. Con jailbreak se hace con
+APIs privadas, como `simulatetouch` y los grabadores de pantalla: `jeancode-hid.m` inyecta toques, deslizamientos y
+teclas con IOKit (`IOHIDEventSystemClient`) y captura la pantalla con `CARenderServerRenderDisplay`. Las apps se
+abren con `uiopen`.
+
+- `install.sh` lo **compila en el propio iPhone** (`build-hid.sh`) si tienes **clang**, **ldid** (Procursus) y un
+  **SDK de iOS** (por ejemplo, el de Theos en `/var/mobile/theos/sdks`), y lo firma con `jeancode-hid.entitlements`.
+  Si falta algo, lo dice y el agente funciona sin pantalla.
+- iOS no deja leer los controles de otras apps sin un tweak, así que el agente trabaja **con capturas**: hace falta un
+  modelo que vea imágenes. `type_text` solo escribe ASCII.
+- **No está probado en un iPhone real** (no se puede compilar para iOS desde Windows). Si `jeancode-hid size` falla,
+  el agente recibe el motivo. Si los toques no llegan, prueba a ejecutar el ayudante como root (`UserName root` en el
+  plist).
+
 El ayudante escucha solo en `127.0.0.1:47322`, exige el token (32 bytes aleatorios, archivo con permisos 600) y
 rechaza peticiones de páginas web. `sudo sh uninstall.sh` lo quita.
 
@@ -48,7 +64,10 @@ rechaza peticiones de páginas web. `sudo sh uninstall.sh` lo quita.
   captura reducida si tu modelo ve imágenes, y toca, desliza, escribe y abre apps con `input`, `am` y `monkey`. Las
   acciones de riesgo medio o alto (teclas, abrir apps) piden permiso. Mientras el agente maneja otras apps, JeanCode
   queda en segundo plano.
-- Sin procesos en segundo plano ni `webfetch` por ahora.
+- **Procesos en segundo plano** (`start_process`, `process_output`, `stop_process`): servidores o *watchers* en su propio
+  grupo de procesos (`setsid`), con la salida en `.jeancode-proc/` dentro de la carpeta de trabajo. Como mucho 4 a la vez.
+- **`webfetch`** con la red nativa de la app (sin CORS), igual que en el PC: pide permiso con la URL y no abre direcciones
+  locales ni de redes privadas.
 
 ## Código
 
