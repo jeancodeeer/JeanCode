@@ -18,7 +18,7 @@ reglas («nunca toques `.env`»), formatear, avisar o dar contexto sin depender 
 | Proyecto | `.claude/settings.json`, `.claude/settings.local.json`, `.jeancode/settings.json`, `.jeancode/settings.local.json` | se pide la primera vez y cada vez que cambian |
 | Proyecto (antiguo) | `.jeancode/hooks.json` con el formato de JeanCode ≤ 1.2 (`pre_tool`, `post_edit`…) | igual; se convierte solo |
 
-Se suman todos (el mismo comando en dos archivos corre una vez). `"disableAllHooks": true` en tus ajustes los apaga todos; en un proyecto solo apaga los de ese proyecto (un repositorio ajeno no puede desactivar tus hooks).
+Se suman todos (el mismo comando en dos archivos corre una vez). `"disableAllHooks": true` los apaga todos, como en Claude Code; el de un proyecto solo cuenta después de que confíes en él (el aviso de confianza dice que apagará también tus hooks, y añadirlo o quitarlo vuelve a preguntar).
 `/hooks` en el agente muestra los activos y de dónde vienen. Los **plugins** no aportan hooks: nunca se ejecutan.
 
 ```json

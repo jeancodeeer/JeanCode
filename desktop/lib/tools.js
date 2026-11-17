@@ -515,7 +515,7 @@ async function hooks(root) {
     if (hookconfig.count(norm.hooks)) sources.push({ file: rel, hooks: norm.hooks });
   }
   if (!sources.length && !disableAll) return null;
-  const hash = require('node:crypto').createHash('sha256').update(JSON.stringify(sources)).digest('hex');
+  const hash = require('node:crypto').createHash('sha256').update(JSON.stringify({ sources, disableAll })).digest('hex');
   return { sources, disableAll, hash };
 }
 

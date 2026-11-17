@@ -2068,13 +2068,17 @@ async function loadHooks(folder = state.workspace, { interactive = true } = {}) 
   if (!h) return none;
   if (h.error) { if (interactive) addMessage('system', h.error); return { ...none, error: h.error }; }
   const res = { sources: h.sources.map((s) => ({ hooks: s.hooks, label: s.file })), disableAll: h.disableAll };
-  if (!h.sources.length || store.get(`hooksTrust:${folder}`, '') === h.hash) return res;
-  if (!interactive) return { ...res, sources: [], untrusted: true };
+  // Como en Claude Code, "disableAllHooks" de un proyecto apaga TODOS los hooks (también los tuyos), pero solo
+  // si confiaste en ese proyecto: hasta entonces ni sus hooks corren ni su disableAllHooks cuenta.
+  if (store.get(`hooksTrust:${folder}`, '') === h.hash) return res;
+  if (!interactive) return { ...none, untrusted: true };
+  const parts = h.sources.map((s) => `${s.file}\n${JSON.stringify(s.hooks, null, 2)}`);
+  if (h.disableAll) parts.push('"disableAllHooks": true → desactiva TODOS los hooks mientras trabajes aquí, también los tuyos de usuario.');
   const ok = await confirmDialog({
     title: 'HOOKS DEL PROYECTO',
-    command: `Esta carpeta define comandos que se ejecutarán solos:\n\n${h.sources.map((s) => `${s.file}\n${JSON.stringify(s.hooks, null, 2)}`).join('\n\n')}\n\nPermítelos solo si confías en el proyecto.`,
+    command: `${h.sources.length ? 'Esta carpeta define comandos que se ejecutarán solos' : 'Esta carpeta cambia cómo funcionan los hooks'}:\n\n${parts.join('\n\n')}\n\nAcéptalo solo si confías en el proyecto.`,
   });
-  if (!ok) { addMessage('system', 'Hooks del proyecto desactivados para esta sesión.'); return { ...res, sources: [] }; }
+  if (!ok) { addMessage('system', 'La configuración de hooks del proyecto no se aplica en esta sesión.'); return none; }
   store.set(`hooksTrust:${folder}`, h.hash);
   return res;
 }
@@ -2098,10 +2102,10 @@ async function hookEngine(project, o = {}) {
   const folder = o.folder || state.workspace;
   const global = desktop.hooks ? await desktop.hooks.global().catch(() => null) : null;
   if (global?.error) addMessage('system', `Los hooks del usuario no son válidos (${global.error}): Ajustes → Comportamiento.`);
-  // "disableAllHooks": true del usuario apaga todos; el de un proyecto solo apaga los del proyecto
-  // (un repositorio ajeno no puede desactivar tus hooks de usuario)
-  const off = !!global?.disableAll;
-  const sources = off ? [] : [{ hooks: global?.hooks, label: 'usuario' }, ...(project?.disableAll ? [] : project?.sources || [])];
+  // "disableAllHooks": true en cualquier settings los apaga todos, como en Claude Code. El de un proyecto solo llega
+  // aquí si confiaste en él (loadHooks), así que un repositorio ajeno no puede apagar tus hooks sin que lo aceptes.
+  const off = !!(global?.disableAll || project?.disableAll);
+  const sources = off ? [] : [{ hooks: global?.hooks, label: 'usuario' }, ...(project?.sources || [])];
   const engine = createHooks(sources, {
     exec: (command, input, timeout) => desktop.hooks.exec(folder, command, input, timeout),
     llm: (prompt, timeout) => hookLlm(prompt, timeout, o.model),

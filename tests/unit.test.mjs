@@ -761,6 +761,18 @@ test('hooks del proyecto: .claude/settings.json, .jeancode/settings.local.json y
   assert.match(h.hash, /^[0-9a-f]{64}$/);
   writeFileSync(join(root, '.jeancode', 'settings.local.json'), '{ roto');
   assert.match((await tools.hooks(root)).error, /settings\.local\.json no es válido/);
+  // disableAllHooks entra en la huella: añadirlo o quitarlo vuelve a pedir confianza
+  writeFileSync(join(root, '.jeancode', 'settings.local.json'), JSON.stringify({ hooks: { Stop: [{ hooks: [{ type: 'command', command: 'b' }] }] } }));
+  const before = (await tools.hooks(root)).hash;
+  writeFileSync(join(root, '.jeancode', 'settings.local.json'), JSON.stringify({ disableAllHooks: true, hooks: { Stop: [{ hooks: [{ type: 'command', command: 'b' }] }] } }));
+  const after = await tools.hooks(root);
+  assert.equal(after.disableAll, true);
+  assert.notEqual(after.hash, before, 'activar disableAllHooks cambia la huella');
+  const solo = mkdtempSync(join(tmpdir(), 'jc-hooks-off-'));
+  mkdirSync(join(solo, '.claude'));
+  writeFileSync(join(solo, '.claude', 'settings.json'), JSON.stringify({ disableAllHooks: true }));
+  const off = await tools.hooks(solo);
+  assert.deepEqual([off.sources.length, off.disableAll, /^[0-9a-f]{64}$/.test(off.hash)], [0, true, true], 'solo disableAllHooks también tiene huella (pide confianza)');
   const r = await tools.execHook(root, process.platform === 'win32' ? 'echo %CLAUDE_PROJECT_DIR%' : 'echo $CLAUDE_PROJECT_DIR', { hook_event_name: 'Stop' }, 10);
   assert.equal(r.stdout.trim().toLowerCase(), require('node:fs').realpathSync(root).toLowerCase(), 'CLAUDE_PROJECT_DIR como en Claude Code');
 });
