@@ -5,3 +5,5 @@ desktop/dist/
 .DS_Store
 Thumbs.db
 .impeccable/review/
+relay/.wrangler/
+relay/node_modules/
