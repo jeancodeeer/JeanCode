@@ -14,7 +14,14 @@ const MAX_FILES = 6000;
 const MAX_BYTES = 80 * 2 ** 20;
 const MAX_FILE = 2 * 2 ** 20;
 
-const slug = (s) => String(s).toLowerCase().replace(/[^a-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 64) || 'plugin';
+// sin puntos ni guiones al principio: "..", "." o ".git" nunca pueden ser un id (saldrían de <userData>/plugins)
+const slug = (s) => String(s).toLowerCase().replace(/[^a-z0-9._-]+/g, '-').replace(/^[.-]+|[.-]+$/g, '').slice(0, 64) || 'plugin';
+/** Carpeta del plugin <id> dentro de dir; cualquier otra cosa se rechaza antes de borrar o renombrar. */
+function pluginDir(dir, id) {
+  const target = path.join(dir, id);
+  if (!/^[a-z0-9][a-z0-9._-]*$/.test(id) || path.dirname(target) !== dir) throw new Error(`id de plugin inválido: ${id}`);
+  return target;
+}
 const readJson = async (f) => JSON.parse(await fs.readFile(f, 'utf8'));
 const asList = (v) => (v == null ? [] : Array.isArray(v) ? v : [v]);
 
@@ -197,8 +204,8 @@ function create(dir) {
   }
 
   async function writeState(id, patch) {
-    const root = path.join(dir, slug(id));
-    if (path.dirname(root) !== dir || !(await manifestOf(root))) throw new Error(`plugin no instalado: ${id}`);
+    const root = pluginDir(dir, slug(id));
+    if (!(await manifestOf(root))) throw new Error(`plugin no instalado: ${id}`);
     const f = path.join(root, STATE);
     const cur = await readJson(f).catch(() => ({}));
     await fs.writeFile(f, JSON.stringify({ ...cur, ...patch }, null, 2));
@@ -208,9 +215,7 @@ function create(dir) {
   const setEnabled = (id, on) => writeState(id, { enabled: !!on });
 
   async function remove(id) {
-    const target = path.join(dir, slug(id));
-    if (path.dirname(target) !== dir) throw new Error('id inválido');
-    await fs.rm(target, { recursive: true, force: true });
+    await fs.rm(pluginDir(dir, slug(id)), { recursive: true, force: true });
     cache = null;
     return true;
   }
@@ -220,6 +225,7 @@ function create(dir) {
     const m = await manifestOf(srcRoot);
     if (!m) throw new Error('no es un plugin: falta .claude-plugin/plugin.json');
     const id = slug(m.name);
+    const target = pluginDir(dir, id); // validado antes de tocar nada
     let files = 0, bytes = 0;
     const filter = async (p) => {
       const base = path.basename(p);
@@ -241,7 +247,6 @@ function create(dir) {
         if (!(await fs.stat(from).catch(() => null))) continue;
         await fs.cp(from, path.join(tmp, k), { recursive: true, filter });
       }
-      const target = path.join(dir, id);
       const prev = await readJson(path.join(target, STATE)).catch(() => ({}));
       await fs.writeFile(path.join(tmp, STATE), JSON.stringify({ enabled: prev.enabled !== false, source, installedAt: new Date().toISOString() }, null, 2));
       await fs.rm(target, { recursive: true, force: true });

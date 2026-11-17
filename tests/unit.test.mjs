@@ -917,3 +917,21 @@ test('plugins: los grandes se resumen en el prompt y los comandos llevan prefijo
   assert.deepEqual(parseCommand('/ecc:plan añadir login'), { name: 'ecc:plan', args: 'añadir login' });
   assert.deepEqual(matchCommands('pla', 'agent', [{ name: 'ecc:plan', description: 'p' }]).filter((c) => c.custom).map((c) => c.name), ['ecc:plan']);
 });
+
+test('plugins: un "name" malicioso no sale de la carpeta de plugins', async () => {
+  const fsx = require('node:fs');
+  const parent = mkdtempSync(join(tmpdir(), 'jc-padre-'));
+  const dir = join(parent, 'plugins');
+  writeFileSync(join(parent, 'centinela.txt'), 'no me borres');
+  const p = pluginsLib.create(dir);
+  for (const name of ['..', '.', '../..', '.git', '-..']) {
+    const src = mkdtempSync(join(tmpdir(), 'jc-evil-'));
+    mkdirSync(join(src, '.claude-plugin'));
+    writeFileSync(join(src, '.claude-plugin', 'plugin.json'), JSON.stringify({ name }));
+    const r = await p.installFrom(src).catch((e) => e);
+    if (!(r instanceof Error)) assert.equal(require('node:path').dirname(join(dir, r.id)), dir, `id ${r.id} queda dentro`);
+    assert.ok(fsx.existsSync(join(parent, 'centinela.txt')), `"${name}" no borra la carpeta padre`);
+  }
+  await assert.rejects(p.remove('..'), /inválido/);
+  assert.ok(fsx.existsSync(join(parent, 'centinela.txt')));
+});
