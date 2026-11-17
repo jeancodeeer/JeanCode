@@ -36,7 +36,7 @@ contextBridge.exposeInMainWorld('jeancodeDesktop', {
   },
   web: { fetch: call('web:fetch') },
   project: { memory: call('project:memory'), commands: call('project:commands'), agents: call('project:agents'), hooks: call('project:hooks') },
-  hooks: { global: call('hooks:global'), saveGlobal: call('hooks:saveGlobal'), exec: call('hooks:exec') },
+  hooks: { global: call('hooks:global'), saveGlobal: call('hooks:saveGlobal'), exec: call('hooks:exec'), transcript: call('hooks:transcript') },
   turn: { begin: call('turn:begin'), rewind: call('turn:rewind') },
   shell: { run: call('shell:run'), cancel: call('shell:cancel') },
   // Ejecutar el proyecto del modo CODE en el PC (copia temporal; los comandos los decide lib/runner.js)

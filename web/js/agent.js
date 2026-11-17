@@ -3,12 +3,15 @@
 // no tenga function calling nativo.
 import { chatStream } from './api.js';
 import { COMPUTER_TOOL_NAMES, COMPUTER_SCHEMAS, DEV_SCHEMAS, DEV_DOCS, computerDocs, riskOf, describeAction, DESTRUCTIVE_COMMAND } from './computer.js';
+import { claudeToolName, toolInput, fromToolInput } from './hooks.js';
 
 const TOOL_RE = /```tool\s*\n([\s\S]*?)```/g;
 const MAX_STEPS = 40;
 const COMPUTER_MAX_STEPS = 100; // una tarea de pantalla son muchas acciones pequeñas
 const SUB_MAX_STEPS = 14;
 const MAX_RESULT = 12000;
+// tope de seguridad: un hook Stop mal escrito (que no mira stop_hook_active) no puede tener al agente trabajando sin fin
+const STOP_HOOK_MAX = 10;
 
 const READ_TOOLS = ['list_dir', 'read_file', 'search', 'glob', 'diagnostics', 'webfetch', 'system_info', 'load_skill', 'todo_write'];
 const WRITE_TOOLS = ['write_file', 'edit_file', 'move_file'];
@@ -36,6 +39,13 @@ Organización:
     mantén una lista de tareas visible para el usuario en trabajos de varios pasos
 - spawn_subagent {"task": "instrucción completa y autónoma", "write": false}
     subagente con contexto propio; varios en un mismo mensaje corren en paralelo
+Automatizaciones (como las tareas programadas de Claude; crear, cambiar, borrar o lanzar piden permiso):
+- schedule_task {"action": "list"} · {"action": "runs", "id": "…"}
+- schedule_task {"action": "create", "name": "…", "prompt": "instrucción autónoma", "cron": "0 9 * * 1-5" | "run_once_at": "2026-12-01T09:00" | "manual": true,
+    "permission": "read|edit", "same_conversation": false, "folder": "(opcional)"}   cron de 5 campos en hora local (CRON_TZ=Zona/IANA delante para otra zona)
+- schedule_task {"action": "update|delete|run", "id": "…", …}     update admite los campos de create y "enabled"; run admite "text" (instrucciones extra)
+- send_later {"message": "…", "delay_minutes": 30}  (o "at": fecha ISO)    este mensaje vuelve a ESTA conversación más tarde
+- schedule_wakeup {"delaySeconds": 60-3600, "reason": "…"}    solo dentro de un /loop sin intervalo: cuándo repetir (si terminó, no lo llames)
 Tras cada bloque recibirás "RESULTADO". Cuando termines, responde SIN bloques tool, con un resumen breve.`;
 
 // Esquemas para function calling nativo (OpenAI "tools"). Mismas herramientas que TOOL_DOCS.
@@ -54,6 +64,16 @@ export const TOOL_SCHEMAS = [
   ['edit_file', 'Reemplaza un fragmento exacto y único de un archivo', S({ path: str('ruta relativa'), old: str('texto exacto actual'), new: str('texto nuevo') }, ['path', 'old', 'new'])],
   ['run_command', 'Ejecuta un comando de terminal en la carpeta de trabajo', S({ command: str('comando'), timeout: { type: 'integer', description: 'segundos' } }, ['command'])],
   ['todo_write', 'Actualiza la lista de tareas visible para el usuario', S({ todos: { type: 'array', items: S({ content: str('paso'), status: { type: 'string', enum: ['pending', 'in_progress', 'done'] } }, ['content', 'status']) } }, ['todos'])],
+  ['schedule_task', 'Tareas programadas (como las de Claude): listar, ver ejecuciones, crear, cambiar, borrar o lanzar. Crear/cambiar/borrar/lanzar pide permiso', S({
+    action: { type: 'string', enum: ['list', 'runs', 'create', 'update', 'delete', 'run'] }, id: str('id o nombre de la tarea (runs, update, delete, run)'),
+    name: str('nombre corto'), prompt: str('instrucción completa y autónoma que hará el agente en cada ejecución'),
+    cron: str('expresión cron de 5 campos en hora local, p. ej. "0 9 * * 1-5"; CRON_TZ=Zona/IANA delante para otra zona'),
+    run_once_at: str('fecha y hora ISO para una sola ejecución'), manual: { type: 'boolean', description: 'sin calendario: solo se ejecuta a mano' },
+    permission: { type: 'string', enum: ['read', 'edit'] }, same_conversation: { type: 'boolean', description: 'continuar siempre en la misma conversación' },
+    folder: str('carpeta de trabajo (por defecto la actual)'), enabled: { type: 'boolean' }, text: str('instrucciones extra (run)'),
+  }, ['action'])],
+  ['send_later', 'Programa un mensaje que volverá a ESTA conversación más tarde (una vez)', S({ message: str('el mensaje que recibirás'), delay_minutes: { type: 'integer', description: 'minutos desde ahora (mín. 1)' }, at: str('o una fecha y hora ISO') }, ['message'])],
+  ['schedule_wakeup', 'Solo en un /loop sin intervalo: programa la siguiente iteración (60–3600 s). Si la tarea terminó, no lo llames', S({ delaySeconds: { type: 'integer' }, reason: str('qué esperas que cambie'), prompt: str('opcional: otro mensaje para la próxima iteración'), stop: { type: 'boolean', description: 'terminar el bucle' } }, ['delaySeconds'])],
   ['spawn_subagent', 'Lanza un subagente con contexto propio; varios a la vez corren en paralelo', S({ task: str('instrucción completa y autónoma'), agent: str('opcional: nombre de un subagente del proyecto'), write: { type: 'boolean' } }, ['task'])],
 ].map(([name, description, parameters]) => ({ type: 'function', function: { name, description, parameters } }));
 
@@ -193,7 +213,7 @@ function toCall(raw) {
   }
 }
 
-const KNOWN_TOOLS = new Set([...READ_TOOLS, 'write_file', 'edit_file', 'run_command', 'spawn_subagent',
+const KNOWN_TOOLS = new Set([...READ_TOOLS, 'write_file', 'edit_file', 'run_command', 'spawn_subagent', 'schedule_task', 'send_later', 'schedule_wakeup',
   'start_process', 'process_output', 'stop_process', 'move_file', 'delete_file', ...COMPUTER_TOOL_NAMES]);
 
 /** Objetos JSON sueltos {"name": herramienta, "arguments": {...}} de herramientas CONOCIDAS (sin etiquetas). */
@@ -244,6 +264,18 @@ export async function runAgent(ctx, messages, { sub = false } = {}) {
   const limit = sub ? SUB_MAX_STEPS : (ctx.computer ? COMPUTER_MAX_STEPS : MAX_STEPS);
   const readOnly = ctx.mode === 'plan' || ctx.agent === 'plan';
 
+  // Campos de entrada de los hooks de herramientas (nombres y argumentos de Claude Code + los de JeanCode)
+  const hookFields = (call) => ({
+    tool_name: claudeToolName(call.tool), tool_input: toolInput(call.tool, call.args, ctx.workspace),
+    ...(call.id ? { tool_use_id: call.id } : {}), jeancode_tool: call.tool, jeancode_args: call.args,
+    ...(sub ? { agent_id: ctx.agentId, agent_type: ctx.agentType } : {}),
+  });
+  // systemMessage, errores de hooks y su salida de texto: al usuario, nunca al modelo
+  const reportHook = (event, res) => {
+    if (res.messages.length || res.outputs.length) ctx.onEvent({ type: 'hook', event, messages: res.messages, outputs: res.outputs, sub });
+  };
+  let halted = ''; // continue:false de un hook: el agente para en cuanto acaben las herramientas de este paso
+
   // Herramientas de apps conectadas (MCP): permiso por uso; en PLAN y en subagentes de lectura, solo las que solo leen
   const execMcp = async (tool, args, ask = ctx.confirm) => {
     const def = (ctx.mcp || []).find((t) => t.name === tool);
@@ -272,9 +304,22 @@ export async function runAgent(ctx, messages, { sub = false } = {}) {
 ${r}` : '';
   };
 
-  const exec = async ({ tool, args }, hookAllow = false) => {
-    // un hook pre_tool puede aprobar la llamada; lo destructivo y la papelera preguntan igualmente
-    const ask = (o) => (hookAllow && !/DESTRUCTIV|PAPELERA/.test(o.title) ? Promise.resolve(true) : ctx.confirm(o));
+  const exec = async ({ tool, args }, hook = {}) => {
+    // Antes de cada diálogo de permiso: un hook PreToolUse que ya aprobó, o PermissionRequest (como en Claude Code).
+    // Lo destructivo y la papelera preguntan igualmente: ningún hook puede saltarse esa confirmación.
+    const ask = async (o) => {
+      const risky = /DESTRUCTIV|PAPELERA/.test(o.title);
+      if (hook.allow && !risky) return true;
+      if (ctx.hooks?.has('PermissionRequest')) {
+        const pr = await ctx.hooks.run('PermissionRequest', hookFields({ tool, args }));
+        reportHook('PermissionRequest', pr);
+        if (pr.decision === 'deny') { hook.denyReason = pr.reason || pr.decisionReason || 'denegado'; return false; }
+        if (pr.updatedInput) Object.assign(args, fromToolInput(tool, pr.updatedInput, ctx.workspace, args));
+        if (pr.decision === 'allow' && !risky) return true;
+      }
+      ctx.notify?.('permission_prompt', `JeanCode necesita tu permiso: ${o.title.toLowerCase()}`);
+      return ctx.confirm(o);
+    };
     if (tool === '__invalid') return 'ERROR: el bloque tool no es JSON válido: ' + args.raw;
     if (isMcpTool(tool)) return execMcp(tool, args, ask);
     if (COMPUTER_TOOL_NAMES.includes(tool)) {
@@ -357,17 +402,41 @@ ${r}` : '';
           ctx.onEvent({ type: 'todos', todos, sub });
           return `lista actualizada (${todos.filter((t) => t.status === 'done').length}/${todos.length} hechas)`;
         }
+        case 'schedule_task': {
+          if (sub) return 'DENEGADO: un subagente no puede programar tareas.';
+          if (!ctx.scheduler) return 'ERROR: las tareas programadas solo están en la app de escritorio.';
+          const action = String(args.action || 'list');
+          if (action === 'list') return clip(ctx.scheduler.list());
+          if (action === 'runs') return clip(ctx.scheduler.runs(args.id));
+          if (readOnly) return 'DENEGADO: modo PLAN / solo lectura: solo puedes listar tareas y ver sus ejecuciones.';
+          return clip(await ctx.scheduler.act(action, args, ask));
+        }
+        case 'send_later':
+          if (sub) return 'DENEGADO: un subagente no puede programar mensajes.';
+          return ctx.scheduler ? ctx.scheduler.sendLater(args) : 'ERROR: solo en la app de escritorio.';
+        case 'schedule_wakeup':
+          if (sub) return 'DENEGADO: un subagente no controla el /loop.';
+          return ctx.scheduler ? ctx.scheduler.wakeup(args) : 'ERROR: solo en la app de escritorio.';
         case 'spawn_subagent': {
           if (sub) return 'DENEGADO: un subagente no puede lanzar otros subagentes.';
           const def = args.agent ? (ctx.sys.agents || []).find((a) => a.name === args.agent) : null;
           if (args.agent && !def) return `ERROR: no existe el subagente "${args.agent}". Disponibles: ${(ctx.sys.agents || []).map((a) => a.name).join(', ') || 'ninguno'}`;
           ctx.onEvent({ type: 'subagent-start', task: args.task, agent: def?.name });
+          const agentId = `sub-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
+          const agentType = def?.name || 'general-purpose';
+          // SubagentStart: su additionalContext se le entrega al subagente junto con la tarea
+          let subContext = '';
+          if (ctx.hooks?.has('SubagentStart')) {
+            const ss = await ctx.hooks.run('SubagentStart', { agent_id: agentId, agent_type: agentType, prompt: String(args.task) });
+            reportHook('SubagentStart', ss);
+            subContext = ss.context;
+          }
           // traza del subagente: qué herramientas usó, cuántas fallaron y cuántos tokens gastó
           const stats = { tools: {}, errors: 0, prompt: 0, completion: 0, steps: 0, ms: Date.now() };
-          const subCtx = { ...ctx, subWrite: def ? def.write : !!args.write, onEvent: (e) => {
+          const subCtx = { ...ctx, agentId, agentType, subWrite: def ? def.write : !!args.write, onEvent: (e) => {
             if (e.type === 'tool-end') {
               stats.tools[e.call.tool] = (stats.tools[e.call.tool] || 0) + 1;
-              if (/^(ERROR|DENEGADO|RECHAZADO)/.test(String(e.result ?? ''))) stats.errors++;
+              if (/^(ERROR|DENEGADO|RECHAZADO|BLOQUEADO|DETENIDO)/.test(String(e.result ?? ''))) stats.errors++;
             }
             if (e.type === 'usage' && e.usage) { stats.prompt += e.usage.prompt || 0; stats.completion += e.usage.completion || 0; }
             if (e.type === 'assistant-start') stats.steps++;
@@ -376,7 +445,7 @@ ${r}` : '';
           const sys = agentSystem({ ...ctx.sys, sub: true, native: ctx.native !== false }) + (def ? `\n\nTU ROL (${def.name}):\n${def.prompt}` : '');
           const report = await runAgent(subCtx, [
             { role: 'system', content: sys },
-            { role: 'user', content: String(args.task) },
+            { role: 'user', content: String(args.task) + (subContext ? `\n\n[CONTEXTO DE UN HOOK SubagentStart]\n${subContext}` : '') },
           ], { sub: true });
           stats.ms = Date.now() - stats.ms;
           ctx.onEvent({ type: 'subagent-end', task: args.task, agent: def?.name, report, stats });
@@ -389,25 +458,41 @@ ${r}` : '';
     }
   };
 
-  // hooks pre_tool / post_tool alrededor de cada herramienta (como en Claude Code)
+  // Hooks alrededor de cada herramienta, como en Claude Code: PreToolUse → (PermissionRequest) → herramienta → PostToolUse / PostToolUseFailure
   const execHooked = async (call) => {
-    let allow = false;
-    if (ctx.hooks?.has('pre_tool')) {
-      const pre = await ctx.hooks.run('pre_tool', { tool: call.tool, args: call.args, subagent: sub });
-      if (pre.blocked) return `BLOQUEADO por un hook: ${pre.reason}`;
-      allow = pre.allow;
+    const hook = {};
+    if (ctx.hooks?.has('PreToolUse')) {
+      const pre = await ctx.hooks.run('PreToolUse', hookFields(call));
+      reportHook('PreToolUse', pre);
+      if (pre.stop) { halted = pre.stopReason; return `DETENIDO por un hook: ${pre.stopReason}`; }
+      if (pre.updatedInput) call.args = fromToolInput(call.tool, pre.updatedInput, ctx.workspace, call.args);
+      if (pre.decision === 'deny' || pre.blocked) return `BLOQUEADO por un hook: ${pre.reason || pre.decisionReason}`;
+      if (pre.decision === 'ask') {
+        const ok = await ctx.confirm({ title: 'UN HOOK PIDE CONFIRMACIÓN', command: `${claudeToolName(call.tool)} ${JSON.stringify(call.args).slice(0, 1200)}${pre.decisionReason ? `\n\nMotivo: ${pre.decisionReason}` : ''}` });
+        if (!ok) return 'RECHAZADO por el usuario.';
+        hook.allow = true;
+      }
+      if (pre.decision === 'allow') hook.allow = true;
     }
-    let r = await exec(call, allow);
-    if (ctx.hooks?.has('post_tool')) {
-      const text = r && typeof r === 'object' ? String(r.text ?? '') : String(r);
-      const post = await ctx.hooks.run('post_tool', { tool: call.tool, args: call.args, result: text.slice(0, 20000), subagent: sub });
-      const extra = [post.context, post.blocked ? `AVISO DE UN HOOK: ${post.reason}` : '', ...post.notes].filter(Boolean).join('\n');
+    let r = await exec(call, hook);
+    const textOf = (x) => (x && typeof x === 'object' ? String(x.text ?? '') : String(x));
+    if (hook.denyReason && /^RECHAZADO/.test(textOf(r))) r = `DENEGADO por un hook: ${hook.denyReason}`;
+    const text = textOf(r);
+    if (/^(DENEGADO|RECHAZADO|BLOQUEADO)/.test(text)) return r; // no llegó a ejecutarse: sin PostToolUse
+    const event = /^ERROR/.test(text) ? 'PostToolUseFailure' : 'PostToolUse';
+    if (ctx.hooks?.has(event)) {
+      const post = await ctx.hooks.run(event, { ...hookFields(call), ...(event === 'PostToolUse'
+        ? { tool_response: { output: text.slice(0, 20000), success: true } } : { error: text.slice(0, 20000) }) });
+      reportHook(event, post);
+      if (post.stop) halted = post.stopReason;
+      // al modelo solo le llega lo que Claude Code le pasaría: additionalContext y el motivo de un bloqueo
+      const extra = [post.context, post.blocked ? `HOOK ${event}: ${post.reason}` : ''].filter(Boolean).join('\n');
       if (extra) r = r && typeof r === 'object' ? { ...r, text: `${r.text}\n${extra}` } : `${r}\n${extra}`;
     }
     return r;
   };
 
-  let stopRetries = 0;
+  let stopBlocks = 0;
   const recent = []; // firmas de las últimas llamadas, para detectar bucles
   let loopWarnings = 0;
   const firstTask = messages.find((m) => m.role === 'user' && typeof m.content === 'string')?.content || '';
@@ -456,12 +541,16 @@ ${r}` : '';
       calls = parseToolCalls(text);
     }
     if (!calls.length) {
-      if (!sub && ctx.hooks?.has('stop') && stopRetries < 3) {
-        const st = await ctx.hooks.run('stop', { final: text.slice(0, 20000) });
-        if (st.blocked) {
-          stopRetries++;
-          messages.push({ role: 'user', content: `UN HOOK PIDE CONTINUAR ANTES DE TERMINAR: ${st.reason}` });
-          ctx.onEvent({ type: 'tool-end', call: { tool: 'hook stop', args: {} }, result: `ERROR: ${st.reason}`, sub });
+      // Stop / SubagentStop: un hook puede impedir que termine (código 2 o decision "block"); stop_hook_active avisa
+      // de que ya se le hizo seguir una vez, para que el propio hook evite bucles (como en Claude Code)
+      const stopEvent = sub ? 'SubagentStop' : 'Stop';
+      if (ctx.hooks?.has(stopEvent) && stopBlocks < STOP_HOOK_MAX) {
+        const st = await ctx.hooks.run(stopEvent, { stop_hook_active: stopBlocks > 0, last_assistant_message: text.slice(0, 20000), ...(sub ? { agent_id: ctx.agentId, agent_type: ctx.agentType } : {}) });
+        reportHook(stopEvent, st);
+        if (st.blocked && !st.stop) {
+          stopBlocks++;
+          messages.push({ role: 'user', content: `UN HOOK (${stopEvent}) PIDE CONTINUAR ANTES DE TERMINAR: ${st.reason}` });
+          ctx.onEvent({ type: 'tool-end', call: { tool: `hook ${stopEvent}`, args: {} }, result: `ERROR: ${st.reason}`, sub });
           continue;
         }
       }
@@ -498,6 +587,7 @@ ${r}` : '';
     } else {
       messages.push({ role: 'user', content: calls.map((c, i) => `RESULTADO ${c.tool}:\n${asText(results[i])}`).join('\n\n') });
     }
+    if (halted) return `${stripToolBlocks(text) ? `${stripToolBlocks(text)}\n\n` : ''}(Detenido por un hook: ${halted})`;
     if (loopy) {
       if (loopWarnings >= 2) return `(Detenido: el modelo repitió la misma acción sin avanzar — ${last.split(':')[0]}. Prueba con otro modelo o reformula la tarea.)`;
       loopWarnings++;

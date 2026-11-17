@@ -122,8 +122,8 @@ function killTree(child) {
   } catch { try { child.kill('SIGKILL'); } catch { /* ya terminó */ } }
 }
 
-const spawnShell = (command, cwd) => spawn(command, {
-  cwd, shell: true, windowsHide: true, env: process.env, detached: process.platform !== 'win32',
+const spawnShell = (command, cwd, env = process.env) => spawn(command, {
+  cwd, shell: true, windowsHide: true, env, detached: process.platform !== 'win32',
 });
 
 const runningCommands = new Set(); // comandos en primer plano, para poder cancelarlos
@@ -491,51 +491,41 @@ async function agents(root) {
   return out;
 }
 
-/** Hooks del proyecto (.jeancode/hooks.json). Se devuelven con su huella para que la interfaz
- *  pida confianza antes de ejecutarlos (un repo ajeno no debe poder correr comandos solo). */
 /*
- * Hooks (como los de Claude Code). .jeancode/hooks.json del proyecto (pide confianza) o hooks.json global
- * del usuario (Ajustes). Cada evento: lista de comandos ("cmd") o de { "matcher": "regex de herramienta", "command": "cmd" }.
- *   session_start  al empezar un turno del agente     stdout = contexto extra para el modelo
- *   user_prompt    antes de enviar tu mensaje         salida 2 = no se envía · stdout = contexto extra
- *   pre_tool       antes de cada herramienta          salida 2 = bloqueada (stderr = motivo para el modelo)
- *   post_tool      después de cada herramienta        stdout = se añade al resultado
- *   post_edit      tras escribir/editar un archivo    (compatibilidad: {path} en el comando)
- *   stop           cuando el agente va a terminar     salida 2 = sigue trabajando con stderr como instrucción
- *   post_turn      al final del turno
- * Entrada: JSON por stdin ({ event, tool, args, result, prompt, workspace }). Salida JSON opcional en stdout:
- * { "decision": "block" | "allow" | "ask", "reason": "...", "context": "..." }.
+ * Hooks del proyecto con el esquema de Claude Code (lib/hookconfig.js). Se leen, por orden:
+ *   .claude/settings.json · .claude/settings.local.json · .jeancode/settings.json · .jeancode/settings.local.json
+ *   · .jeancode/hooks.json (formato antiguo de JeanCode, se convierte).
+ * Se devuelven con su huella: la interfaz pide confianza antes de ejecutarlos (un repo ajeno no debe poder
+ * correr comandos solo) y otra vez si cambian.
  */
-const HOOK_EVENTS = ['session_start', 'user_prompt', 'pre_tool', 'post_tool', 'post_edit', 'stop', 'post_turn'];
-
-function cleanHooks(data) {
-  const clean = {};
-  for (const ev of HOOK_EVENTS) {
-    if (!Array.isArray(data?.[ev])) continue;
-    const list = data[ev].slice(0, 10).map((h) => (typeof h === 'string' ? { command: h }
-      : h && typeof h.command === 'string' ? { command: h.command, ...(typeof h.matcher === 'string' ? { matcher: h.matcher.slice(0, 200) } : {}), ...(Number.isFinite(h.timeout) ? { timeout: Math.min(Math.max(h.timeout, 1), 600) } : {}) } : null))
-      .filter(Boolean);
-    for (const h of list) { if (h.matcher) { try { new RegExp(h.matcher); } catch { throw new Error(`matcher inválido en ${ev}: ${h.matcher}`); } } }
-    if (list.length) clean[ev] = list;
-  }
-  return clean;
-}
+const hookconfig = require('./hookconfig');
+const HOOK_FILES = ['.claude/settings.json', '.claude/settings.local.json', '.jeancode/settings.json', '.jeancode/settings.local.json', '.jeancode/hooks.json'];
+const cleanHooks = (data) => hookconfig.normalize(data).hooks; // compatibilidad
 
 async function hooks(root) {
-  const file = await inside(root, '.jeancode/hooks.json').catch(() => null);
-  const text = file ? await fs.readFile(file, 'utf8').catch(() => null) : null;
-  if (!text) return null;
-  let clean;
-  try { clean = cleanHooks(JSON.parse(text)); } catch (e) { return { error: 'hooks.json no es válido: ' + e.message }; }
-  const hash = require('node:crypto').createHash('sha256').update(JSON.stringify(clean)).digest('hex');
-  return { hooks: clean, hash };
+  const sources = [];
+  let disableAll = false;
+  for (const rel of HOOK_FILES) {
+    const file = await inside(root, rel).catch(() => null);
+    const text = file ? await fs.readFile(file, 'utf8').catch(() => null) : null;
+    if (!text || !text.trim()) continue;
+    let norm;
+    try { norm = hookconfig.normalize(JSON.parse(text)); } catch (e) { return { error: `${rel} no es válido: ${e.message}` }; }
+    if (norm.disableAll) disableAll = true;
+    if (hookconfig.count(norm.hooks)) sources.push({ file: rel, hooks: norm.hooks });
+  }
+  if (!sources.length && !disableAll) return null;
+  const hash = require('node:crypto').createHash('sha256').update(JSON.stringify(sources)).digest('hex');
+  return { sources, disableAll, hash };
 }
 
 /** Ejecuta un hook: JSON por stdin, devuelve { code, stdout, stderr }. Sin límite de confianza aquí: lo decide la interfaz. */
 async function execHook(root, command, input, timeoutSec = 60) {
   const cwd = await inside(root, '.');
+  // las mismas variables que Claude Code: los scripts de hooks escritos para Claude funcionan tal cual
+  const env = { ...process.env, CLAUDE_PROJECT_DIR: cwd, JEANCODE_PROJECT_DIR: cwd, JEANCODE_HOOK_EVENT: String(input?.hook_event_name || '') };
   return new Promise((resolve) => {
-    const child = spawnShell(command, cwd);
+    const child = spawnShell(command, cwd, env);
     let stdout = '', stderr = '';
     child.stdout.on('data', (b) => { if (stdout.length < 64 * 1024) stdout += b.toString(); });
     child.stderr.on('data', (b) => { if (stderr.length < 64 * 1024) stderr += b.toString(); });

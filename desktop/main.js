@@ -210,18 +210,38 @@ const merge = (own, extra) => [...own, ...extra.filter((x) => !own.some((o) => o
 ipcMain.handle('project:commands', async (_e, root) => merge(await tools.commands(root), await plugins().commands().catch(() => [])));
 ipcMain.handle('project:agents', async (_e, root) => merge(await tools.agents(root), await plugins().agents().catch(() => [])));
 ipcMain.handle('project:hooks', (_e, root) => tools.hooks(root));
-// hooks globales del usuario (Ajustes): <userData>/hooks.json, no piden confianza porque los escribe él
-const GLOBAL_HOOKS = () => path.join(app.getPath('userData'), 'hooks.json');
+// Hooks globales del usuario (Ajustes): <userData>/settings.json, como ~/.claude/settings.json de Claude Code.
+// No piden confianza porque los escribe él. Se sigue leyendo <userData>/hooks.json (formato antiguo) si no hay settings.json.
+const hookconfig = require('./lib/hookconfig');
+const USER_SETTINGS = () => path.join(app.getPath('userData'), 'settings.json');
+const LEGACY_HOOKS = () => path.join(app.getPath('userData'), 'hooks.json');
 ipcMain.handle('hooks:global', async () => {
-  const text = await fs.readFile(GLOBAL_HOOKS(), 'utf8').catch(() => '');
-  if (!text.trim()) return { text: '', hooks: {} };
-  try { return { text, hooks: tools.cleanHooks(JSON.parse(text)) }; } catch (e) { return { text, hooks: {}, error: e.message }; }
+  let file = USER_SETTINGS();
+  let text = await fs.readFile(file, 'utf8').catch(() => '');
+  if (!text.trim()) { file = LEGACY_HOOKS(); text = await fs.readFile(file, 'utf8').catch(() => ''); }
+  if (!text.trim()) return { text: '', hooks: {}, file: USER_SETTINGS() };
+  try {
+    const n = hookconfig.normalize(JSON.parse(text));
+    return { text, hooks: n.disableAll ? {} : n.hooks, disableAll: n.disableAll, file };
+  } catch (e) { return { text, hooks: {}, error: e.message, file }; }
 });
 ipcMain.handle('hooks:saveGlobal', async (_e, text) => {
   const t = String(text || '').trim();
-  if (t) tools.cleanHooks(JSON.parse(t)); // lanza si no es válido: no se guarda
-  await fs.writeFile(GLOBAL_HOOKS(), t ? `${t}\n` : '', 'utf8');
+  if (t) hookconfig.normalize(JSON.parse(t)); // lanza si no es válido: no se guarda
+  await fs.writeFile(USER_SETTINGS(), t ? `${t}
+` : '', 'utf8');
+  await fs.rm(LEGACY_HOOKS(), { force: true }); // ya migrado al formato nuevo
   return true;
+});
+// transcript_path de los hooks: la conversación en JSONL (como Claude Code), en <userData>/transcripts/<id>.jsonl
+ipcMain.handle('hooks:transcript', async (_e, id, lines) => {
+  const safe = String(id).replace(/[^\w-]/g, '').slice(0, 80);
+  if (!safe) throw new Error('id inválido');
+  const dir = path.join(app.getPath('userData'), 'transcripts');
+  await fs.mkdir(dir, { recursive: true });
+  const file = path.join(dir, `${safe}.jsonl`);
+  await fs.writeFile(file, (Array.isArray(lines) ? lines : []).map((l) => JSON.stringify(l)).join('\n') + '\n', 'utf8');
+  return file;
 });
 ipcMain.handle('hooks:exec', (_e, root, command, input, timeout) => tools.execHook(root, command, input, timeout));
 ipcMain.handle('turn:begin', (_e, root, turn) => tools.beginTurn(root, turn));

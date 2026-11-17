@@ -446,10 +446,10 @@
       <textarea id="sys-chat" rows="3" spellcheck="false"></textarea>
     </label>
     <label class="check desktop-only" hidden><input type="checkbox" id="auto-diag" checked> Revisar cada archivo que edite el agente (errores de sintaxis al momento)</label>
-    <h3 class="desktop-only" hidden>Hooks globales</h3>
-    <p class="note desktop-only" hidden>Comandos que se ejecutan solos en momentos del agente, en todos tus proyectos (como en Claude Code). Eventos: <code>session_start</code>, <code>user_prompt</code>, <code>pre_tool</code>, <code>post_tool</code>, <code>post_edit</code>, <code>stop</code>, <code>post_turn</code>. Reciben JSON por la entrada estándar; salir con código 2 bloquea. <a href="https://github.com/jeancodeeer/JeanCode/blob/main/docs/automations.md" target="_blank" rel="noopener">Guía y ejemplos</a>.</p>
-    <label class="field desktop-only" hidden><span class="label">hooks.json</span>
-      <textarea id="global-hooks" rows="6" spellcheck="false" placeholder='{ "pre_tool": [{ "matcher": "run_command", "command": "node ~/hooks/revisa-comando.js" }] }'></textarea>
+    <h3 class="desktop-only" hidden>Hooks del usuario</h3>
+    <p class="note desktop-only" hidden>Comandos que se ejecutan solos en momentos del agente, en todos tus proyectos, con el mismo formato que el <code>settings.json</code> de Claude Code: eventos <code>PreToolUse</code>, <code>PermissionRequest</code>, <code>PostToolUse</code>, <code>PostToolUseFailure</code>, <code>UserPromptSubmit</code>, <code>Notification</code>, <code>Stop</code>, <code>SubagentStart</code>, <code>SubagentStop</code>, <code>PreCompact</code>, <code>SessionStart</code> y <code>SessionEnd</code>. Las herramientas se llaman como en Claude Code (<code>Bash</code>, <code>Read</code>, <code>Write</code>, <code>Edit</code>…), así que tus hooks de Claude funcionan tal cual. Escribe <code>/hooks</code> en el agente para ver los activos. <a href="https://github.com/jeancodeeer/JeanCode/blob/main/docs/automations.md" target="_blank" rel="noopener">Guía y ejemplos</a>.</p>
+    <label class="field desktop-only" hidden><span class="label">settings.json</span>
+      <textarea id="global-hooks" rows="8" spellcheck="false" placeholder='{ "hooks": { "PreToolUse": [ { "matcher": "Bash", "hooks": [ { "type": "command", "command": "node ~/hooks/revisa-comando.js" } ] } ] } }'></textarea>
     </label>
     <div class="row gap desktop-only" hidden><button class="btn" id="global-hooks-save" type="button">Guardar hooks</button><span class="msg" id="global-hooks-msg" role="status" aria-live="polite"></span></div>
     <h3>Comandos permitidos del agente</h3>
@@ -549,24 +549,39 @@
 
 <dialog class="panel wide" id="panel-automations">
   <div class="panel-head"><h2>Automatizaciones</h2><button class="icon-btn" data-close aria-label="Cerrar"><svg class="i"><use href="#i-close"/></svg></button></div>
-  <p class="note">Tareas que el agente hace solo, cada cierto tiempo o a una hora fija, mientras JeanCode está abierto (si se perdió una con la app cerrada, se hace al abrirla). Nadie puede aprobar nada durante una ejecución: lo que pediría permiso se deniega y se cuenta en el resultado. Solo corren los comandos que ya marcaste como «permitir siempre» en esa carpeta.</p>
+  <p class="note">Tareas que el agente hace solo, como las tareas programadas de Claude: con una expresión cron, una sola vez o a mano. Corren mientras JeanCode está abierto; si se perdió una con la app cerrada, se hace una vez al abrirla. Nadie puede aprobar nada durante una ejecución: lo que pediría permiso se deniega y queda en el historial. Solo corren los comandos que ya marcaste como «permitir siempre» en esa carpeta, y los hooks del usuario y los del proyecto en los que ya confiaste. También puedes pedírselo al agente: «cada lunes a las 9 revisa las dependencias».</p>
   <ul class="rows" id="auto-list"></ul>
-  <h3>Nueva tarea</h3>
+  <h3 id="auto-form-title">Nueva tarea</h3>
   <form id="auto-form" class="auto-form">
-    <input id="auto-name" type="text" placeholder="Nombre (p. ej. Revisar dependencias)" spellcheck="false">
-    <textarea id="auto-prompt" rows="3" placeholder="Qué debe hacer: «Ejecuta npm outdated y resume qué conviene actualizar»"></textarea>
+    <input id="auto-name" type="text" placeholder="Nombre (p. ej. Revisar dependencias)" spellcheck="false" aria-label="Nombre">
+    <textarea id="auto-prompt" rows="3" placeholder="Qué debe hacer: «Ejecuta npm outdated y resume qué conviene actualizar»" aria-label="Instrucciones"></textarea>
     <div class="row gap wrap">
-      <input id="auto-folder" type="text" placeholder="Carpeta de trabajo" spellcheck="false" class="grow">
+      <input id="auto-folder" type="text" placeholder="Carpeta de trabajo" spellcheck="false" class="grow" aria-label="Carpeta de trabajo">
       <button class="btn ghost" id="auto-pick" type="button">Elegir…</button>
     </div>
     <div class="row gap wrap">
       <select id="auto-when" aria-label="Frecuencia"></select>
-      <input id="auto-time" type="time" value="09:00" hidden aria-label="Hora">
+      <select id="auto-day" aria-label="Día de la semana" hidden></select>
+      <input id="auto-time" type="time" value="09:00" aria-label="Hora">
+      <input id="auto-at" type="datetime-local" aria-label="Fecha y hora" hidden>
+      <input id="auto-cron" type="text" class="grow mono" placeholder="30 8 * * 1-5" spellcheck="false" aria-label="Expresión cron" hidden>
+    </div>
+    <p class="fine mono" id="auto-cron-help" role="status" aria-live="polite" hidden></p>
+    <div class="row gap wrap">
+      <select id="auto-model" aria-label="Modelo"></select>
       <select id="auto-perm" aria-label="Permisos">
-        <option value="read">Solo lectura (investigar, revisar, informar)</option>
+        <option value="read">Solo lectura</option>
         <option value="edit">Puede editar archivos</option>
       </select>
-      <button class="btn primary" type="submit">Programar</button>
+      <select id="auto-target" aria-label="Conversación">
+        <option value="new">Conversación nueva cada vez</option>
+        <option value="same">Siempre la misma conversación</option>
+      </select>
+      <label class="check"><input type="checkbox" id="auto-notify" checked> Notificar al terminar</label>
+    </div>
+    <div class="row gap wrap end">
+      <button class="btn ghost" id="auto-cancel" type="button" hidden>Cancelar edición</button>
+      <button class="btn primary" id="auto-submit" type="submit">Programar</button>
     </div>
   </form>
 </dialog>

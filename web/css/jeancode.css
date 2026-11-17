@@ -542,6 +542,16 @@ kbd { font: 600 11px/1 var(--mono); border: 1px solid var(--line-3); padding: 2p
 /* Automatizaciones */
 .auto-form { display: grid; gap: var(--s2); }
 .auto-form textarea, .auto-form input[type=text] { width: 100%; }
+/* filas que se reparten el ancho y bajan de línea en pantallas estrechas */
+.auto-form .row { display: flex; flex-wrap: wrap; align-items: center; }
+.auto-form .row > select, .auto-form .row > input { width: auto; flex: 1 1 200px; min-width: 0; }
+.auto-form .row > input.grow { flex: 3 1 320px; }
+.auto-form .row > input[type=time] { flex: 0 1 140px; }
+.auto-form .row > .check { flex: 0 0 auto; }
+.auto-runs { flex-basis: 100%; }
+.auto-runs > summary { cursor: pointer; font: 600 11px/1.6 var(--mono); letter-spacing: .06em; color: var(--ash); text-transform: uppercase; }
+.auto-runs > form { margin: var(--s2) 0; }
+.auto-runs .rows li { min-height: 36px; padding-left: var(--s3); }
 
 /* ---------------------------------------------------------------- calidad y conversación */
 .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }

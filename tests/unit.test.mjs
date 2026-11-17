@@ -568,66 +568,201 @@ test('agente + apps (MCP): permiso por uso, solo lectura en PLAN, permitir siemp
   assert.ok(names.includes('mcp__github__create_issue'));
 });
 
-test('automatizaciones: calendario, tareas pendientes y /loop', async () => {
-  const AU = await import('../web/js/automations.js');
-  const lunes9 = new Date(2026, 10, 9, 9, 0).getTime(); // lunes 9 nov 2026, 09:00
-  assert.equal(AU.nextRun({ kind: 'every', minutes: 30 }, lunes9), lunes9 + 30 * 60000);
-  assert.equal(AU.nextRun({ kind: 'every', minutes: 1 }, lunes9), lunes9 + 5 * 60000, 'mínimo 5 minutos');
-  assert.equal(new Date(AU.nextRun({ kind: 'daily', time: '08:30' }, lunes9)).getDate(), 10, 'las 08:30 ya pasaron: mañana');
-  assert.equal(new Date(AU.nextRun({ kind: 'daily', time: '18:00' }, lunes9)).getHours(), 18);
-  const viernes20 = new Date(2026, 10, 13, 20, 0).getTime();
-  assert.equal(new Date(AU.nextRun({ kind: 'weekdays', time: '09:00' }, viernes20)).getDay(), 1, 'después del viernes, el lunes');
-  assert.equal(new Date(AU.nextRun({ kind: 'weekly', time: '09:00' }, lunes9 + 60000)).getDate(), 16, 'el lunes siguiente');
-  assert.deepEqual(AU.dueTasks([{ id: 'a', next: 1 }, { id: 'b', next: Date.now() + 1e6 }, { id: 'c', next: 1, enabled: false }]).map((t) => t.id), ['a']);
-  assert.equal(AU.parseInterval('10m'), 600000);
-  assert.equal(AU.parseInterval('5s'), 60000, 'mínimo 1 minuto');
-  assert.equal(AU.parseInterval('mañana'), null);
-  assert.throws(() => AU.parseSchedule('daily', ''), /hora/);
+test('cron: campos, nombres, pasos, @macros, zonas horarias, día del mes O de la semana y cambio de hora', async () => {
+  const C = await import('../web/js/cron.js');
+  const iso = (ms) => new Date(ms).toISOString();
+  const base = Date.UTC(2026, 10, 16, 21, 7); // lunes 16-nov-2026 21:07Z
+  assert.equal(iso(C.nextCron('CRON_TZ=UTC */15 * * * *', base)), '2026-11-16T21:15:00.000Z');
+  assert.equal(iso(C.nextCron('CRON_TZ=UTC 30 8 * * MON-FRI', base)), '2026-11-17T08:30:00.000Z');
+  assert.equal(iso(C.nextCron('CRON_TZ=UTC @daily', base)), '2026-11-17T00:00:00.000Z');
+  assert.equal(iso(C.nextCron('CRON_TZ=UTC 0 0 29 2 *', base)), '2028-02-29T00:00:00.000Z', 'el próximo 29 de febrero');
+  assert.equal(iso(C.nextCron('CRON_TZ=UTC 0 12 13 * 5', base)), '2026-11-20T12:00:00.000Z', 'día 13 O viernes (Vixie)');
+  assert.equal(iso(C.nextCron('CRON_TZ=UTC 0 9 * * 7', base)), '2026-11-22T09:00:00.000Z', '7 = domingo');
+  assert.equal(iso(C.nextCron('CRON_TZ=Europe/Madrid 30 3 * * *', Date.UTC(2026, 2, 28, 12))), '2026-03-29T01:30:00.000Z', 'tras el cambio a horario de verano');
+  assert.equal(C.nextCron('CRON_TZ=UTC 0 0 31 2 *', base), null, 'fecha imposible: null');
+  assert.match(C.cronError('61 * * * *'), /fuera de rango en minuto/);
+  assert.match(C.cronError('* * *'), /5 campos/);
+  assert.match(C.cronError('CRON_TZ=Marte/Base * * * * *'), /zona horaria/);
+  assert.equal(C.cronError('0 9 * * 1-5'), '');
+  assert.equal(C.describeCron('30 8 * * 1-5'), 'De lunes a viernes a las 08:30');
+  assert.equal(C.describeCron('*/10 * * * *'), 'Cada 10 minutos');
+  assert.equal(C.presetCron('hourly', { minute: 17 }), '17 * * * *', 'cada hora anclada al minuto de creación');
+  assert.equal(C.presetCron('weekly', { time: '10:05', day: 0 }), '5 10 * * 0');
+  const t0 = Date.now(); for (let i = 0; i < 50; i++) C.nextCron('CRON_TZ=UTC 0 0 29 2 *', base);
+  assert.ok(Date.now() - t0 < 2000, 'rápido aunque la fecha esté lejos');
 });
 
-test('hooks: bloquear con salida 2, aprobar con JSON, contexto, matcher y post_tool', async () => {
-  const { createHooks } = await import('../web/js/hooks.js');
-  const ran = [];
-  const fake = async (command, input) => {
-    ran.push([command, input.event, input.tool]);
-    if (command === 'bloquea') return { code: 2, stdout: '', stderr: 'no se puede tocar .env' };
-    if (command === 'aprueba') return { code: 0, stdout: '{"decision":"allow"}', stderr: '' };
-    if (command === 'contexto') return { code: 0, stdout: 'rama: main', stderr: '' };
-    if (command === 'falla') return { code: 1, stdout: '', stderr: 'roto' };
-    return { code: 0, stdout: '', stderr: '' };
+test('tareas: validar, migrar, una sola vez, historial y pendientes', async () => {
+  const A = await import('../web/js/automations.js');
+  const now = Date.UTC(2026, 10, 16, 21, 7);
+  assert.throws(() => A.validateTask({ prompt: '', folder: 'C:\\p' }, now), /qué debe hacer/);
+  assert.throws(() => A.validateTask({ prompt: 'x', folder: '' }, now), /carpeta/);
+  assert.throws(() => A.validateTask({ prompt: 'x', folder: 'p', schedule: { type: 'cron', cron: '99 * * * *' } }, now), /cron:/);
+  assert.throws(() => A.validateTask({ prompt: 'x', folder: 'p', schedule: { type: 'once', at: now - 1 } }, now), /ya pasó/);
+  const cron = A.validateTask({ name: 'Deps', prompt: 'npm outdated', folder: 'p', schedule: { type: 'cron', cron: 'CRON_TZ=UTC 0 9 * * 1-5' } }, now);
+  assert.equal(new Date(cron.next).toISOString(), '2026-11-17T09:00:00.000Z');
+  assert.deepEqual([cron.perm, cron.target, cron.notify, cron.enabled], ['read', 'new', true, true], 'valores por defecto');
+  const manual = A.validateTask({ prompt: 'x', folder: 'p' }, now);
+  assert.equal(manual.next, null, 'manual: sin próxima');
+  const once = A.validateTask({ prompt: 'x', folder: 'p', schedule: { type: 'once', at: now + 60000 } }, now);
+  assert.deepEqual(A.dueTasks([once, cron, manual], now + 61000).map((t) => t.id), [once.id]);
+  const done = A.recordRun(once, { status: 'ok', start: now + 61000, trigger: 'schedule' }, now + 62000);
+  assert.equal(done.enabled, false, 'una sola vez: queda en pausa al ejecutarse');
+  assert.equal(done.next, null);
+  const manualRun = A.recordRun(once, { status: 'ok', start: now, trigger: 'manual' }, now);
+  assert.equal(manualRun.enabled, true, 'ejecutarla a mano no consume la ejecución programada');
+  let t = cron;
+  for (let i = 0; i < A.MAX_RUNS + 5; i++) t = A.recordRun(t, { status: 'ok', start: now + i, trigger: 'schedule' }, now + 86400000 * 3);
+  assert.equal(t.runs.length, A.MAX_RUNS, 'historial acotado');
+  assert.ok(t.next > now + 86400000 * 3, 'la próxima se calcula desde ahora: no se repite lo perdido');
+  // tareas de la versión anterior
+  const old = A.migrateTask({ id: 'a', name: 'x', prompt: 'p', folder: 'f', schedule: { kind: 'weekdays', time: '08:30' }, perm: 'edit', enabled: true, lastRun: 5, lastOk: false, lastThread: 'th' });
+  assert.deepEqual(old.schedule, { type: 'cron', cron: '30 8 * * 1-5' });
+  assert.equal(old.runs[0].status, 'error'); assert.equal(old.runs[0].thread, 'th');
+  assert.equal(old.lastRun, undefined);
+  assert.equal(A.migrateTask({ schedule: { kind: 'every', minutes: 15 } }).schedule.cron, '*/15 * * * *');
+  assert.equal(A.migrateTask(old), old, 'ya migrada: igual');
+  assert.match(A.taskSummary(cron), /Deps · De lunes a viernes a las 09:00.*\(CRON_TZ=UTC 0 9 \* \* 1-5\).*solo lectura/);
+  assert.equal(A.parseInterval('10m'), 600000);
+  assert.equal(A.parseInterval('5s'), 60000, 'mínimo 1 minuto');
+  assert.equal(A.parseInterval('revisa'), null);
+});
+
+test('agente: schedule_task pide permiso para crear y en PLAN solo lista; send_later y schedule_wakeup', async () => {
+  const calls = [];
+  const scheduler = {
+    list: () => 'LISTA', runs: (id) => `RUNS ${id}`,
+    act: async (action, a, ask) => { const ok = await ask({ title: 'PROGRAMAR TAREA', command: a.name }); calls.push([action, ok]); return ok ? 'creada' : 'RECHAZADO por el usuario.'; },
+    sendLater: (a) => `luego: ${a.message}`, wakeup: (a) => `en ${a.delaySeconds}`,
+  };
+  const r1 = await runScripted([{ tool: 'schedule_task', args: { action: 'create', name: 'Deps', prompt: 'x', cron: '0 9 * * 1' } }, { tool: 'send_later', args: { message: 'revisa CI', delay_minutes: 30 } }, { tool: 'schedule_wakeup', args: { delaySeconds: 300 } }], { ctx: { scheduler } });
+  assert.deepEqual(r1.log.confirms, ['PROGRAMAR TAREA'], 'crear pide permiso');
+  assert.deepEqual(calls, [['create', true]]);
+  assert.ok(r1.msgs.some((m) => m.role === 'tool' && m.content === 'luego: revisa CI'));
+  assert.ok(r1.msgs.some((m) => m.role === 'tool' && m.content === 'en 300'));
+  const r2 = await runScripted([{ tool: 'schedule_task', args: { action: 'list' } }, { tool: 'schedule_task', args: { action: 'delete', id: 'a' } }], { ctx: { scheduler, mode: 'plan' } });
+  assert.ok(r2.msgs.some((m) => m.role === 'tool' && m.content === 'LISTA'));
+  assert.ok(r2.msgs.some((m) => m.role === 'tool' && /DENEGADO: modo PLAN/.test(m.content)), 'en PLAN no se borra');
+  const r3 = await runScripted([{ tool: 'schedule_task', args: { action: 'list' } }], {});
+  assert.ok(r3.msgs.some((m) => m.role === 'tool' && /solo están en la app de escritorio/.test(m.content)));
+});
+
+test('hooks: configuración con el esquema de Claude Code y conversión del formato antiguo', () => {
+  const HC = require('../desktop/lib/hookconfig.js');
+  const claude = HC.normalize({ permissions: { allow: [] }, hooks: {
+    PreToolUse: [{ matcher: 'Bash', hooks: [{ type: 'command', command: 'a', timeout: 9999 }] }],
+    Stop: [{ hooks: [{ type: 'prompt', prompt: '¿terminó? $ARGUMENTS' }] }],
+  } });
+  assert.deepEqual(claude.hooks.PreToolUse, [{ matcher: 'Bash', hooks: [{ type: 'command', command: 'a', timeout: 600 }] }], 'timeout acotado a 600 s');
+  assert.equal(claude.hooks.Stop[0].hooks[0].type, 'prompt');
+  const legacy = HC.normalize({ pre_tool: [{ matcher: 'run_command', command: 'x' }], post_edit: ['fmt {path}'], session_start: ['ctx'] });
+  assert.equal(legacy.hooks.PreToolUse[0].matcher, 'run_command');
+  assert.equal(legacy.hooks.PostToolUse[0].matcher, 'Write|Edit', 'post_edit = PostToolUse sobre Write|Edit');
+  assert.equal(legacy.hooks.SessionStart[0].hooks[0].command, 'ctx');
+  assert.equal(HC.normalize({ disableAllHooks: true }).disableAll, true);
+  assert.throws(() => HC.normalize({ hooks: { PreToolUze: [] } }), /desconocido/);
+  assert.throws(() => HC.normalize({ hooks: { PreToolUse: [{ matcher: '(', hooks: [] }] } }), /matcher inválido/);
+  assert.throws(() => HC.normalize({ hooks: { Stop: [{ hooks: [{ type: 'http' }] }] } }), /tipo de hook desconocido/);
+});
+
+test('hooks: entrada y salida como Claude Code (nombres, campos, código 2, deny > ask > allow, updatedInput, continue)', async () => {
+  const { createHooks, toolInput, fromToolInput, claudeToolName } = await import('../web/js/hooks.js');
+  assert.equal(claudeToolName('run_command'), 'Bash');
+  assert.deepEqual(toolInput('edit_file', { path: 'src/a.js', old: 'x', new: 'y' }, 'C:\\proj'), { file_path: 'C:\\proj\\src\\a.js', old_string: 'x', new_string: 'y' });
+  assert.deepEqual(fromToolInput('edit_file', { file_path: 'C:\\proj\\src\\b.js' }, 'C:\\proj', { path: 'src/a.js', old: 'x', new: 'y' }), { path: 'src\\b.js', old: 'x', new: 'y' });
+  const seen = [];
+  const out = {
+    bloquea: { code: 2, stderr: 'no se toca .env' },
+    permite: { code: 0, stdout: JSON.stringify({ hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'allow' } }) },
+    pregunta: { code: 0, stdout: JSON.stringify({ hookSpecificOutput: { permissionDecision: 'ask', permissionDecisionReason: 'revisa' } }) },
+    reescribe: { code: 0, stdout: JSON.stringify({ hookSpecificOutput: { permissionDecision: 'allow', updatedInput: { command: 'npm test -- --ci' } } }) },
+    contexto: { code: 0, stdout: 'rama: main' },
+    adicional: { code: 0, stdout: JSON.stringify({ hookSpecificOutput: { additionalContext: 'lint ok' }, systemMessage: 'formateado' }) },
+    para: { code: 0, stdout: JSON.stringify({ continue: false, stopReason: 'cuota agotada' }) },
+    falla: { code: 1, stderr: 'roto' },
+    texto: { code: 0, stdout: 'hecho' },
   };
   const H = createHooks([
-    { label: 'globales', hooks: { pre_tool: [{ matcher: 'write_file|edit_file', command: 'bloquea' }, { matcher: 'run_command', command: 'aprueba' }], session_start: [{ command: 'contexto' }] } },
-    { label: 'proyecto', hooks: { post_tool: [{ command: 'falla' }], post_edit: [{ command: 'fmt {path}' }] } },
-  ], fake);
-  const b = await H.run('pre_tool', { tool: 'write_file', args: {} });
-  assert.equal(b.blocked, true);
-  assert.equal(b.reason, 'no se puede tocar .env');
-  assert.equal((await H.run('pre_tool', { tool: 'run_command' })).allow, true);
-  assert.equal((await H.run('pre_tool', { tool: 'read_file' })).blocked, false, 'el matcher no coincide');
-  assert.equal((await H.run('pre_tool', { tool: 'xwrite_file' })).blocked, false, 'el matcher es exacto');
-  assert.equal((await H.run('session_start', {})).context, 'rama: main');
-  assert.match((await H.run('post_tool', { tool: 'x' })).notes[0], /salida 1/);
-  assert.match((await H.run('post_edit', { path: 'a; rm -rf /' })).notes[0], /omitido/);
-  await H.run('post_edit', { path: 'src/a.js' });
-  assert.deepEqual(ran.at(-1), ['fmt src/a.js', 'post_edit', undefined]);
-  assert.equal(H.has('stop'), false);
+    { label: 'usuario', hooks: { PreToolUse: [{ matcher: 'Write|Edit', hooks: [{ type: 'command', command: 'bloquea' }] }, { matcher: 'Bash', hooks: [{ type: 'command', command: 'permite' }, { type: 'command', command: 'pregunta' }] }],
+      SessionStart: [{ matcher: 'startup', hooks: [{ type: 'command', command: 'contexto' }] }] } },
+    { label: '.claude/settings.json', hooks: { PostToolUse: [{ matcher: '', hooks: [{ type: 'command', command: 'adicional' }, { type: 'command', command: 'texto' }, { type: 'command', command: 'falla' }] }],
+      PreToolUse: [{ matcher: 'mcp__github__.*', hooks: [{ type: 'command', command: 'reescribe' }] }, { matcher: 'Bash', hooks: [{ type: 'command', command: 'permite' }] }],
+      UserPromptSubmit: [{ hooks: [{ type: 'command', command: 'para' }] }] } },
+  ], { exec: async (cmd, input) => { seen.push([cmd, input.hook_event_name, input.tool_name, input.cwd]); return out[cmd]; }, base: () => ({ cwd: 'C:\\proj', session_id: 's1', permission_mode: 'default' }) });
+
+  const w = await H.run('PreToolUse', { tool_name: 'Write', jeancode_tool: 'write_file' });
+  assert.equal(w.blocked, true); assert.equal(w.decision, 'deny'); assert.equal(w.reason, 'no se toca .env');
+  assert.deepEqual(seen.at(-1), ['bloquea', 'PreToolUse', 'Write', 'C:\\proj'], 'entrada con hook_event_name, tool_name y cwd');
+  const b = await H.run('PreToolUse', { tool_name: 'Bash', jeancode_tool: 'run_command' });
+  assert.equal(b.decision, 'ask', 'ask gana a allow'); assert.equal(b.decisionReason, 'revisa');
+  assert.equal(seen.filter((x) => x[0] === 'permite').length, 1, 'el mismo comando en dos fuentes corre una vez');
+  assert.equal((await H.run('PreToolUse', { tool_name: 'Read', jeancode_tool: 'read_file' })).ran, 0, 'matcher exacto: Read no casa con Write|Edit');
+  assert.equal((await H.run('PreToolUse', { tool_name: 'x', jeancode_tool: 'edit_file' })).ran, 0);
+  const m = await H.run('PreToolUse', { tool_name: 'mcp__github__create_issue' });
+  assert.deepEqual(m.updatedInput, { command: 'npm test -- --ci' });
+  assert.equal((await H.run('SessionStart', { source: 'startup' })).context, 'rama: main', 'texto de SessionStart = contexto');
+  assert.equal((await H.run('SessionStart', { source: 'resume' })).ran, 0, 'matcher de SessionStart sobre source');
+  const post = await H.run('PostToolUse', { tool_name: 'Bash' });
+  assert.equal(post.context, 'lint ok'); assert.deepEqual(post.messages.slice(0, 1), ['formateado']);
+  assert.deepEqual(post.outputs, ['hecho'], 'el texto de PostToolUse va al registro, no al modelo');
+  assert.match(post.messages[1], /falló con código 1: roto/);
+  const up = await H.run('UserPromptSubmit', { prompt: 'hola' });
+  assert.equal(up.stop, true); assert.equal(up.stopReason, 'cuota agotada');
+  assert.equal(H.has('SessionEnd'), false);
+  assert.equal(H.list().length, 10, 'list() para /hooks: todos los configurados');
 });
 
-test('agente + hooks: pre_tool bloquea la herramienta, stop obliga a seguir', async () => {
-  const blocked = [];
+test('hooks: PermissionRequest y hooks de tipo prompt', async () => {
+  const { createHooks } = await import('../web/js/hooks.js');
+  const H = createHooks([{ label: 'u', hooks: {
+    PermissionRequest: [{ matcher: 'WebFetch', hooks: [{ type: 'command', command: 'pr' }] }],
+    Stop: [{ hooks: [{ type: 'prompt', prompt: '¿Están las pruebas en verde? $ARGUMENTS' }] }],
+    Notification: [{ hooks: [{ type: 'prompt', prompt: 'x' }] }],
+  } }], {
+    exec: async () => ({ code: 0, stdout: JSON.stringify({ hookSpecificOutput: { decision: { behavior: 'deny', message: 'sin internet' } } }) }),
+    llm: async (prompt) => (prompt.includes('"last_assistant_message": "listo"') ? '```json\n{"ok": false, "reason": "no ejecutaste npm test"}\n```' : '{"ok": true}'),
+  });
+  const pr = await H.run('PermissionRequest', { tool_name: 'WebFetch' });
+  assert.equal(pr.decision, 'deny'); assert.equal(pr.reason, 'sin internet');
+  const st = await H.run('Stop', { stop_hook_active: false, last_assistant_message: 'listo' });
+  assert.equal(st.blocked, true); assert.equal(st.reason, 'no ejecutaste npm test');
+  assert.equal((await H.run('Stop', { last_assistant_message: 'pruebas: 12 ok' })).blocked, false);
+  assert.match((await H.run('Notification', {})).messages[0], /no admite hooks de tipo prompt/);
+});
+
+test('agente + hooks: PreToolUse bloquea, Stop obliga a seguir con stop_hook_active y SubagentStart da contexto', async () => {
+  const calls = [];
+  const R = (o = {}) => ({ blocked: false, reason: '', decision: null, decisionReason: '', updatedInput: null, context: '', stop: false, stopReason: '', messages: [], outputs: [], ran: 1, ...o });
   const hooks = {
-    has: (e) => e === 'pre_tool' || e === 'stop',
+    has: (e) => ['PreToolUse', 'Stop'].includes(e),
     run: async (e, p) => {
-      if (e === 'pre_tool') { blocked.push(p.tool); return { blocked: p.tool === 'run_command', reason: 'comandos prohibidos por la política', allow: false, context: '', notes: [] }; }
-      return { blocked: hooks.stops++ === 0, reason: 'falta ejecutar las pruebas', allow: false, context: '', notes: [] };
+      calls.push([e, p.tool_name, p.stop_hook_active, p.tool_input]);
+      if (e === 'PreToolUse') return R(p.tool_name === 'Bash' ? { blocked: true, decision: 'deny', reason: 'comandos prohibidos por la política' } : {});
+      return R({ blocked: hooks.stops++ === 0, reason: 'falta ejecutar las pruebas' });
     },
     stops: 0,
   };
   const { log, msgs } = await runScripted([{ tool: 'run_command', args: { command: 'npm test' } }], { ctx: { hooks } });
   assert.deepEqual(log.ran, [], 'el comando no se ejecutó');
+  assert.deepEqual(calls[0], ['PreToolUse', 'Bash', undefined, { command: 'npm test' }], 'nombre y campos de Claude Code');
   assert.ok(msgs.some((m) => m.role === 'tool' && /BLOQUEADO por un hook: comandos prohibidos/.test(m.content)));
-  assert.ok(msgs.some((m) => m.role === 'user' && /UN HOOK PIDE CONTINUAR.*pruebas/.test(m.content)), 'stop hizo seguir una vez');
+  assert.ok(msgs.some((m) => m.role === 'user' && /PIDE CONTINUAR.*pruebas/.test(m.content)), 'Stop hizo seguir una vez');
+  assert.deepEqual(calls.filter((c) => c[0] === 'Stop').map((c) => c[2]), [false, true], 'stop_hook_active la segunda vez');
+});
+
+test('hooks del proyecto: .claude/settings.json, .jeancode/settings.local.json y hooks.json antiguo, con huella', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'jc-hooks-'));
+  mkdirSync(join(root, '.claude')); mkdirSync(join(root, '.jeancode'));
+  writeFileSync(join(root, '.claude', 'settings.json'), JSON.stringify({ hooks: { PreToolUse: [{ matcher: 'Bash', hooks: [{ type: 'command', command: 'a' }] }] } }));
+  writeFileSync(join(root, '.jeancode', 'settings.local.json'), JSON.stringify({ hooks: { Stop: [{ hooks: [{ type: 'command', command: 'b' }] }] } }));
+  writeFileSync(join(root, '.jeancode', 'hooks.json'), JSON.stringify({ post_edit: ['fmt {path}'] }));
+  const h = await tools.hooks(root);
+  assert.deepEqual(h.sources.map((s) => s.file), ['.claude/settings.json', '.jeancode/settings.local.json', '.jeancode/hooks.json']);
+  assert.match(h.hash, /^[0-9a-f]{64}$/);
+  writeFileSync(join(root, '.jeancode', 'settings.local.json'), '{ roto');
+  assert.match((await tools.hooks(root)).error, /settings\.local\.json no es válido/);
+  const r = await tools.execHook(root, process.platform === 'win32' ? 'echo %CLAUDE_PROJECT_DIR%' : 'echo $CLAUDE_PROJECT_DIR', { hook_event_name: 'Stop' }, 10);
+  assert.equal(r.stdout.trim().toLowerCase(), require('node:fs').realpathSync(root).toLowerCase(), 'CLAUDE_PROJECT_DIR como en Claude Code');
 });
 
 test('control: buscar controles por nombre (sin tildes, por etiqueta vecina) y sugerencias', async () => {

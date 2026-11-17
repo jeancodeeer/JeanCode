@@ -3,7 +3,8 @@
 export const BUILTIN = [
   { name: 'new', desc: 'Nueva conversación', modes: ['chat', 'code', 'agent'] },
   { name: 'clear', desc: 'Vacía la conversación actual', modes: ['chat', 'code', 'agent'] },
-  { name: 'compact', desc: 'Resume la conversación para liberar contexto', modes: ['chat', 'code', 'agent'] },
+  { name: 'compact', desc: 'Resume la conversación para liberar contexto: /compact [instrucciones]', modes: ['chat', 'code', 'agent'], arg: true },
+  { name: 'hooks', desc: 'Hooks activos aquí y de dónde vienen', modes: ['agent'] },
   { name: 'model', desc: 'Cambia de modelo: /model jean-marvel', modes: ['chat', 'code', 'agent'], arg: true },
   { name: 'export', desc: 'Exporta la conversación: /export md · json · pdf', modes: ['chat', 'code', 'agent'] },
   { name: 'help', desc: 'Comandos y atajos de teclado', modes: ['chat', 'code', 'agent'] },

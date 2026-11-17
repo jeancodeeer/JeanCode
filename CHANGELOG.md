@@ -4,6 +4,13 @@ JeanCode 1.0 reúne en una sola versión todo lo que se publicó por partes entr
 
 ## Sin publicar (preparativo 2.0.0)
 
+**Automatizaciones idénticas a las de Claude (escritorio)**
+- **Hooks con el formato de Claude Code**: `settings.json` del usuario y `.claude/settings*.json` / `.jeancode/settings*.json` del proyecto. Doce eventos (`PreToolUse`, `PermissionRequest`, `PostToolUse`, `PostToolUseFailure`, `UserPromptSubmit`, `Notification`, `Stop`, `SubagentStart`, `SubagentStop`, `PreCompact`, `SessionStart`, `SessionEnd`), matchers, la misma entrada (`tool_name`, `tool_input` con los campos de Claude, `transcript_path`, `permission_mode`…) y salida (`permissionDecision`, `updatedInput`, `additionalContext`, `continue`, `systemMessage`, código 2), hooks de tipo `prompt`, ejecución en paralelo y `CLAUDE_PROJECT_DIR`. Los hooks de Claude Code funcionan tal cual. `/hooks` muestra los activos. El formato antiguo (`pre_tool`, `post_edit`…) se sigue leyendo.
+- **Tareas programadas** con expresión cron (zona horaria con `CRON_TZ=`), una sola vez o manuales; modelo, permisos, conversación nueva o la misma de siempre y notificación por tarea; historial de las últimas 20 ejecuciones; editar; ejecutar ahora con instrucciones extra. Corren con los hooks. Las tareas de la versión anterior se convierten solas.
+- **El agente programa**: `schedule_task` (crear, cambiar, borrar o lanzar tareas, siempre con tu permiso), `send_later` (un mensaje que vuelve a la conversación más tarde) y `/loop <mensaje>` sin intervalo, en el que el agente decide cuándo repetir (`schedule_wakeup`).
+- `/compact` acepta instrucciones para el resumen.
+
+
 **Plugins con formato de Claude Code (escritorio)**
 - Nuevo panel **Plugins**: instala plugins de Claude Code (`.claude-plugin/plugin.json`) desde el catálogo, una URL git o una carpeta. Cada plugin aporta skills, subagentes y comandos; se puede desactivar o quitar.
 - En el catálogo: **ECC · Everything Claude Code** (327 skills, 72 subagentes, 98 comandos) y **EGM · Elephant-Goldfish Model** de Google (diseño con contexto y revisión con subagentes «sin memoria»).

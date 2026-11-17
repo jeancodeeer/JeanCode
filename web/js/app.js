@@ -20,8 +20,8 @@ import { SLOTS, controlUrlFrom, hfSearch, hfFiles, control, gb } from './hf.js';
 import { initApps } from './apps.js';
 import { qualityPrompt, detectSensitive, rowsToCsv, rowsToMarkdown, markdownToText, extractLinks, searchThreads, threadToJson } from './quality.js';
 import { loadThreads, saveThreadsSoon, saveThreadsNow, wipeThreads } from './history.js';
-import { createHooks } from './hooks.js';
-import { initAutomations, parseInterval } from './automations.js';
+import { createHooks, permissionMode, HOOK_EVENTS } from './hooks.js';
+import { initAutomations, parseInterval, validateTask, taskSummary, runSummary, describeTaskSchedule, fmtWhen } from './automations.js';
 import { SKILL_CATALOG, SKILL_CATEGORIES } from './skills-catalog.js';
 import { PLUGIN_CATALOG, pluginUrl } from './plugins-catalog.js';
 
@@ -70,10 +70,12 @@ function toast(msg) {
 const saveThreads = () => saveThreadsSoon(state.threads.slice(0, 200), state.current);
 const thread = () => state.threads.find((t) => t.id === state.current) || null;
 
+let openedThread = null; // la conversación que estaba en pantalla (para SessionEnd al cambiar)
 function newThread(mode = state.mode) {
   const t = { id: crypto.randomUUID(), mode, title: 'NUEVA CONVERSACIÓN', messages: [], files: {}, changed: {}, updated: Date.now(), ...(mode === 'agent' && state.workspace ? { workspace: state.workspace } : {}) };
   state.threads.unshift(t);
   state.current = t.id;
+  openedThread = t.id;
   saveThreads();
   return t;
 }
@@ -609,8 +611,10 @@ function streamEl() {
 const reentryOffered = new Set(); // solo una vez por sesión
 const PAGE = 60; // mensajes que se pintan al abrir; los anteriores, bajo demanda (páginas largas y RAM)
 function openThread(id, { keepTop = false } = {}) {
+  if (openedThread && openedThread !== id) endSession(openedThread, 'other');
   const t = state.threads.find((x) => x.id === id && x.mode === state.mode) || null;
   state.current = t?.id || null;
+  openedThread = state.current;
   $('#crumb-title').textContent = t?.title || 'NUEVA CONVERSACIÓN';
   const el = streamEl();
   const prevHeight = el.scrollHeight, prevTop = el.scrollTop;
@@ -854,7 +858,7 @@ function addToolLine(call, result, nested) {
     row._timer = setInterval(() => { if (!row.isConnected) { clearInterval(row._timer); return; } $('.tl-time', row).textContent = secs(performance.now() - row._t0); }, 100);
   } else {
     clearInterval(row._timer);
-    const bad = /^(ERROR|DENEGADO|RECHAZADO)/.test(String(result));
+    const bad = /^(ERROR|DENEGADO|RECHAZADO|BLOQUEADO|DETENIDO)/.test(String(result));
     st.className = `tl-state ${bad ? 'tl-bad' : 'tl-ok'}`;
     st.textContent = bad ? '✕' : '✓';
     $('.tl-time', row).textContent = secs(performance.now() - row._t0);
@@ -1175,7 +1179,7 @@ async function send(text) {
       title: 'CONTEXTO AL 85 %',
       command: 'Se resumirá la conversación y verás el resumen antes de seguir. Las reglas fijadas y la memoria del proyecto (AGENTS.md) no se pierden: se envían siempre.',
     });
-    if (ok) await compact(t);
+    if (ok) await compact(t, { trigger: 'auto' });
     if (ok && auto) addMessage('system', 'El contexto llegó al 85 %: la conversación se resumió sola (arriba lo que el modelo recuerda). Puedes desactivarlo en Ajustes → Comportamiento.');
   }
   if (!t.messages.length) {
@@ -1212,13 +1216,37 @@ async function send(text) {
 }
 
 /* ------------------------------------------------------------- comandos */
+/** /hooks: qué hooks están activos aquí, de dónde vienen y qué archivos se leen (como /hooks de Claude Code). */
+async function showHooks() {
+  if (!desktop?.hooks) { addMessage('system', 'Los hooks solo están en la app de escritorio.'); return; }
+  const project = state.workspace ? await loadHooks(state.workspace, { interactive: false }) : { sources: [] };
+  const engine = await hookEngine(project);
+  const global = await desktop.hooks.global().catch(() => ({}));
+  const rows = engine.list();
+  const lines = [`HOOKS ${engine.disabled ? '(DESACTIVADOS: disableAllHooks)' : `ACTIVOS · ${rows.length}`}`];
+  for (const ev of HOOK_EVENTS) {
+    const xs = rows.filter((r) => r.event === ev);
+    if (xs.length) lines.push(`\n${ev}`, ...xs.map((r) => `  [${r.matcher}] ${r.type === 'prompt' ? `prompt: ${r.prompt.slice(0, 80)}` : r.command}  · ${r.label}`));
+  }
+  lines.push('', `Usuario: ${global?.file || 'settings.json'} (Ajustes → Comportamiento)`,
+    'Proyecto: .claude/settings.json · .claude/settings.local.json · .jeancode/settings.json · .jeancode/settings.local.json · .jeancode/hooks.json');
+  if (project.untrusted) lines.push('Este proyecto tiene hooks en los que aún no confiaste: se te preguntará al enviar el próximo mensaje.');
+  if (project.error) lines.push(`Error: ${project.error}`);
+  addMessage('system', lines.join('\n'));
+}
+
 async function runCommand({ name, args }) {
   const t = thread();
   switch (name) {
     case 'new': state.current = null; openThread(null); return null;
     case 'clear':
-      if (t) { t.messages = []; t.agentMessages = null; t.todos = []; saveThreads(); openThread(t.id); }
+      if (t) {
+        await endSession(t.id, 'clear');
+        t.messages = []; t.agentMessages = null; t.todos = []; t.sessionContext = ''; t.sessionSource = 'clear';
+        saveThreads(); openThread(t.id);
+      }
       return null;
+    case 'hooks': await showHooks(); return null;
     case 'help': openPanel('help'); return null;
     case 'model':
       if (!args) { toast('MODELOS: ' + state.models.map((x) => x.id).join(', ')); return null; }
@@ -1226,15 +1254,25 @@ async function runCommand({ name, args }) {
       return null;
     case 'export': exportThread(t, ['json', 'pdf', 'md'].includes(args.toLowerCase()) ? args.toLowerCase() : 'md'); return null;
     case 'zip': $('#dl-zip').click(); return null;
-    case 'compact': await compact(t); return null;
+    case 'compact': await compact(t, { trigger: 'manual', instructions: args }); return null;
     case 'context': await showContext(t); return null;
     case 'doctor': await runDoctor(); return null;
     case 'loop': {
-      // /loop 10m <mensaje>: lo envía ahora y luego cada intervalo, mientras la app siga abierta
+      // /loop 10m <mensaje>: lo envía ahora y luego cada intervalo, mientras la app siga abierta.
+      // /loop <mensaje> (sin intervalo): el agente marca el ritmo con schedule_wakeup (60 s – 1 h), como en Claude Code.
       if (/^(stop|para|parar)$/i.test(args)) { stopLoop('BUCLE DETENIDO'); return null; }
-      const [, every, msg] = args.match(/^(\S+)\s+([\s\S]+)$/) || [];
+      const [, every, rest] = args.match(/^(\S+)\s+([\s\S]+)$/) || [];
+      if (!parseInterval(every) && args.trim()) {
+        if (state.mode !== 'agent') { toast('EL /loop SIN INTERVALO ES DEL MODO AGENTE'); return null; }
+        stopLoop();
+        const cur = thread() || newThread();
+        state.loop = { dynamic: true, msg: args.trim(), thread: cur.id, until: Date.now() + 7 * 86400000, pending: null, timer: null };
+        addMessage('system', `Bucle dinámico: «${args.trim().slice(0, 120)}». El agente decide cuándo repetir (schedule_wakeup, entre 1 min y 1 h) o lo da por terminado. /loop stop para pararlo.`);
+        return args.trim();
+      }
+      const msg = rest;
       const ms = parseInterval(every);
-      if (!ms || !msg) { toast('USO: /loop 10m <mensaje>  ·  /loop stop'); return null; }
+      if (!ms || !msg) { toast('USO: /loop 10m <mensaje>  ·  /loop <mensaje>  ·  /loop stop'); return null; }
       stopLoop();
       state.loop = { msg, ms, until: Date.now() + 7 * 86400000, timer: setInterval(() => {
         if (Date.now() > state.loop?.until) { stopLoop('BUCLE TERMINADO (7 DÍAS)'); return; }
@@ -1363,7 +1401,7 @@ async function runDoctor() {
 }
 
 function stopLoop(msg) {
-  if (state.loop?.timer) clearInterval(state.loop.timer);
+  if (state.loop?.timer) { clearInterval(state.loop.timer); clearTimeout(state.loop.timer); }
   if (state.loop && msg) toast(msg);
   state.loop = null;
 }
@@ -1372,36 +1410,176 @@ function stopLoop(msg) {
  * Ejecuta una tarea programada sin nadie delante: hilo propio, modelo del modo Agente, sin permisos
  * interactivos (lo que pediría permiso se deniega y se informa). Solo comandos "permitir siempre" de esa carpeta.
  */
-async function runAutomation(task) {
-  const decision = decide(routeFor('agent'), { models: state.visible || [], mode: 'agent', endpoints: getEndpoints(), need: { tools: true, tokens: 4000 } });
-  const m = decision.model;
+let automations = null; // API del planificador (initAutomations)
+
+/** Modelo de una tarea: el fijado en ella (si sigue disponible) o el enrutado automático del agente. */
+function automationModel(task) {
+  const pinned = task.model ? (state.routable || state.models || []).find((x) => modelKey(x) === task.model) : null;
+  const decision = decide(pinned ? { routing: 'model', target: task.model } : routeFor('agent'), { models: state.visible || [], mode: 'agent', endpoints: getEndpoints(), need: { tools: true, tokens: 4000 } });
+  return { m: pinned || decision.model, decision };
+}
+
+/** Espera a que la interfaz no esté ocupada (como máximo `ms`). */
+async function waitIdle(ms = 30 * 60000) {
+  const until = Date.now() + ms;
+  while (state.abort && Date.now() < until) await new Promise((r) => setTimeout(r, 2000));
+  return !state.abort;
+}
+
+/**
+ * Ejecuta una tarea programada SIN SUPERVISIÓN (como una sesión programada de Claude): conversación nueva o la misma de
+ * siempre, el modelo de la tarea, sus permisos y los hooks (del usuario y del proyecto en el que ya confiaste).
+ * Devuelve { status: ok|denied|error|cancelled, summary, thread }.
+ */
+async function runAutomation(task, { extra = '', trigger = 'schedule' } = {}) {
+  const prompt = extra ? `${task.prompt}\n\nINSTRUCCIONES EXTRA PARA ESTA EJECUCIÓN: ${extra}` : task.prompt;
+  // send_later en la conversación que tienes abierta: se entrega como un mensaje normal, cuando el agente quede libre
+  if (task.kind === 'send_later' && state.current === task.threadId && state.mode === 'agent' && thread()) {
+    if (await waitIdle()) { await send(prompt); return { status: 'ok', summary: 'entregado en la conversación abierta', thread: task.threadId }; }
+  }
+  const { m, decision } = automationModel(task);
   if (!m) throw new Error('no hay un modelo disponible para el agente');
   await desktop.fs.list(task.folder, '.'); // la carpeta existe y se puede leer
-  const t = { id: crypto.randomUUID(), mode: 'agent', title: `⏱ ${task.name.toUpperCase()}`.slice(0, 60), messages: [{ role: 'user', content: task.prompt, turn: Date.now() }], files: {}, changed: {}, updated: Date.now(), automation: task.id };
-  state.threads.unshift(t); saveThreads(); renderThreads();
-  const [skills, os, memory, mcpAll] = await Promise.all([desktop.skills.list(), desktop.system.os(), desktop.project.memory(task.folder).catch(() => ''), desktop.mcp ? desktop.mcp.tools().catch(() => []) : []]);
+  const reuse = task.target === 'same' ? state.threads.find((x) => x.id === (task.threadId || task.lastThread)) : null;
+  const t = reuse || { id: crypto.randomUUID(), mode: 'agent', title: `⏱ ${task.name.toUpperCase()}`.slice(0, 60), messages: [], files: {}, changed: {}, updated: Date.now(), automation: task.id };
+  if (!reuse) state.threads.unshift(t);
+  const history = t.messages.filter((x) => (x.role === 'user' || x.role === 'assistant') && typeof x.content === 'string').map(({ role, content }) => ({ role, content }));
+  t.messages.push({ role: 'user', content: prompt, turn: Date.now(), automation: trigger });
+  saveThreads(); renderThreads();
+  const [skills, os, memory, mcpAll, agents] = await Promise.all([desktop.skills.list(), desktop.system.os(), desktop.project.memory(task.folder).catch(() => ''),
+    desktop.mcp ? desktop.mcp.tools().catch(() => []) : [], desktop.project.agents(task.folder).catch(() => [])]);
   const allowList = store.get(`allow:${task.folder}`, []);
   const denied = [];
   const tools = [];
   // solo las herramientas de apps que el usuario permitió siempre (nadie puede aprobar las demás)
   const mcp = mcpAll.filter((x) => allowList.includes(`mcp:${x.name}`));
-  const sys = { workspace: task.folder, os, skills, mode: task.perm === 'edit' ? 'auto-edit' : 'plan', agent: task.perm === 'edit' ? 'build' : 'plan', memory, agents: [], style: 'concise', rules: store.get('rules', ''), mcp, quality: qualityBlock() };
-  const messages = [{ role: 'system', content: agentSystem(sys) + '\n\nEJECUCIÓN PROGRAMADA SIN SUPERVISIÓN: nadie puede aprobar acciones ahora. Si algo necesita permiso, no insistas: explica al final qué quedó pendiente.' }, { role: 'user', content: task.prompt }];
+  const perm = task.perm === 'edit' ? 'auto-edit' : 'plan';
+  const agentMode = task.perm === 'edit' ? 'build' : 'plan';
+  const sys = { workspace: task.folder, os, skills, mode: perm, agent: agentMode, memory, agents, style: 'concise', rules: store.get('rules', ''), mcp, quality: qualityBlock() };
+  // hooks: los del usuario siempre; los del proyecto solo si ya confiaste en ellos (aquí nadie puede confiar)
+  const project = await loadHooks(task.folder, { interactive: false });
+  const engine = await hookEngine(project, { folder: task.folder, sessionId: t.id, transcriptPath: await writeTranscript(t), perm, agent: agentMode, model: m });
+  const notes = [];
+  if (project.untrusted) notes.push('Los hooks de este proyecto no se ejecutaron: aún no confiaste en ellos (abre la carpeta en el agente para revisarlos).');
+  const collect = (ev, res) => { for (const x of [...(res?.messages || []), ...(res?.outputs || [])]) notes.push(`[hook ${ev}] ${x}`); };
+  let sessionContext = '';
+  if (engine.has('SessionStart')) { const ss = await engine.run('SessionStart', { source: reuse ? 'resume' : 'startup' }); collect('SessionStart', ss); sessionContext = ss.context; }
+  let userText = prompt;
+  if (engine.has('UserPromptSubmit')) {
+    const up = await engine.run('UserPromptSubmit', { prompt });
+    collect('UserPromptSubmit', up);
+    if (up.blocked || up.stop) {
+      t.messages.push({ role: 'assistant', content: `Un hook no dejó ejecutar la tarea: ${up.reason || up.stopReason}` });
+      saveThreads(); renderThreads();
+      return { status: 'error', summary: `bloqueada por un hook: ${up.reason || up.stopReason}`, thread: t.id };
+    }
+    if (up.context) userText += `\n\n[CONTEXTO DE UN HOOK]\n${up.context}`;
+  }
+  if (sessionContext) sys.rules = `${sys.rules || ''}\n\nCONTEXTO DE INICIO (hooks SessionStart):\n${sessionContext}`;
+  const messages = [{ role: 'system', content: agentSystem(sys) + '\n\nEJECUCIÓN PROGRAMADA SIN SUPERVISIÓN: nadie puede aprobar acciones ahora. Si algo necesita permiso, no insistas: explica al final qué quedó pendiente.' },
+    ...history, { role: 'user', content: userText }];
   const ac = new AbortController();
   const ctx = {
-    ep: m.ep, model: m.id, desktop, workspace: task.folder, mode: sys.mode, agent: sys.agent, sys, think: false, signal: ac.signal, mcp,
+    ep: m.ep, model: m.id, desktop, workspace: task.folder, mode: perm, agent: agentMode, sys, think: false, signal: ac.signal, mcp, hooks: engine,
     chat: (o) => routedChat({ id: o.model, ep: o.ep }, o, { models: state.routable || state.models, mode: 'agent', endpoints: getEndpoints(), decision, need: { tools: true } }).then((r) => r.text),
     confirm: async (o) => { denied.push(`${o.title}: ${String(o.command || o.path || '').split('\n')[0].slice(0, 120)}`); return false; },
     isAllowed: (cmd) => !UNSAFE_CMD.test(cmd.trim()) && allowList.includes(cmd.trim()), allowCommand: () => {},
-    onEvent: (ev) => { if (ev.type === 'tool-end' && !ev.nested) tools.push(`${ev.call.tool}${/^(ERROR|DENEGADO|RECHAZADO)/.test(String(ev.result)) ? ' ✕' : ' ✓'}`); },
+    scheduler: schedulerFor(t, task.folder),
+    onEvent: (ev) => {
+      if (ev.type === 'tool-end' && !ev.nested) tools.push(`${ev.call.tool}${/^(ERROR|DENEGADO|RECHAZADO|BLOQUEADO)/.test(String(ev.result)) ? ' ✕' : ' ✓'}`);
+      if (ev.type === 'hook') collect(ev.event, ev);
+    },
   };
   const timer = setTimeout(() => ac.abort(), 30 * 60000); // como mucho 30 minutos por ejecución
   let final;
   try { final = await runAgent(ctx, messages); } finally { clearTimeout(timer); }
-  const extra = [tools.length ? `Herramientas: ${tools.join(', ')}` : '', denied.length ? `Quedó pendiente de tu permiso:\n- ${denied.join('\n- ')}` : ''].filter(Boolean).join('\n\n');
-  t.messages.push({ role: 'assistant', content: `${stripToolBlocks(final) || final}${extra ? `\n\n---\n${extra}` : ''}` });
+  if (engine.has('SessionEnd')) collect('SessionEnd', await engine.run('SessionEnd', { reason: 'other' }).catch(() => null));
+  const tail = [tools.length ? `Herramientas: ${tools.join(', ')}` : '', denied.length ? `Quedó pendiente de tu permiso:\n- ${denied.join('\n- ')}` : '', notes.join('\n')].filter(Boolean).join('\n\n');
+  const answer = stripToolBlocks(final) || final;
+  t.messages.push({ role: 'assistant', content: `${answer}${tail ? `\n\n---\n${tail}` : ''}`, model: ctx.model, at: Date.now() });
   t.updated = Date.now(); saveThreads(); renderThreads();
-  return { ok: true, summary: (stripToolBlocks(final) || final).replace(/\s+/g, ' ').slice(0, 200), thread: t.id };
+  if (state.current === t.id) openThread(t.id, { keepTop: true });
+  return { status: denied.length ? 'denied' : 'ok', summary: answer.replace(/\s+/g, ' ').slice(0, 200), thread: t.id };
+}
+
+/** Lo que el agente puede hacer con las tareas programadas (schedule_task, send_later, schedule_wakeup). */
+function schedulerFor(t, folder) {
+  if (!automations) return null;
+  const pick = (a) => {
+    if (a.cron) return { type: 'cron', cron: String(a.cron) };
+    if (a.run_once_at) return { type: 'once', at: Date.parse(String(a.run_once_at)) };
+    if (a.delay_minutes) return { type: 'once', at: Date.now() + Math.max(1, Number(a.delay_minutes)) * 60000 };
+    return a.manual ? { type: 'manual' } : undefined;
+  };
+  const describe = (x) => `«${x.name}» · ${describeTaskSchedule(x.schedule)}${x.schedule.type === 'cron' ? ` (${x.schedule.cron})` : ''} · ${x.perm === 'edit' ? 'puede editar' : 'solo lectura'} · ${x.target === 'same' ? 'misma conversación' : 'conversación nueva'}\nCarpeta: ${x.folder}\n\n${x.prompt}`;
+  return {
+    list: () => automations.list().map(taskSummary).join('\n') || 'No hay tareas programadas.',
+    runs(id) {
+      const x = automations.get(String(id || ''));
+      if (!x) return `ERROR: no existe la tarea ${id}. Usa schedule_task {"action": "list"}.`;
+      return x.runs.length ? x.runs.slice().reverse().map(runSummary).join('\n') : 'Aún no se ha ejecutado.';
+    },
+    async act(action, a, ask) {
+      if (action === 'create') {
+        const draft = validateTask({ name: a.name, prompt: a.prompt, folder: a.folder || folder, schedule: pick(a) || { type: 'manual' },
+          perm: a.permission === 'edit' ? 'edit' : 'read', target: a.same_conversation ? 'same' : 'new', notify: a.notify !== false });
+        if (!(await ask({ title: 'PROGRAMAR TAREA', command: describe(draft) }))) return 'RECHAZADO por el usuario.';
+        const x = automations.create(draft, { by: 'agent' });
+        return `Tarea creada. ${taskSummary(x)}`;
+      }
+      const cur = automations.get(String(a.id || ''));
+      if (!cur) return `ERROR: no existe la tarea ${a.id}. Usa schedule_task {"action": "list"}.`;
+      if (action === 'update') {
+        const patch = Object.fromEntries(Object.entries({ name: a.name, prompt: a.prompt, folder: a.folder, schedule: pick(a), enabled: a.enabled,
+          perm: a.permission ? (a.permission === 'edit' ? 'edit' : 'read') : undefined, target: a.same_conversation == null ? undefined : (a.same_conversation ? 'same' : 'new'), notify: a.notify }).filter(([, v]) => v !== undefined));
+        const preview = validateTask({ ...cur, ...patch });
+        if (!(await ask({ title: 'CAMBIAR TAREA', command: `Antes:\n${describe(cur)}\n\nDespués:\n${describe(preview)}${patch.enabled === false ? '\n(en pausa)' : ''}` }))) return 'RECHAZADO por el usuario.';
+        return `Tarea actualizada. ${taskSummary(automations.update(cur.id, patch))}`;
+      }
+      if (action === 'delete') {
+        if (!(await ask({ title: 'BORRAR TAREA', command: describe(cur) }))) return 'RECHAZADO por el usuario.';
+        automations.remove(cur.id);
+        return `Tarea «${cur.name}» borrada.`;
+      }
+      if (action === 'run') {
+        if (!(await ask({ title: 'EJECUTAR TAREA AHORA', command: `${describe(cur)}${a.text ? `\n\nInstrucciones extra: ${a.text}` : ''}` }))) return 'RECHAZADO por el usuario.';
+        automations.runNow(cur.id, String(a.text || ''), 'agent'); // en segundo plano: el resultado queda en su historial
+        return `Tarea «${cur.name}» lanzada. Su resultado quedará en el historial (schedule_task {"action": "runs", "id": "${cur.id}"}).`;
+      }
+      return `ERROR: acción desconocida "${action}". Usa list, runs, create, update, delete o run.`;
+    },
+    /** send_later: un mensaje para ESTA conversación más tarde (una tarea de una sola vez, visible en Automatizaciones). */
+    sendLater(a) {
+      const at = a.at ? Date.parse(String(a.at)) : Date.now() + Math.max(1, Number(a.delay_minutes) || 0) * 60000;
+      if (!Number.isFinite(at) || (!a.at && !a.delay_minutes)) return 'ERROR: indica "delay_minutes" (mínimo 1) o "at" (fecha ISO).';
+      const msg = String(a.message || '').trim();
+      if (!msg) return 'ERROR: falta "message".';
+      const x = automations.create({ name: a.name || `↩ ${msg.slice(0, 40)}`, prompt: msg, folder, schedule: { type: 'once', at }, perm: state.perm === 'plan' ? 'read' : 'edit',
+        target: 'same', threadId: t.id, kind: 'send_later', notify: true }, { by: 'agent' });
+      return `Programado: este mensaje volverá a esta conversación ${fmtWhen(x.schedule.at)}. Se puede cancelar en Automatizaciones.`;
+    },
+    /** schedule_wakeup: siguiente iteración de un /loop sin intervalo (el modelo marca el ritmo). */
+    wakeup(a) {
+      if (a.stop) { stopLoop('BUCLE TERMINADO POR EL AGENTE'); return 'Bucle terminado.'; }
+      if (!state.loop?.dynamic || state.loop.thread !== t.id) return 'ERROR: schedule_wakeup solo sirve dentro de un /loop sin intervalo en esta conversación.';
+      const sec = Math.min(Math.max(Number(a.delaySeconds) || 0, 60), 3600);
+      state.loop.pending = { ms: sec * 1000, reason: String(a.reason || '').slice(0, 200), prompt: a.prompt ? String(a.prompt) : '' };
+      return `Siguiente iteración en ${sec} s.`;
+    },
+  };
+}
+
+/** Al terminar un turno en un /loop sin intervalo: programa la siguiente iteración o da el bucle por terminado. */
+function loopAfterTurn(t) {
+  const L = state.loop;
+  if (!L?.dynamic || L.thread !== t.id) return;
+  if (Date.now() > L.until) { stopLoop('BUCLE TERMINADO (7 DÍAS)'); return; }
+  const next = L.pending;
+  L.pending = null;
+  if (!next) { stopLoop('BUCLE TERMINADO: el agente no programó otra iteración'); addMessage('system', '/loop terminado: el agente no pidió otra iteración (schedule_wakeup).'); return; }
+  if (next.prompt) L.msg = next.prompt;
+  addMessage('system', `/loop · siguiente iteración ${fmtWhen(Date.now() + next.ms)}${next.reason ? ` · ${next.reason}` : ''}`);
+  L.timer = setTimeout(() => { if (state.loop === L) { if (state.abort) { L.pending = { ms: 60000, reason: 'la conversación estaba ocupada' }; loopAfterTurn(t); } else send(L.msg); } }, next.ms);
 }
 
 /** Resumen de reentrada: no sustituye la conversación, solo recuerda dónde quedó. */
@@ -1419,9 +1597,18 @@ async function reentrySummary(t, row) {
   } catch (err) { if (err.name !== 'AbortError') $('.bubble', row).textContent = 'No se pudo resumir: ' + err.message; } finally { state.abort = null; busy(false); }
 }
 
-async function compact(t) {
+async function compact(t, { trigger = 'manual', instructions = '' } = {}) {
   const m = currentModel();
   if (!t || !t.messages.length || !m) { toast('NADA QUE RESUMIR'); return; }
+  // PreCompact (como en Claude Code): trigger manual | auto, custom_instructions = lo escrito tras /compact
+  if (desktop && state.mode === 'agent' && state.workspace) {
+    const engine = hookSessions.get(t.id) || await hookEngine(await loadHooks(state.workspace, { interactive: false }), { sessionId: t.id });
+    if (engine.has('PreCompact')) {
+      const pc = await engine.run('PreCompact', { trigger, custom_instructions: instructions });
+      showHookResult('PreCompact', pc);
+      if (pc.blocked || pc.stop) { addMessage('system', `Un hook impidió compactar: ${pc.reason || pc.stopReason}`); return; }
+    }
+  }
   state.abort = new AbortController();
   busy(true);
   const row = addMessage('system', 'Resumiendo la conversación…');
@@ -1431,12 +1618,14 @@ async function compact(t) {
       .slice(-Math.min(120000, Math.round(contextWindow(m).limit * 2.2))); // ≈ 60 % de la ventana: cabe en modelos pequeños
     const { text: summary } = await routedChat(m, {
       signal: state.abort.signal, think: false,
-      messages: [{ role: 'system', content: PROMPTS.compact }, { role: 'user', content: transcript }],
+      messages: [{ role: 'system', content: PROMPTS.compact + (instructions ? `\n\nInstrucciones del usuario para este resumen: ${instructions}` : '') }, { role: 'user', content: transcript }],
     }, routeCtx());
     const content = `RESUMEN DE LA CONVERSACIÓN ANTERIOR (lo que el modelo recordará; edítalo con /clear si algo falta):\n${summary.trim()}`;
     t.messages = [{ role: 'assistant', content }];
     t.agentMessages = null;
     t.lastContext = 0;
+    // la próxima vez el agente empieza sesión con SessionStart source "compact"
+    if (hookSessions.has(t.id)) { hookSessions.delete(t.id); t.sessionSource = 'compact'; }
     saveThreads();
     openThread(t.id);
     toast('CONVERSACIÓN COMPACTADA');
@@ -1870,35 +2059,82 @@ function allowCommand(cmd) {
   toast(`PERMITIDO SIEMPRE AQUÍ: ${p.slice(0, 60)}`);
 }
 
-/* hooks del proyecto: se piden confianza la primera vez y cada vez que cambian */
-async function loadHooks() {
-  const h = await desktop.project.hooks(state.workspace).catch(() => null);
-  if (!h) return null;
-  if (h.error) { addMessage('system', h.error); return null; }
-  const trusted = store.get(`hooksTrust:${state.workspace}`, '');
-  if (trusted === h.hash) return h.hooks;
+/* Hooks del proyecto (.claude/settings*.json, .jeancode/settings*.json, .jeancode/hooks.json): se pide confianza
+   la primera vez y cada vez que cambian. Sin interacción (tareas programadas) solo corren si ya se confió en ellos. */
+async function loadHooks(folder = state.workspace, { interactive = true } = {}) {
+  const none = { sources: [], disableAll: false };
+  const h = desktop?.project?.hooks ? await desktop.project.hooks(folder).catch(() => null) : null;
+  if (!h) return none;
+  if (h.error) { if (interactive) addMessage('system', h.error); return { ...none, error: h.error }; }
+  const res = { sources: h.sources.map((s) => ({ hooks: s.hooks, label: s.file })), disableAll: h.disableAll };
+  if (!h.sources.length || store.get(`hooksTrust:${folder}`, '') === h.hash) return res;
+  if (!interactive) return { ...res, sources: [], untrusted: true };
   const ok = await confirmDialog({
     title: 'HOOKS DEL PROYECTO',
-    command: `Esta carpeta define comandos que se ejecutarán solos:\n\n${JSON.stringify(h.hooks, null, 2)}\n\nPermítelos solo si confías en el proyecto.`,
+    command: `Esta carpeta define comandos que se ejecutarán solos:\n\n${h.sources.map((s) => `${s.file}\n${JSON.stringify(s.hooks, null, 2)}`).join('\n\n')}\n\nPermítelos solo si confías en el proyecto.`,
   });
-  if (!ok) { addMessage('system', 'Hooks del proyecto desactivados para esta sesión.'); return null; }
-  store.set(`hooksTrust:${state.workspace}`, h.hash);
-  return h.hooks;
+  if (!ok) { addMessage('system', 'Hooks del proyecto desactivados para esta sesión.'); return { ...res, sources: [] }; }
+  store.set(`hooksTrust:${folder}`, h.hash);
+  return res;
 }
 
-/** Hooks globales (Ajustes) + los del proyecto (si confiaste): motor común para todo el turno. */
-async function hookEngine(projectHooks) {
+/** Hooks de tipo "prompt": los evalúa un modelo (el de la conversación o el de la tarea). */
+async function hookLlm(prompt, timeoutSec, model) {
+  const m = model || currentModel();
+  if (!m) throw new Error('no hay modelo disponible para evaluar el hook');
+  const ac = new AbortController();
+  const timer = setTimeout(() => ac.abort(), timeoutSec * 1000);
+  try {
+    const { text } = await routedChat(m, { signal: ac.signal, think: false, messages: [
+      { role: 'system', content: 'Evalúas un hook de JeanCode: decides si la acción descrita debe permitirse. Responde solo con JSON.' },
+      { role: 'user', content: prompt }] }, routeCtx());
+    return text;
+  } finally { clearTimeout(timer); }
+}
+
+/** Motor de hooks del usuario (Ajustes → settings.json) + los del proyecto. o: { folder, sessionId, transcriptPath, perm, agent, model } */
+async function hookEngine(project, o = {}) {
+  const folder = o.folder || state.workspace;
   const global = desktop.hooks ? await desktop.hooks.global().catch(() => null) : null;
-  if (global?.error) addMessage('system', `Los hooks globales no son válidos (${global.error}): Ajustes → Comportamiento.`);
-  const engine = createHooks([{ hooks: global?.hooks, label: 'globales' }, { hooks: projectHooks, label: 'proyecto' }],
-    (command, input, timeout) => desktop.hooks.exec(state.workspace, command, { ...input, workspace: state.workspace }, timeout));
-  // compatibilidad: post_edit y post_turn devuelven texto para el resultado o el chat
-  engine.text = async (event, vars = {}) => {
-    if (!engine.has(event)) return '';
-    const r = await engine.run(event, vars);
-    return [r.context, r.blocked ? r.reason : '', ...r.notes].filter(Boolean).map((x) => `\n[hook ${event}] ${x.slice(0, 1500)}`).join('');
-  };
+  if (global?.error) addMessage('system', `Los hooks del usuario no son válidos (${global.error}): Ajustes → Comportamiento.`);
+  const off = global?.disableAll || project?.disableAll; // "disableAllHooks": true en cualquier settings los apaga todos
+  const sources = off ? [] : [{ hooks: global?.hooks, label: 'usuario' }, ...(project?.sources || [])];
+  const engine = createHooks(sources, {
+    exec: (command, input, timeout) => desktop.hooks.exec(folder, command, input, timeout),
+    llm: (prompt, timeout) => hookLlm(prompt, timeout, o.model),
+    base: () => ({ session_id: o.sessionId || '', transcript_path: o.transcriptPath || '', cwd: folder, permission_mode: permissionMode(o.perm ?? state.perm, o.agent ?? state.agent) }),
+  });
+  engine.disabled = !!off;
   return engine;
+}
+
+/** Muestra al usuario lo que un hook quiere enseñarle (systemMessage, errores, salida de texto). */
+function showHookResult(event, res) {
+  for (const m of res?.messages || []) addMessage('system', `[hook ${event}] ${m}`);
+  for (const o of res?.outputs || []) addMessage('tool', `[hook ${event}] ${o}`);
+}
+
+/* Sesiones del agente (para SessionStart / SessionEnd): conversación → motor de hooks con que empezó */
+const hookSessions = new Map();
+async function endSession(threadId, reason) {
+  const engine = hookSessions.get(threadId);
+  hookSessions.delete(threadId);
+  if (!engine?.has('SessionEnd')) return;
+  showHookResult('SessionEnd', await engine.run('SessionEnd', { reason }).catch(() => null));
+}
+/** Notification: avisos que JeanCode da al usuario (permiso pedido, agente esperando). */
+function hookNotify(threadId, type, message) {
+  const engine = hookSessions.get(threadId);
+  if (engine?.has('Notification')) engine.run('Notification', { notification_type: type, message }).then((r) => showHookResult('Notification', r)).catch(() => {});
+}
+window.addEventListener('beforeunload', () => { for (const id of [...hookSessions.keys()]) endSession(id, 'prompt_input_exit'); });
+
+/** Copia de la conversación en JSONL (como transcript_path de Claude Code) para los hooks que la lean. */
+async function writeTranscript(t) {
+  if (!desktop.hooks?.transcript) return '';
+  const lines = (t.agentMessages || t.messages).filter((m) => m.role === 'user' || m.role === 'assistant')
+    .map((m) => ({ type: m.role, message: { role: m.role, content: typeof m.content === 'string' ? m.content : '(imagen)' } }));
+  return desktop.hooks.transcript(t.id, lines).catch(() => '');
 }
 
 function renderTodos(todos) {
@@ -1928,18 +2164,34 @@ async function sendAgent(t, m, text, turn) {
     store.set(`nogitWarned:${state.workspace}`, true);
     addMessage('system', 'Esta carpeta no es un repo git: «volver aquí» deshará los archivos que edite el agente, pero no lo que cambien los comandos de terminal. Con git init se cubre todo.');
   }
-  const engine = await hookEngine(hooks);
-  // user_prompt: un hook puede rechazar el mensaje (salida 2) o añadirle contexto
+  const transcriptPath = await writeTranscript(t);
+  const engine = await hookEngine(hooks, { sessionId: t.id, transcriptPath });
+  // SessionStart: al empezar (startup), al volver a una conversación (resume), tras /clear o tras compactar.
+  // Su contexto queda para toda la sesión.
+  if (!hookSessions.has(t.id)) {
+    const source = t.sessionSource || (t.agentMessages ? 'resume' : 'startup');
+    delete t.sessionSource;
+    hookSessions.set(t.id, engine);
+    if (engine.has('SessionStart')) {
+      const ss = await engine.run('SessionStart', { source });
+      showHookResult('SessionStart', ss);
+      t.sessionContext = ss.context || '';
+    }
+  } else hookSessions.set(t.id, engine);
+  // UserPromptSubmit: un hook puede rechazar el mensaje (código 2 / decision block / continue:false) o añadirle contexto
   let hookContext = '';
-  if (engine.has('user_prompt')) {
-    const up = await engine.run('user_prompt', { prompt: text });
+  if (engine.has('UserPromptSubmit')) {
+    const up = await engine.run('UserPromptSubmit', { prompt: text });
+    showHookResult('UserPromptSubmit', up);
+    if (up.stop) { addMessage('system', `Un hook detuvo el turno: ${up.stopReason}`); return; }
     if (up.blocked) { addMessage('system', `Un hook no dejó enviar el mensaje: ${up.reason}`); return; }
     hookContext = up.context;
   }
-  // session_start: al empezar una conversación del agente, su salida queda como contexto de la sesión
-  if (!t.agentMessages && engine.has('session_start')) t.sessionContext = (await engine.run('session_start', {})).context || '';
   const sys = agentSys({ os, skills, memory });
-  if (t.sessionContext) sys.rules = `${sys.rules || ''}\n\nCONTEXTO DE INICIO (hooks session_start):\n${t.sessionContext}`;
+  if (t.sessionContext) sys.rules = `${sys.rules || ''}\n\nCONTEXTO DE INICIO (hooks SessionStart):\n${t.sessionContext}`;
+  if (state.loop?.dynamic && state.loop.thread === t.id) {
+    sys.rules = `${sys.rules || ''}\n\nESTÁS EN UN /loop SIN INTERVALO: haz la tarea y, si hay que volver a mirarla más tarde, llama a schedule_wakeup {"delaySeconds": 60-3600, "reason": "qué esperas"} eligiendo el plazo según lo rápido que cambia lo que vigilas. Si la tarea terminó, no lo llames: el bucle acaba.`;
+  }
   // apps conectadas (MCP): las herramientas de las conexiones activas en este momento
   const mcpTools = desktop.mcp ? await desktop.mcp.tools().catch(() => []) : [];
   sys.mcp = mcpTools;
@@ -1966,7 +2218,8 @@ async function sendAgent(t, m, text, turn) {
     ep: m.ep, model: m.id, desktop, workspace: state.workspace, mode: state.perm, agent: state.agent, sys, reasoning: reasoningFor(m),
     // el agente pide cada paso al enrutador; si cambia de backend, los pasos siguientes siguen en el nuevo
     chat: (o) => routedChat({ id: o.model, ep: o.ep }, o, routeCtx((to) => { ctx.ep = to.ep; ctx.model = to.id; })).then((r) => r.text),
-    signal: state.abort.signal, confirm: confirmWithAttention, isAllowed, allowCommand, hooks: engine, runHooks: engine.text, computer,
+    signal: state.abort.signal, confirm: confirmWithAttention, isAllowed, allowCommand, hooks: engine, computer,
+    notify: (type, message) => hookNotify(t.id, type, message), scheduler: schedulerFor(t, state.workspace),
     autoDiagnostics: store.get('autoDiag', true), mcp: mcpTools,
     onEvent: (ev) => {
       if (ev.type === 'usage') { addUsage(t, ev.usage, { ep: ctx.ep, id: ctx.model }); if (row) setUsage(row, ev.usage); }
@@ -1984,6 +2237,7 @@ async function sendAgent(t, m, text, turn) {
       if (ev.type === 'subagent-end') addMessage('system', subagentSummary(ev));
       if (ev.type === 'todos' && !ev.nested) { t.todos = ev.todos; renderTodos(ev.todos); }
       if (ev.type === 'file-changed') state.fileCache = null;
+      if (ev.type === 'hook') showHookResult(ev.event, ev);
       updateContext();
     },
   };
@@ -1994,8 +2248,9 @@ async function sendAgent(t, m, text, turn) {
     if (computer) await endComputer();
   }
   t.messages.push({ role: 'assistant', content: stripToolBlocks(final) || final, model: ctx.model, at: Date.now() });
-  const post = await ctx.runHooks('post_turn');
-  if (post) addMessage('tool', post.trim());
+  // Notification idle_prompt: el agente terminó y espera, con la ventana en segundo plano
+  if (document.hidden) hookNotify(t.id, 'idle_prompt', 'JeanCode terminó y espera tu respuesta');
+  loopAfterTurn(t);
   // PLAN → BUILD: el plan se aprueba con un clic (y se puede editar antes en el campo de texto)
   if (state.agent === 'plan') {
     const bar = document.createElement('div');
@@ -2389,7 +2644,12 @@ const pcPolicy = () => normalizePolicy(store.get('pcPolicy', null));
 
 if (desktop?.computer) {
   initApps({ $, esc, toast, desktop, confirmDialog });
-  initAutomations({ $, esc, toast, store, desktop, confirmDialog, run: runAutomation, openThread: (id) => { const t = state.threads.find((x) => x.id === id); if (t) { setMode('agent'); openThread(id); } } });
+  automations = initAutomations({
+    $, esc, toast, store, desktop, confirmDialog, run: runAutomation,
+    openThread: (id) => { const t = state.threads.find((x) => x.id === id); if (t) { setMode('agent'); openThread(id); } },
+    models: () => (state.visible || []).map((x) => ({ key: modelKey(x), label: `${modelLabel(x.id)} · ${providerOf(x.ep).name}` })),
+    defaultFolder: () => state.workspace || '',
+  });
   desktop.computer.supported().then((r) => { pc.supported = !!r.supported; pc.platform = r.platform; renderPcSettings(); }).catch(() => {});
   desktop.computer.onState((s) => renderPcStatus(s));
   desktop.computer.onEmergency((reason) => { state.abort?.abort(); toast(String(reason).toUpperCase()); });
