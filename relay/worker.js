@@ -79,12 +79,14 @@ export default {
  * La sala (32 hex) la derivan el PC y el móvil de su secreto compartido; el Worker no conoce ese secreto, no puede
  * leer ni falsificar nada: solo pasa los marcos cifrados de un lado al otro (señalización WebRTC y, si el P2P no
  * conecta, la conversación entera). Avisa con { t: 'peer', state: 'join' | 'leave' } cuando entra o sale el otro lado.
- * Si configuraste RELAY_KEY, hace falta (k) para entrar: así nadie más usa tu Worker como relay. */
+ * Hace falta RELAY_KEY (k), igual que en /relay/: sin ella, nadie más puede usar tu Worker como relay. */
 async function remote(req, env, url) {
   const room = url.pathname.slice('/remote/'.length);
   const role = url.searchParams.get('role');
   if (!/^[0-9a-f]{32}$/.test(room) || !['host', 'phone'].includes(role)) return new Response('sala o rol no válidos', { status: 400 });
-  if (env.RELAY_KEY && !same(url.searchParams.get('k') || '', env.RELAY_KEY)) return new Response('clave no válida', { status: 401 });
+  // cerrado por defecto: sin RELAY_KEY configurada, el control remoto no se abre a nadie
+  if (!env.RELAY_KEY) return new Response('configura RELAY_KEY en el Worker (wrangler secret put RELAY_KEY)', { status: 503 });
+  if (!same(url.searchParams.get('k') || '', env.RELAY_KEY)) return new Response('clave no válida', { status: 401 });
   if ((req.headers.get('Upgrade') || '').toLowerCase() !== 'websocket') return new Response('se espera un WebSocket', { status: 426 });
   if (!env.REMOTE) return new Response('falta el Durable Object REMOTE en wrangler.toml', { status: 501 });
   return env.REMOTE.get(env.REMOTE.idFromName(room)).fetch(req);

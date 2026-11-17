@@ -40,12 +40,13 @@ el camino de internet; las **apps** de Android e iOS sí usan la Wi-Fi directa.
   almacenamiento de la app o del navegador. Quitar un móvil en el PC lo deja fuera para siempre.
 - **El código de emparejamiento** es de un solo uso, caduca a los 10 minutos y, aun así, el PC pide confirmación.
   Solo se puede aceptar en el PC, nunca desde otro móvil. El enlace se borra del historial del móvil al usarlo.
-- **El Worker** solo ve un identificador de sala derivado de la clave (no la clave) y marcos cifrados. Si
-  configuraste `RELAY_KEY`, hace falta para entrar en él (va dentro del código de emparejamiento).
+- **El Worker** solo ve un identificador de sala derivado de la clave (no la clave) y marcos cifrados. Exige tu
+  `RELAY_KEY` para entrar (va dentro del código de emparejamiento); sin ella configurada, el control remoto no se abre.
 - **El móvil tiene los mismos límites que tú en el PC**: los permisos, los comandos destructivos que siempre preguntan,
   los hooks… nada cambia por manejarlo a distancia.
-- El servidor de la Wi-Fi solo escucha mientras el control remoto está activado (8 conexiones como mucho, 2 MB por
-  mensaje). La primera vez Windows puede preguntar si permites que JeanCode use la red privada: acéptalo para la
+- El servidor de la Wi-Fi solo escucha mientras el control remoto está activado. Una conexión que no se identifica
+  con una clave válida en 8 segundos se cierra; como mucho 8 móviles, 4 conexiones sin identificar y 3 por dirección,
+  2 MB por mensaje. La primera vez Windows puede preguntar si permites que JeanCode use la red privada: acéptalo para la
   conexión directa.
 - Solo funciona con JeanCode abierto en el PC.
 

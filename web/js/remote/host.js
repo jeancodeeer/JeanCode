@@ -227,6 +227,7 @@ export function createRemoteHost({ desktop, app }) {
     data = { ...data, ...patch };
     if (patch.worker !== undefined) data.worker = String(patch.worker || '').trim().replace(/\/+$/, '');
     if (data.worker && !WORKER_URL.test(data.worker)) throw new Error('la URL del Worker debe empezar por https://');
+    if (data.worker && !String(data.wkey || '').trim()) throw new Error('falta la RELAY_KEY del Worker (la que pusiste con wrangler secret put RELAY_KEY)');
     await save();
     if (data.enabled && !wasOn) await start();
     else if (!data.enabled && wasOn) { cancelPairing(); await stop(); }

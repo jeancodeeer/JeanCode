@@ -1184,3 +1184,29 @@ test('remoto: el móvil prueba la Wi-Fi y si no, el relay; mensajes en los dos s
   assert.equal(RL.relayUrl('https://w.example', 'abc', 'host', 'k1'), 'wss://w.example/remote/abc?role=host&k=k1');
   await assert.rejects(RL.phoneConnect({ secret: RC.b64u(secret), lan: [] }, { WS: relayWS }), /Worker/);
 });
+
+test('remoto: el servidor de la Wi-Fi cierra lo que no se identifica y limita las conexiones por dirección', async () => {
+  const lanLib = require('../desktop/lib/remote-lan.js');
+  const WS = require('../desktop/node_modules/ws');
+  const events = [];
+  const lan = lanLib.create({ onEvent: (e) => events.push(e), helloMs: 400 });
+  const st = await lan.start(0);
+  const url = `ws://127.0.0.1:${st.port}/r/${'a'.repeat(32)}`;
+  const open = (u) => new Promise((resolve) => { const ws = new WS(u); ws.on('open', () => resolve(ws)); ws.on('error', () => resolve(ws)); });
+  const closedIn = (ws, ms) => new Promise((resolve) => { if (ws.readyState === 3) return resolve(true); const t = setTimeout(() => resolve(false), ms); ws.on('close', () => { clearTimeout(t); resolve(true); }); });
+  try {
+    const bad = await open(`ws://127.0.0.1:${st.port}/otra-cosa`);
+    assert.equal(await closedIn(bad, 1000), true, 'ruta no válida: fuera');
+    const a = await open(url), b = await open(url), c = await open(url);
+    const d = await open(url);
+    assert.equal(await closedIn(d, 1000), true, 'cuarta conexión desde la misma dirección: fuera');
+    // la interfaz responde a "a" (saludo válido): queda identificada; b y c no dicen nada y caen solas
+    const aOpen = events.find((e) => e.type === 'open');
+    lan.send(aOpen.conn, '{"t":"welcome"}');
+    assert.equal(await closedIn(b, 1500), true, 'sin identificarse en el plazo: fuera');
+    assert.equal(await closedIn(c, 1500), true);
+    assert.equal(await closedIn(a, 800), false, 'la identificada sigue abierta');
+    assert.equal(lan.status().connections, 1);
+    a.close();
+  } finally { lan.stop(); }
+});

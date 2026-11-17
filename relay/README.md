@@ -29,6 +29,7 @@ red no la deja, pasa los mensajes. Todo va cifrado de extremo a extremo: el Work
 
 - `npx wrangler deploy` ya crea la sala (está en `wrangler.toml`). Si desplegaste una versión anterior, vuelve a
   desplegar.
-- Si configuraste `RELAY_KEY`, también se pide para entrar en las salas.
+- Necesita `RELAY_KEY` (la misma del relay): sin ella el Worker no abre las salas.
 - Pon la URL del Worker (y la clave) en el PC: **Ajustes → Comportamiento → Control desde el móvil**.
-- Para probarlo sin desplegar: `npx wrangler dev` y, en el PC, `http://127.0.0.1:8787` como URL del Worker.
+- Para probarlo sin desplegar: crea `relay/.dev.vars` con `RELAY_KEY=una-clave`, `npx wrangler dev` y, en el PC,
+  `http://127.0.0.1:8787` como URL del Worker.
