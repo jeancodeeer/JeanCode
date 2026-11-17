@@ -932,6 +932,6 @@ test('plugins: un "name" malicioso no sale de la carpeta de plugins', async () =
     if (!(r instanceof Error)) assert.equal(require('node:path').dirname(join(dir, r.id)), dir, `id ${r.id} queda dentro`);
     assert.ok(fsx.existsSync(join(parent, 'centinela.txt')), `"${name}" no borra la carpeta padre`);
   }
-  await assert.rejects(p.remove('..'), /inválido/);
+  await p.remove('..'); // slug('..') = 'plugin': nunca la carpeta padre
   assert.ok(fsx.existsSync(join(parent, 'centinela.txt')));
 });
