@@ -61,9 +61,10 @@ rechaza peticiones de páginas web. `sudo sh uninstall.sh` lo quita.
 - **Archivos**: siempre dentro de la carpeta de trabajo; las rutas del modelo nunca se interpretan como comandos.
   Borrar mueve a `.papelera` dentro de esa carpeta.
 - **Pantalla** (Android): `inspect_screen` lista los controles con sus coordenadas (uiautomator), `screenshot` manda una
-  captura reducida si tu modelo ve imágenes, y toca, desliza, escribe y abre apps con `input`, `am` y `monkey`. Las
-  acciones de riesgo medio o alto (teclas, abrir apps) piden permiso. Mientras el agente maneja otras apps, JeanCode
-  queda en segundo plano.
+  captura reducida si tu modelo ve imágenes, y toca, desliza, escribe y abre apps con `input`, `am` y `monkey`. En el
+  iPhone (experimental), solo con capturas. Activar **Controlar la pantalla** ya autoriza lo de riesgo bajo y medio
+  (tocar, deslizar, abrir apps, atrás/inicio); lo de riesgo alto pregunta siempre. Mientras el agente maneja otras apps,
+  JeanCode queda en segundo plano y, si necesita preguntarte algo, vuelve al frente.
 - **Procesos en segundo plano** (`start_process`, `process_output`, `stop_process`): servidores o *watchers* en su propio
   grupo de procesos (`setsid`), con la salida en `.jeancode-proc/` dentro de la carpeta de trabajo. Como mucho 4 a la vez.
 - **`webfetch`** con la red nativa de la app (sin CORS), igual que en el PC: pide permiso con la URL y no abre direcciones
