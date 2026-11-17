@@ -2,7 +2,7 @@
 import { CONFIG, BRAND } from './config.js';
 import { VERSION, isNewer } from './version.js';
 import { store } from './store.js';
-import { getEndpoints, saveEndpoints, addEndpoint, probe, generateKey, discoverSiblings, detectLocal, ollamaPull } from './api.js';
+import { getEndpoints, saveEndpoints, addEndpoint, probe, generateKey, discoverSiblings, detectLocal, ollamaPull, isNativeApp } from './api.js';
 import { renderMarkdown, esc } from './md.js';
 import { CODE_SYSTEM, parseFiles, projectContext } from './code.js';
 import { langOf, canRun, entryFor, runnableFiles, buildRunDoc, dependencies } from './run.js';
@@ -28,6 +28,10 @@ import { PLUGIN_CATALOG, pluginUrl } from './plugins-catalog.js';
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => [...el.querySelectorAll(s)];
 const desktop = window.jeancodeDesktop || null;
+// El modo CODE (proyectos descargables, estilo Abacus) es solo de la web: en el escritorio está el agente,
+// que trabaja en tus carpetas, y en el móvil se queda el chat.
+const CODE_MODE = !desktop && !isNativeApp();
+if (!CODE_MODE) $$('.web-only').forEach((el) => { el.hidden = true; }); // pestaña, ayuda… desde el primer instante
 
 const DEFAULT_SYS = 'Eres Jean, un asistente de programación. Responde en el idioma del usuario, con precisión y código claro.';
 
@@ -585,7 +589,7 @@ $('#new-thread').addEventListener('click', () => { state.current = null; openThr
 document.addEventListener('click', (e) => { if (e.target.closest('[data-news]')) openNews(); });
 
 function setMode(mode) {
-  if (mode === 'agent' && !desktop) return;
+  if ((mode === 'agent' && !desktop) || (mode === 'code' && !CODE_MODE)) return;
   state.mode = mode;
   applyRoute();
   $$('.mode').forEach((b) => {
@@ -1074,7 +1078,7 @@ function paletteItems() {
   const items = [
     ['Nueva conversación', 'Ctrl+K', () => { state.current = null; openThread(null); input.focus(); }],
     ['Buscar conversaciones', 'Ctrl+Shift+F', () => { $('#rail').classList.add('open'); $('#thread-search').focus(); }],
-    ['Modo Chat', 'Ctrl+1', () => setMode('chat')], ['Modo Code', 'Ctrl+2', () => setMode('code')],
+    ['Modo Chat', 'Ctrl+1', () => setMode('chat')], ...(CODE_MODE ? [['Modo Code', 'Ctrl+2', () => setMode('code')]] : []),
     ...(desktop ? [['Modo Agent', 'Ctrl+3', () => setMode('agent')]] : []),
     ['Ajustes', '', () => openPanel('settings')], ['Skills', '', () => openPanel('skills')],
     ...(desktop ? [['Automatizaciones', '', () => openPanel('automations')], ['Plugins', '', () => openPanel('plugins')]] : []),

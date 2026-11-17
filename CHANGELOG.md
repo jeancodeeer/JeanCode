@@ -4,6 +4,10 @@ JeanCode 1.0 reúne en una sola versión todo lo que se publicó por partes entr
 
 ## Sin publicar (preparativo 2.0.0)
 
+**El modo CODE queda solo en la web**
+- En el escritorio (Windows, macOS, Linux) y en las apps de Android e iOS desaparece la pestaña CODE, su atajo (Ctrl+2) y su entrada en la paleta. En el escritorio se trabaja con AGENT, sobre tus carpetas; en el móvil queda CHAT. La web conserva CHAT y CODE como hasta ahora.
+- Las conversaciones de CODE que hubiera en el escritorio o el móvil no se borran, pero no se muestran allí.
+
 **Automatizaciones idénticas a las de Claude (escritorio)**
 - **Hooks con el formato de Claude Code**: `settings.json` del usuario y `.claude/settings*.json` / `.jeancode/settings*.json` del proyecto. Doce eventos (`PreToolUse`, `PermissionRequest`, `PostToolUse`, `PostToolUseFailure`, `UserPromptSubmit`, `Notification`, `Stop`, `SubagentStart`, `SubagentStop`, `PreCompact`, `SessionStart`, `SessionEnd`), matchers, la misma entrada (`tool_name`, `tool_input` con los campos de Claude, `transcript_path`, `permission_mode`…) y salida (`permissionDecision`, `updatedInput`, `additionalContext`, `continue`, `systemMessage`, código 2), hooks de tipo `prompt`, ejecución en paralelo y `CLAUDE_PROJECT_DIR`. Los hooks de Claude Code funcionan tal cual. `/hooks` muestra los activos. El formato antiguo (`pre_tool`, `post_edit`…) se sigue leyendo.
 - **Tareas programadas** con expresión cron (zona horaria con `CRON_TZ=`), una sola vez o manuales; modelo, permisos, conversación nueva o la misma de siempre y notificación por tarea; historial de las últimas 20 ejecuciones; editar; ejecutar ahora con instrucciones extra. Corren con los hooks. Las tareas de la versión anterior se convierten solas.

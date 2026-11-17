@@ -78,9 +78,9 @@ Ya hay agentes de programación excelentes ([OpenCode](https://github.com/sst/op
 | PLATAFORMA | CÓMO CONSEGUIRLA | MODOS |
 |---|---|---|
 | **Web** (cualquier móvil o computadora) | [jeancodeeer.github.io/JeanCode](https://jeancodeeer.github.io/JeanCode/): PWA instalable que funciona sin conexión | CHAT · CODE |
-| **Android** | `JeanCode-x.y.z-android.apk` de la [última release](https://github.com/jeancodeeer/JeanCode/releases/latest) | CHAT · CODE |
-| **iOS / iPadOS** | `JeanCode-x.y.z-ios-unsigned.ipa`: se instala con [AltStore](https://altstore.io) o [Sideloadly](https://sideloadly.io) usando tu propio Apple ID | CHAT · CODE |
-| **Windows · macOS · Linux** | `.exe` · `.dmg` · `.AppImage` de la [última release](https://github.com/jeancodeeer/JeanCode/releases/latest) | CHAT · CODE · **AGENT** · control del equipo |
+| **Android** | `JeanCode-x.y.z-android.apk` de la [última release](https://github.com/jeancodeeer/JeanCode/releases/latest) | CHAT |
+| **iOS / iPadOS** | `JeanCode-x.y.z-ios-unsigned.ipa`: se instala con [AltStore](https://altstore.io) o [Sideloadly](https://sideloadly.io) usando tu propio Apple ID | CHAT |
+| **Windows · macOS · Linux** | `.exe` · `.dmg` · `.AppImage` de la [última release](https://github.com/jeancodeeer/JeanCode/releases/latest) | CHAT · **AGENT** · control del equipo |
 | **Python + pygame** (cualquier sistema, y PyKernel) | `JeanCode-x.y.z-pygame.zip` de la [última release](https://github.com/jeancodeeer/JeanCode/releases/latest) → `pip install pygame-ce` → `python jeancode_pygame.py`. Ver [pygame/README.md](pygame/README.md) | CHAT |
 
 Las apps del móvil son la misma web compilada con Capacitor. El APK de Android va firmado con una clave de depuración (permite «instalar apps desconocidas»); la de iOS va sin firmar porque publicar en la App Store exige una cuenta de desarrollador de Apple de pago.
@@ -198,7 +198,7 @@ Para ver la ventana, QEMU necesita una pantalla gráfica (en WSL: `sudo apt inst
 <table>
 <tr>
 <td width="33%" valign="top"><b>CHAT</b> · web + escritorio<br>Markdown en streaming, bloques de código, razonamiento plegable y consumo de tokens por respuesta.</td>
-<td width="33%" valign="top"><b>CODE</b> · web + escritorio<br>Describes un proyecto y se escriben todos los archivos. Árbol, <b>EJECUTAR</b> el proyecto entero (HTML con sus JS/CSS, Python, JavaScript, Batch… aislado; en escritorio, cualquier lenguaje instalado, con permiso) y descarga en <code>.zip</code>.</td>
+<td width="33%" valign="top"><b>CODE</b> · web<br>Describes un proyecto y se escriben todos los archivos. Árbol, <b>EJECUTAR</b> el proyecto entero (HTML con sus JS/CSS, Python, JavaScript, Batch… aislado; en escritorio, cualquier lenguaje instalado, con permiso) y descarga en <code>.zip</code>.</td>
 <td width="33%" valign="top"><b>AGENT</b> · escritorio<br>Un agente al estilo de Claude Code y OpenCode, dentro de la carpeta que elijas.</td>
 </tr>
 </table>
