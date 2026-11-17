@@ -23,6 +23,7 @@ import { loadThreads, saveThreadsSoon, saveThreadsNow, wipeThreads } from './his
 import { createHooks, permissionMode, HOOK_EVENTS } from './hooks.js';
 import { createRemoteHost } from './remote/host.js';
 import { initRemotePhone } from './remote/phone.js';
+import { initPhoneAgent } from './mobile/agent-ui.js';
 import { initAutomations, parseInterval, validateTask, taskSummary, runSummary, describeTaskSchedule, fmtWhen } from './automations.js';
 import { SKILL_CATALOG, SKILL_CATEGORIES } from './skills-catalog.js';
 import { PLUGIN_CATALOG, pluginUrl } from './plugins-catalog.js';
@@ -36,6 +37,9 @@ const CODE_MODE = !desktop && !isNativeApp();
 if (!CODE_MODE) $$('.web-only').forEach((el) => { el.hidden = true; }); // pestaña, ayuda… desde el primer instante
 // la pestaña PC (controlar el agente de tu PC) es de la web y el móvil; en el escritorio no tiene sentido
 if (desktop) $$('.remote-only').forEach((el) => { el.hidden = true; });
+// el agente dentro del teléfono solo existe en las apps de Android e iOS
+if (isNativeApp()) $$('.native-only').forEach((el) => { el.hidden = false; });
+let phoneAgent = null;
 let remoteHost = null;   // escritorio: control desde móviles emparejados
 let remotePhone = null;  // web y móvil: controlar un PC
 
@@ -595,7 +599,7 @@ $('#new-thread').addEventListener('click', () => { state.current = null; openThr
 document.addEventListener('click', (e) => { if (e.target.closest('[data-news]')) openNews(); });
 
 function setMode(mode) {
-  if ((mode === 'agent' && !desktop) || (mode === 'code' && !CODE_MODE) || (mode === 'remote' && desktop)) return;
+  if ((mode === 'agent' && !desktop) || (mode === 'code' && !CODE_MODE) || (mode === 'remote' && desktop) || (mode === 'device' && !phoneAgent)) return;
   state.mode = mode;
   applyRoute();
   $$('.mode').forEach((b) => {
@@ -607,11 +611,13 @@ function setMode(mode) {
   $('#view-code').hidden = mode !== 'code';
   $('#view-agent').hidden = mode !== 'agent';
   $('#view-remote').hidden = mode !== 'remote';
-  $('#composer').hidden = mode === 'remote'; // la vista PC tiene su propia caja de mensaje
+  $('#view-device').hidden = mode !== 'device';
+  $('#composer').hidden = mode === 'remote' || mode === 'device'; // estas vistas tienen su propia caja de mensaje
   // el modelo lo elige el PC, no este dispositivo: fuera el selector, la ruta y el título de conversación local
   for (const el of [$('#route-menu'), $('.topbar .model'), $('#crumb-title')?.previousElementSibling, $('#crumb-title')]) if (el) el.hidden = mode === 'remote';
-  $('#crumb-mode').textContent = mode === 'agent' ? `AGENT · ${state.agent.toUpperCase()}` : mode === 'remote' ? 'CONTROLAR MI PC' : mode.toUpperCase();
+  $('#crumb-mode').textContent = mode === 'agent' ? `AGENT · ${state.agent.toUpperCase()}` : mode === 'remote' ? 'CONTROLAR MI PC' : mode === 'device' ? 'AGENTE DEL MÓVIL' : mode.toUpperCase();
   if (mode === 'remote') { renderThreads(); remotePhone?.autoconnect(); return; }
+  if (mode === 'device') { renderThreads(); phoneAgent.check(); return; }
   updateHint();
   renderThreads();
   openThread(state.threads.find((t) => t.mode === mode)?.id || null);
@@ -3295,6 +3301,13 @@ if ('serviceWorker' in navigator && location.protocol.startsWith('http') && !des
   let warned = false;
   state.threads = await loadThreads(() => { if (!warned) { warned = true; toast('NO SE PUDO GUARDAR EL HISTORIAL: REVISA EL ESPACIO DEL DISCO'); } });
   window.addEventListener('pagehide', () => { saveThreadsNow(state.threads.slice(0, 200)); });
+  if (isNativeApp()) {
+    phoneAgent = initPhoneAgent({
+      $, esc, store, toast, renderMarkdown, confirmDialog, agentSystem, runAgent, stripToolBlocks, capsOf,
+      model: () => currentModel(),
+      chat: (m, o) => routedChat(m, o, { models: state.routable || state.models, mode: 'agent', endpoints: getEndpoints(), need: { tools: true } }).then((r) => r.text),
+    });
+  }
   if (!desktop) remotePhone = initRemotePhone({ $, esc, store, toast, renderMarkdown, platform: isNativeApp() ? 'app' : 'web' });
   if (desktop?.remote) initRemoteHostUi().catch((e) => console.warn('control remoto', e));
   // controlar un PC no necesita API propia: un enlace de emparejamiento o un PC ya emparejado entran directos

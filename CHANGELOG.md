@@ -4,6 +4,13 @@ JeanCode 1.0 reúne en una sola versión todo lo que se publicó por partes entr
 
 ## Sin publicar (preparativo 2.0.0)
 
+**Mini agente del móvil (Android con modo desarrollador, iPhone con jailbreak)**
+- Nueva pestaña **Móvil** en las apps: el agente de JeanCode trabaja dentro del teléfono con el modelo que tengas conectado. Lee y escribe archivos, ejecuta comandos y, en Android, maneja la pantalla (abrir apps, tocar, deslizar, escribir, capturas).
+- Android: con **Shizuku** (se activa con la depuración inalámbrica del modo desarrollador) el agente tiene permisos de shell, como `adb shell`, sin root.
+- iPhone: un ayudante en Python (`mobile/ios-helper`, se instala con `sudo sh install.sh`) que escucha solo en el propio iPhone y exige un token. Archivos y comandos; la pantalla de iOS queda para más adelante.
+- Los comandos peligrosos de los teléfonos (desinstalar o borrar datos de apps, reiniciar, ajustes de seguridad, bloqueo…) piden confirmación siempre.
+
+
 **Control remoto: maneja el agente del PC desde el móvil**
 - Nueva pestaña **PC** en la web y en las apps de Android e iOS: ves las conversaciones del agente de tu PC en vivo, le escribes, lo paras, cambias PLAN/BUILD y los permisos, y apruebas sus diálogos de permiso (vale la primera respuesta, en el PC o en el móvil). No hace falta API en el móvil.
 - Emparejamiento con QR o enlace de un solo uso (10 min) y confirmación en el PC; cada móvil tiene su propia clave, revocable en **Ajustes → Comportamiento → Control desde el móvil**.

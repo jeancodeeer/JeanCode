@@ -8,3 +8,4 @@ Thumbs.db
 relay/.wrangler/
 relay/node_modules/
 relay/.dev.vars
+mobile/ios-helper/__pycache__/

@@ -1210,3 +1210,65 @@ test('remoto: el servidor de la Wi-Fi cierra lo que no se identifica y limita la
     a.close();
   } finally { lan.stop(); }
 });
+
+/* ---------------- mini agente del móvil ---------------- */
+const MD = await import('../web/js/mobile/device.js');
+const MS = await import('../web/js/mobile/shim.js');
+
+test('móvil: rutas confinadas, glob, texto de input y volcado de uiautomator', () => {
+  assert.equal(MS.insidePath('/sdcard/JeanCode', 'a/b.txt'), '/sdcard/JeanCode/a/b.txt');
+  assert.equal(MS.insidePath('/sdcard/JeanCode', './a/../b'), '/sdcard/JeanCode/b');
+  assert.throws(() => MS.insidePath('/sdcard/JeanCode', '../secreto'), /fuera/);
+  assert.throws(() => MS.insidePath('/sdcard/JeanCode', '/data/data/x'), /fuera/);
+  assert.equal(MS.insidePath('/sdcard/JeanCode', '/sdcard/JeanCode/x'), '/sdcard/JeanCode/x');
+  assert.ok(MS.globToRegex('src/**/*.js').test('src/a/b/c.js') && MS.globToRegex('src/**/*.js').test('src/c.js') && !MS.globToRegex('*.js').test('a/b.js'));
+  assert.equal(MD.sq("it's $(rm -rf /)"), "'it'\\''s $(rm -rf /)'");
+  assert.equal(MS.inputText('hola mundo & $x'), 'hola%smundo%s\\&%s\\$x');
+  const xml = '<hierarchy><node text="" content-desc="Ajustes" class="android.widget.ImageView" package="p" clickable="true" bounds="[0,0][100,100]"/><node text="Wi&#39;Fi &amp; red" resource-id="android:id/title" class="android.widget.TextView" clickable="false" bounds="[10,200][310,260]"/><node class="android.widget.EditText" text="" clickable="true" bounds="[0,300][1080,400]"/><node class="x" bounds="[5,5][5,5]"/></hierarchy>';
+  const nodes = MS.parseUiDump(xml);
+  assert.equal(nodes.length, 3);
+  assert.deepEqual([nodes[0].desc, nodes[0].x, nodes[0].y], ['Ajustes', 50, 50]);
+  assert.equal(nodes[1].text, "Wi'Fi & red");
+  assert.equal(MS.findNode(nodes, { name: 'ajustes' }).id, 1);
+  assert.equal(MS.findNode(nodes, { name: 'wi' }).id, 2, 'empieza por');
+  assert.equal(MS.findNode(nodes, { name: 'title' }).id, 2, 'por resource-id');
+  assert.equal(MS.findNode(nodes, { id: 3 }).editable, true);
+});
+
+test('móvil: el agente usa el ayudante del iPhone (Python real) para archivos y comandos, sin inyección', async (t) => {
+  const { spawn, execFileSync } = require('node:child_process');
+  const fsx = require('node:fs');
+  const tmp = mkdtempSync(join(tmpdir(), 'jc-ioshelper-'));
+  const port = 47400 + Math.floor(Math.random() * 500);
+  const win = process.platform === 'win32';
+  const env = { ...process.env, JEANCODE_HELPER_PORT: String(port), JEANCODE_HELPER_TOKEN_FILE: join(tmp, 'token'), JEANCODE_HELPER_SHELL: win ? 'C:\\Program Files\\Git\\bin\\bash.exe' : '/bin/sh' };
+  const py = win ? 'python' : 'python3';
+  const token = execFileSync(py, ['mobile/ios-helper/jeancode_helper.py', '--token'], { env }).toString().trim();
+  const proc = spawn(py, ['mobile/ios-helper/jeancode_helper.py'], { env });
+  t.after(() => proc.kill());
+  await new Promise((r) => proc.stdout.once('data', r));
+  const http = (url, body, headers) => fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json', ...headers }, body: JSON.stringify(body) }).then(async (r) => (r.status === 401 ? { error: 'token' } : r.json()));
+  const bad = MD.iosBackend({ url: `http://127.0.0.1:${port}`, token: 'x'.repeat(43), http });
+  assert.equal((await bad.status()).ready, false, 'sin el token no hay nada');
+  const evil = await fetch(`http://127.0.0.1:${port}/exec`, { method: 'POST', headers: { Authorization: `Bearer ${token}`, Origin: 'https://atacante.example' }, body: '{"cmd":"echo hola"}' });
+  assert.equal(evil.status, 403, 'una página web ajena no puede usarlo aunque tuviera el token');
+  const dev = MD.iosBackend({ url: `http://127.0.0.1:${port}`, token, http });
+  assert.equal((await dev.status()).ready, true);
+  // en Windows, Git Bash usa rutas /c/... y Python C:/...: en un iPhone son la misma ruta
+  const root = win ? tmp.replace(/\\/g, '/').replace(/^([A-Za-z]):/, (m, c) => `/${c.toLowerCase()}`) : tmp;
+  const sys = (p) => (win ? p.replace(/^\/([a-z])\//, (m, c) => `${c.toUpperCase()}:/`) : p);
+  const d = MS.createPhoneDesktop({ ...dev, readFile: (p) => dev.readFile(sys(p)), writeFile: (p, b) => dev.writeFile(sys(p), b) });
+  const name = "nota 'rara' $(touch PWNED).txt";
+  assert.match(await d.fs.write(root, `docs/${name}`, 'línea 1\nlínea dos'), /Creado/);
+  assert.ok(!fsx.existsSync(join(tmp, 'docs', 'PWNED')) && !fsx.existsSync(join(tmp, 'PWNED')), 'el nombre no se ejecutó');
+  assert.match(await d.fs.read(root, `docs/${name}`), /2 líneas\)\n {4}1 {2}línea 1\n {4}2 {2}línea dos/);
+  assert.match(await d.fs.list(root, 'docs'), /nota 'rara' \$\(touch PWNED\)\.txt {2}\(\d+ B\)/);
+  await d.fs.edit(root, `docs/${name}`, 'dos', '2');
+  assert.equal(await d.fs.peek(root, `docs/${name}`), 'línea 1\nlínea 2');
+  assert.deepEqual(await d.fs.glob(root, '**/*.txt'), [`docs/${name}`]);
+  assert.match(await d.fs.search(root, 'línea 2'), /docs\/nota 'rara'.*:2:línea 2/);
+  assert.match(await d.shell.run(root, 'echo "$((6*7))"; pwd'), /^\$ echo[^\n]*\n\(salida 0\)\n42\n/);
+  await assert.rejects(d.fs.read(root, '../fuera.txt'), /fuera de la carpeta/);
+  assert.match(await d.fs.trash(root, `docs/${name}`), /papelera/);
+  assert.equal(fsx.readdirSync(join(tmp, '.papelera')).length, 1);
+});

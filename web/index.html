@@ -132,6 +132,7 @@
       <button class="mode web-only" data-mode="code" role="tab" aria-selected="false">Code</button>
       <button class="mode desktop-only" data-mode="agent" role="tab" aria-selected="false" hidden>Agent</button>
       <button class="mode remote-only" data-mode="remote" role="tab" aria-selected="false">PC</button>
+      <button class="mode native-only" data-mode="device" role="tab" aria-selected="false" hidden>Móvil</button>
     </nav>
 
     <button class="btn new" id="new-thread"><svg class="i"><use href="#i-plus"/></svg>Nueva conversación</button>
@@ -316,6 +317,43 @@
           <span class="fine mono" id="rm-busy" hidden>TRABAJANDO…</span>
           <button class="btn" type="button" id="rm-stop" hidden>Parar</button>
           <button class="btn primary" type="submit" id="rm-send">Enviar</button>
+        </form>
+      </div>
+    </section>
+
+    <!-- MINI AGENTE DEL MÓVIL: el agente trabajando dentro del propio teléfono (solo apps de Android/iOS) -->
+    <section class="view" id="view-device" hidden>
+      <div class="rm-bar">
+        <span class="rm-status" id="dv-ready" role="status" aria-live="polite" data-kind="off">SIN CONFIGURAR</span>
+        <button class="btn ghost sm" type="button" id="dv-check">Comprobar</button>
+      </div>
+      <div class="rm-pair" id="dv-setup">
+        <h2 class="empty-title">Agente en este móvil</h2>
+        <p class="muted">El agente de JeanCode trabajando dentro del teléfono: archivos, comandos y, en Android, la pantalla (abrir apps, tocar, escribir). Una app normal no puede hacer eso: hace falta el <strong>modo desarrollador con Shizuku</strong> en Android o un <strong>jailbreak</strong> en iPhone. Usa el modelo que tengas conectado en Ajustes. Lo destructivo (desinstalar, borrar datos, reiniciar, ajustes de seguridad) pregunta siempre.</p>
+        <ol class="dv-steps" id="dv-steps"></ol>
+        <button class="btn primary" type="button" id="dv-grant" hidden>Dar permiso en Shizuku</button>
+        <div class="row gap wrap" id="dv-ios" hidden>
+          <input id="dv-token" type="password" class="grow" placeholder="Token del ayudante (lo imprime install.sh)" spellcheck="false" autocomplete="off" aria-label="Token del ayudante del iPhone">
+          <button class="btn primary" type="button" id="dv-ios-save">Conectar</button>
+        </div>
+      </div>
+      <div class="rm-main" id="dv-main" hidden>
+        <div class="rm-head row gap wrap">
+          <input id="dv-root" type="text" class="grow mono" spellcheck="false" aria-label="Carpeta de trabajo en el teléfono">
+          <select id="dv-perm" aria-label="Permisos"><option value="ask">Preguntar todo</option><option value="auto-edit">Editar sin preguntar</option></select>
+          <button class="btn ghost sm" type="button" id="dv-clear">Nueva</button>
+        </div>
+        <div class="rm-head row gap wrap">
+          <span class="fine mono grow" id="dv-info"></span>
+          <label class="check" id="dv-screen-row"><input type="checkbox" id="dv-screen"> Controlar la pantalla</label>
+        </div>
+        <ul class="rm-todos" id="dv-todos" hidden></ul>
+        <div class="stream rm-stream" id="dv-stream"></div>
+        <form class="rm-form row gap" id="dv-form">
+          <textarea id="dv-input" rows="2" class="grow" placeholder="Pídele algo a tu teléfono…" aria-label="Mensaje para el agente del móvil"></textarea>
+          <span class="fine mono" id="dv-busy" hidden>TRABAJANDO…</span>
+          <button class="btn" type="button" id="dv-stop" hidden>Parar</button>
+          <button class="btn primary" type="submit" id="dv-send">Enviar</button>
         </form>
       </div>
     </section>

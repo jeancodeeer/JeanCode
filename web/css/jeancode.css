@@ -631,3 +631,9 @@ kbd { font: 600 11px/1 var(--mono); border: 1px solid var(--line-3); padding: 2p
 .remote-qr { display: flex; flex-wrap: wrap; gap: var(--s3); align-items: flex-start; margin: var(--s2) 0; }
 .remote-qr img { width: 240px; height: 240px; image-rendering: pixelated; border: 1px solid var(--line); }
 .remote-qr > div { flex: 1 1 260px; }
+
+/* mini agente del móvil */
+#view-device { display: flex; flex-direction: column; min-height: 0; }
+#view-device[hidden] { display: none; }
+.dv-steps { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--s2); font-size: 14px; color: var(--smoke); }
+.dv-steps li.done { color: var(--ink); }
