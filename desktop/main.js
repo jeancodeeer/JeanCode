@@ -7,11 +7,15 @@ const { McpManager } = require('./lib/mcp');
 const diagnostics = require('./lib/diagnostics');
 const { checkLink } = require('./lib/linkcheck');
 const skillsLib = require('./lib/skills');
+const pluginsLib = require('./lib/plugins');
 const { ComputerControl } = require('./lib/computer/control');
 const runner = require('./lib/runner');
 
 const CONFIG_FILE = () => path.join(app.getPath('userData'), 'config.json');
 const skills = () => skillsLib.create(path.join(app.getPath('userData'), 'skills'));
+// una sola instancia: guarda en memoria el índice de los plugins (cientos de SKILL.md) hasta que cambian
+let pluginStore;
+const plugins = () => (pluginStore ||= pluginsLib.create(path.join(app.getPath('userData'), 'plugins')));
 const streams = new Map();
 let win;
 
@@ -201,8 +205,10 @@ ipcMain.handle('mcp:call', (_e, id, tool, args) => mcp.call(id, tool, args));
 ipcMain.handle('fs:diagnose', (_e, root, rel, opts) => diagnostics.diagnose(root, rel, { deep: !!opts?.deep, auto: !!opts?.auto }));
 ipcMain.handle('web:fetch', (_e, url) => tools.webfetch(url));
 ipcMain.handle('project:memory', (_e, root) => tools.projectMemory(root));
-ipcMain.handle('project:commands', (_e, root) => tools.commands(root));
-ipcMain.handle('project:agents', (_e, root) => tools.agents(root));
+// los del proyecto primero: si un nombre coincide con el de un plugin, gana el proyecto
+const merge = (own, extra) => [...own, ...extra.filter((x) => !own.some((o) => o.name === x.name))];
+ipcMain.handle('project:commands', async (_e, root) => merge(await tools.commands(root), await plugins().commands().catch(() => [])));
+ipcMain.handle('project:agents', async (_e, root) => merge(await tools.agents(root), await plugins().agents().catch(() => [])));
 ipcMain.handle('project:hooks', (_e, root) => tools.hooks(root));
 // hooks globales del usuario (Ajustes): <userData>/hooks.json, no piden confianza porque los escribe él
 const GLOBAL_HOOKS = () => path.join(app.getPath('userData'), 'hooks.json');
@@ -331,8 +337,17 @@ ipcMain.handle('run:input', (_e, id, text) => runner.input(id, text));
 ipcMain.handle('run:stop', (_e, id) => runner.stop(id));
 
 /* ---------------- skills ---------------- */
-ipcMain.handle('skills:list', () => skills().list());
-ipcMain.handle('skills:read', (_e, name) => skills().read(name));
+ipcMain.handle('skills:list', async () => merge(await skills().list(), await plugins().skills().catch(() => [])));
+// skill propia primero; si no, la de un plugin (o el índice/archivo de un plugin con "file")
+ipcMain.handle('skills:read', async (_e, name, file) => {
+  name = String(name);
+  const own = (await skills().list()).some((s) => s.name === name || s.id === name);
+  if (own && !file) return skills().read(name);
+  const r = await plugins().read(name, file ? String(file) : '');
+  if (r != null) return r;
+  if (own) throw new Error('las skills propias no admiten "file"; usa read_file si la skill está en la carpeta de trabajo');
+  return skills().read(name); // lanza el error con la lista de instaladas
+});
 ipcMain.handle('skills:remove', (_e, id) => skills().remove(id));
 ipcMain.handle('skills:installFolder', async () => {
   const r = await dialog.showOpenDialog(win, { properties: ['openDirectory'], title: 'Carpeta de la skill (con SKILL.md)' });
@@ -340,6 +355,16 @@ ipcMain.handle('skills:installFolder', async () => {
 });
 ipcMain.handle('skills:installUrl', (_e, url) => skills().installUrl(url, app.getPath('temp')));
 ipcMain.handle('skills:installGithub', (_e, repo, dir, branch) => skills().installGithubDir(repo, dir, branch));
+
+/* ---------------- plugins (formato de Claude Code: skills + subagentes + comandos) ---------------- */
+ipcMain.handle('plugins:list', () => plugins().list());
+ipcMain.handle('plugins:installGit', (_e, url) => plugins().installGit(String(url), app.getPath('temp')));
+ipcMain.handle('plugins:installFolder', async () => {
+  const r = await dialog.showOpenDialog(win, { properties: ['openDirectory'], title: 'Carpeta del plugin (con .claude-plugin/plugin.json)' });
+  return r.canceled ? null : plugins().installFrom(r.filePaths[0], r.filePaths[0]);
+});
+ipcMain.handle('plugins:setEnabled', (_e, id, on) => plugins().setEnabled(String(id), !!on));
+ipcMain.handle('plugins:remove', (_e, id) => plugins().remove(String(id)));
 
 app.whenReady().then(() => {
   createWindow();

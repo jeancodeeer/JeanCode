@@ -23,6 +23,7 @@ import { loadThreads, saveThreadsSoon, saveThreadsNow, wipeThreads } from './his
 import { createHooks } from './hooks.js';
 import { initAutomations, parseInterval } from './automations.js';
 import { SKILL_CATALOG, SKILL_CATEGORIES } from './skills-catalog.js';
+import { PLUGIN_CATALOG, pluginUrl } from './plugins-catalog.js';
 
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => [...el.querySelectorAll(s)];
@@ -997,7 +998,7 @@ async function refreshPopup() {
   const v = input.value;
   const caret = input.selectionStart;
   const before = v.slice(0, caret);
-  const cmd = before.match(/^\/([\w-]*)$/);
+  const cmd = before.match(/^\/([\w-]*(?::[\w-]*)?)$/);
   if (cmd) {
     const items = matchCommands(cmd[1], state.mode, state.custom);
     showPopup(items.map((c) => ({ name: c.name, desc: c.desc, custom: c.custom })), 'cmd', 0);
@@ -1072,7 +1073,7 @@ function paletteItems() {
     ['Modo Chat', 'Ctrl+1', () => setMode('chat')], ['Modo Code', 'Ctrl+2', () => setMode('code')],
     ...(desktop ? [['Modo Agent', 'Ctrl+3', () => setMode('agent')]] : []),
     ['Ajustes', '', () => openPanel('settings')], ['Skills', '', () => openPanel('skills')],
-    ...(desktop ? [['Automatizaciones', '', () => openPanel('automations')]] : []),
+    ...(desktop ? [['Automatizaciones', '', () => openPanel('automations')], ['Plugins', '', () => openPanel('plugins')]] : []),
     ['Novedades de JeanCode', '', () => openNews()],
     ...(t ? [['Exportar a Markdown', '', () => exportThread(t, 'md')], ['Exportar a JSON', '', () => exportThread(t, 'json')], ['Exportar a PDF', '', () => exportThread(t, 'pdf')],
       [t.pinned ? 'Quitar de fijadas' : 'Fijar esta conversación', '', () => { t.pinned = !t.pinned; saveThreads(); renderThreads(); }],
@@ -2086,6 +2087,7 @@ function openPanel(name) {
   if (name === 'settings') renderSettings();
   if (name === 'download') loadReleases();
   if (name === 'skills') renderSkills();
+  if (name === 'plugins') renderPlugins();
   if (name === 'help') renderHelp();
   if (name === 'hf') initHf();
   d.showModal();
@@ -2769,6 +2771,55 @@ if (desktop) {
   $('#skill-url-form').addEventListener('submit', async (e) => {
     e.preventDefault();
     try { const r = await desktop.skills.installUrl($('#skill-url').value); toast('SKILL INSTALADA: ' + r); $('#skill-url').value = ''; renderSkills(); } catch (err) { toast(err.message); }
+  });
+}
+
+/* plugins (web/js/plugins-catalog.js): skills + subagentes + comandos con formato de Claude Code */
+const countsText = (c) => `${c.skills} skills · ${c.agents} subagentes · ${c.commands} comandos`;
+async function renderPlugins() {
+  if (!desktop) return;
+  const installed = await desktop.plugins.list().catch(() => []);
+  $('#plugin-list').innerHTML = installed.map((p) => `<li>
+    <span class="ep-prov">${esc(PLUGIN_CATALOG.find((c) => c.id === p.id)?.name || p.displayName)}</span>
+    <span class="ep-url apps-desc">${esc(countsText(p.counts))}${p.enabled ? '' : ' · DESACTIVADO'}</span>
+    <span class="ep-meta">${esc(p.version || '')}${p.license ? ` · ${esc(p.license)}` : ''}</span>
+    <button class="btn ghost sm" type="button" data-plugin-toggle="${esc(p.id)}" data-on="${p.enabled ? '1' : ''}">${p.enabled ? 'DESACTIVAR' : 'ACTIVAR'}</button>
+    <button class="btn ghost sm" type="button" data-plugin-del="${esc(p.id)}">QUITAR</button>
+  </li>`).join('') || '<li>Sin plugins instalados.</li>';
+  const have = new Set(installed.map((p) => p.id));
+  $('#plugin-catalog').innerHTML = `<ul class="rows">${PLUGIN_CATALOG.map((c) => `<li>
+    <span class="ep-prov">${esc(c.name)}</span><span class="ep-url apps-desc">${esc(c.desc)}</span>
+    <span class="ep-meta">${esc(c.repo)} · ${esc(c.license)}</span>
+    ${have.has(c.id) ? `<button class="btn ghost sm" type="button" data-plugin-add="${esc(c.id)}">Actualizar</button>` : `<button class="btn sm" type="button" data-plugin-add="${esc(c.id)}">Instalar</button>`}
+  </li>`).join('')}</ul>`;
+}
+async function installPlugin(run, btn) {
+  if (btn) { btn.disabled = true; btn.textContent = 'Instalando…'; }
+  try {
+    const r = await run();
+    if (r) toast(`PLUGIN ${String(r.name).toUpperCase()} ${r.version || ''}: ${countsText(r.counts).toUpperCase()}`);
+    await loadProject(); // sus subagentes y comandos entran ya en la sesión actual
+  } catch (err) { toast(String(err.message).toUpperCase().slice(0, 140)); }
+  renderPlugins();
+}
+if (desktop?.plugins) {
+  $('#plugin-catalog').addEventListener('click', (e) => {
+    const b = e.target.closest('[data-plugin-add]');
+    const c = b && PLUGIN_CATALOG.find((x) => x.id === b.dataset.pluginAdd);
+    if (c) installPlugin(() => desktop.plugins.installGit(pluginUrl(c)), b);
+  });
+  $('#plugin-list').addEventListener('click', async (e) => {
+    const t = e.target.closest('[data-plugin-toggle]');
+    const d = e.target.closest('[data-plugin-del]');
+    if (t) await desktop.plugins.setEnabled(t.dataset.pluginToggle, !t.dataset.on);
+    if (d) await desktop.plugins.remove(d.dataset.pluginDel);
+    if (t || d) { await loadProject(); renderPlugins(); }
+  });
+  $('#plugin-folder').addEventListener('click', () => installPlugin(() => desktop.plugins.installFolder()));
+  $('#plugin-url-form').addEventListener('submit', (e) => {
+    e.preventDefault();
+    const url = $('#plugin-url').value.trim();
+    if (url) installPlugin(() => desktop.plugins.installGit(url)).then(() => { $('#plugin-url').value = ''; });
   });
 }
 

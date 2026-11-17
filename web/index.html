@@ -258,6 +258,7 @@
           <summary aria-label="Más acciones del agente"><svg class="i"><use href="#i-more"/></svg></summary>
           <div class="menu-list" role="menu">
             <button role="menuitem" data-panel="skills">Skills</button>
+            <button role="menuitem" class="desktop-only" data-panel="plugins" hidden>Plugins</button>
             <button role="menuitem" data-news>Novedades</button>
             <button role="menuitem" class="desktop-only" data-panel="automations" hidden>Automatizaciones</button>
             <button role="menuitem" id="undo-btn">Deshacer el último cambio</button>
@@ -528,6 +529,22 @@
     <button class="btn" id="skill-recommended" type="button">Instalar las 12 recomendadas</button>
   </div>
   <div id="skill-catalog"></div>
+</dialog>
+
+<dialog class="panel wide" id="panel-plugins">
+  <div class="panel-head"><h2>Plugins</h2><button class="icon-btn" data-close aria-label="Cerrar"><svg class="i"><use href="#i-close"/></svg></button></div>
+  <p class="note">Un plugin agrupa skills, subagentes y comandos con el formato de los plugins de Claude Code (<code>.claude-plugin/plugin.json</code>). Sus skills se cargan con <code>load_skill</code>, sus subagentes con <code>spawn_subagent</code> y sus comandos se escriben como <code>/plugin:comando</code>. Solo se usa su texto: los hooks, servidores MCP y scripts del plugin no se ejecutan.</p>
+  <ul class="rows" id="plugin-list"></ul>
+  <div class="row gap wrap">
+    <button class="btn" id="plugin-folder" type="button">Instalar desde carpeta</button>
+    <form id="plugin-url-form" class="add-form grow">
+      <input id="plugin-url" type="url" placeholder="URL https de un repo git con .claude-plugin/plugin.json" spellcheck="false">
+      <button class="btn" type="submit">Instalar</button>
+    </form>
+  </div>
+  <h3>Catálogo</h3>
+  <p class="note">Se descargan de GitHub al instalarlos (clon superficial; ECC tarda un poco, son miles de archivos).</p>
+  <div id="plugin-catalog"></div>
 </dialog>
 
 <dialog class="panel wide" id="panel-automations">

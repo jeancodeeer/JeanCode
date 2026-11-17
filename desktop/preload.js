@@ -76,4 +76,11 @@ contextBridge.exposeInMainWorld('jeancodeDesktop', {
     installFolder: call('skills:installFolder'),
     installUrl: call('skills:installUrl'),
   },
+  plugins: {
+    list: call('plugins:list'),
+    installGit: call('plugins:installGit'),
+    installFolder: call('plugins:installFolder'),
+    setEnabled: call('plugins:setEnabled'),
+    remove: call('plugins:remove'),
+  },
 });

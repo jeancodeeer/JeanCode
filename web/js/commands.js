@@ -30,12 +30,13 @@ export function matchCommands(query, mode, custom = []) {
     ...BUILTIN.filter((c) => c.modes.includes(mode)),
     ...(mode === 'agent' ? custom.map((c) => ({ name: c.name, desc: c.description || 'comando del proyecto', custom: true })) : []),
   ];
-  return all.filter((c) => c.name.startsWith(q)).slice(0, 12);
+  // los de plugins van con prefijo (ecc:plan): "/plan" también los encuentra
+  return all.filter((c) => c.name.startsWith(q) || c.name.split(':')[1]?.startsWith(q)).slice(0, 12);
 }
 
-/** "/model jean-grey" -> { name: 'model', args: 'jean-grey' } */
+/** "/model jean-grey" -> { name: 'model', args: 'jean-grey' } · "/ecc:plan x" -> { name: 'ecc:plan', args: 'x' } */
 export function parseCommand(text) {
-  const m = text.trim().match(/^\/([\w-]+)\s*([\s\S]*)$/);
+  const m = text.trim().match(/^\/([\w-]+(?::[\w-]+)?)\s*([\s\S]*)$/);
   return m ? { name: m[1].toLowerCase(), args: m[2].trim() } : null;
 }
 

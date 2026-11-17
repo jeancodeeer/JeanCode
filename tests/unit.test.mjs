@@ -843,3 +843,77 @@ test('versión nueva: plataforma, descarga y tipo de salto', () => {
   assert.equal(updateFrom(rel, { platform: 'win', current: '1.2.2', skipped: '1.3.0' }), null, 'omitida');
   assert.equal(updateFrom({ ...rel, prerelease: true }, { platform: 'win', current: '1.2.2' }), null);
 });
+
+/* ---------------- plugins (formato de Claude Code) ---------------- */
+const pluginsLib = require('../desktop/lib/plugins.js');
+const { catalogLines, PLUGIN_INLINE_MAX } = await import('../web/js/agent.js');
+
+function fakePlugin(skills = 2) {
+  const src = mkdtempSync(join(tmpdir(), 'jc-plugin-src-'));
+  const w = (rel, text) => { mkdirSync(join(src, rel, '..'), { recursive: true }); writeFileSync(join(src, rel), text); };
+  w('.claude-plugin/plugin.json', JSON.stringify({ name: 'demo', displayName: 'Demo', version: '1.0.0', license: 'MIT', agents: ['./.claude-plugin/agents/critic.md'] }));
+  for (let i = 0; i < skills; i++) w(`skills/s${i}/SKILL.md`, `---\nname: s${i}\ndescription: skill ${i}\n---\nCuerpo ${i}. Ver \${CLAUDE_PLUGIN_ROOT}/docs/guia.md`);
+  w('skills/s0/resources/extra.md', 'EXTRA');
+  w('.claude-plugin/agents/critic.md', '---\nname: demo-critic\ndescription: Crítico\ntools: [Read, Grep]\n---\nLee `${CLAUDE_PLUGIN_ROOT}/docs/persona.md`.');
+  w('commands/plan.md', '---\ndescription: Planifica\n---\nPlan para: $ARGUMENTS');
+  w('docs/persona.md', 'PERSONA COMPLETA');
+  w('docs/guia.md', 'GUIA');
+  w('hooks/hooks.json', '{}');
+  w('node_modules/x/index.js', 'malo');
+  return src;
+}
+
+test('plugins: instala solo el texto útil y expone skills, subagentes y comandos', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'jc-plugins-'));
+  const p = pluginsLib.create(dir);
+  const r = await p.installFrom(fakePlugin(), 'https://example.test/demo.git');
+  assert.deepEqual(r.counts, { skills: 2, agents: 1, commands: 1 });
+  const fsx = require('node:fs');
+  assert.ok(!fsx.existsSync(join(dir, 'demo', 'hooks')), 'los hooks no se copian');
+  assert.ok(!fsx.existsSync(join(dir, 'demo', 'node_modules')), 'node_modules no se copia');
+
+  const [agent] = await p.agents();
+  assert.equal(agent.name, 'demo-critic');
+  assert.equal(agent.write, false, 'tools [Read, Grep] = solo lectura');
+  assert.match(agent.prompt, /PERSONA COMPLETA/, 'la persona citada con ${CLAUDE_PLUGIN_ROOT} va dentro del prompt');
+  assert.doesNotMatch(agent.prompt, /CLAUDE_PLUGIN_ROOT/);
+
+  const [cmd] = await p.commands();
+  assert.equal(cmd.name, 'demo:plan');
+  assert.equal(expandCustom(cmd.body, 'login'), 'Plan para: login');
+
+  assert.match(await p.read('s0'), /Cuerpo 0[\s\S]*GUIA/);
+  assert.equal(await p.read('s0', 'resources/extra.md'), 'EXTRA', 'archivo relativo a la skill');
+  assert.equal(await p.read('demo', 'docs/guia.md'), 'GUIA', 'archivo relativo al plugin');
+  await assert.rejects(p.read('demo', '../../secreto.txt'), /no existe en el plugin/);
+  assert.match(await p.read('demo'), /SKILLS \(2\)[\s\S]*SUBAGENTES \(1\)[\s\S]*\/demo:plan/);
+  assert.equal(await p.read('otra-cosa'), null);
+
+  await p.setEnabled('demo', false);
+  assert.equal((await p.skills()).length, 0, 'desactivado = no aporta nada');
+  assert.equal(await p.read('s0'), null);
+  await p.setEnabled('demo', true);
+  await p.installFrom(fakePlugin(), 'x');
+  assert.equal((await p.list())[0].enabled, true, 'reinstalar conserva el estado');
+  await p.remove('demo');
+  assert.deepEqual(await p.list(), []);
+});
+
+test('plugins: rechaza carpetas sin manifiesto y tools ausente = todas', async () => {
+  const p = pluginsLib.create(mkdtempSync(join(tmpdir(), 'jc-plugins-')));
+  await assert.rejects(p.installFrom(mkdtempSync(join(tmpdir(), 'jc-vacio-'))), /no es un plugin/);
+  assert.equal(pluginsLib.canWrite(undefined), true);
+  assert.equal(pluginsLib.canWrite('Read, Grep, Glob'), false);
+  assert.equal(pluginsLib.canWrite('Read, Edit, Bash'), true);
+});
+
+test('plugins: los grandes se resumen en el prompt y los comandos llevan prefijo', () => {
+  const many = Array.from({ length: PLUGIN_INLINE_MAX + 5 }, (_, i) => ({ name: `k${i}`, description: 'd', plugin: 'big' }));
+  const text = catalogLines([{ name: 'propia', description: 'mía' }, ...many, { name: 'e1', description: 'x', plugin: 'egm' }], 'skills');
+  assert.match(text, /- propia: mía/);
+  assert.match(text, /PLUGIN big: 30 skills[\s\S]*load_skill \{"name": "big"\}/);
+  assert.doesNotMatch(text, /- k29/);
+  assert.match(text, /PLUGIN egm:\n- e1: x/);
+  assert.deepEqual(parseCommand('/ecc:plan añadir login'), { name: 'ecc:plan', args: 'añadir login' });
+  assert.deepEqual(matchCommands('pla', 'agent', [{ name: 'ecc:plan', description: 'p' }]).filter((c) => c.custom).map((c) => c.name), ['ecc:plan']);
+});

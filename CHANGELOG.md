@@ -2,6 +2,14 @@
 
 JeanCode 1.0 reúne en una sola versión todo lo que se publicó por partes entre la 0.1 y la 0.4. Las releases antiguas se retiraron de GitHub para que solo quede una descarga oficial. Su código sigue completo en las etiquetas de git (`v0.1.0` … `v0.4.2`), así que cualquier build anterior se puede reconstruir con `git checkout vX.Y.Z && cd desktop && npm ci && npm run dist`.
 
+## Sin publicar (preparativo 2.0.0)
+
+**Plugins con formato de Claude Code (escritorio)**
+- Nuevo panel **Plugins**: instala plugins de Claude Code (`.claude-plugin/plugin.json`) desde el catálogo, una URL git o una carpeta. Cada plugin aporta skills, subagentes y comandos; se puede desactivar o quitar.
+- En el catálogo: **ECC · Everything Claude Code** (327 skills, 72 subagentes, 98 comandos) y **EGM · Elephant-Goldfish Model** de Google (diseño con contexto y revisión con subagentes «sin memoria»).
+- Comandos de plugin con prefijo: `/ecc:plan`, `/ecc:tdd`… Los plugins grandes no llenan el contexto: el agente pide su índice con `load_skill`.
+- Seguridad: de un plugin solo se usa su texto. Sus hooks, servidores MCP y scripts no se ejecutan.
+
 ## 1.2.3 — 16 de noviembre de 2026
 
 **CODE: pestaña EJECUTAR (web, móvil y escritorio)**
