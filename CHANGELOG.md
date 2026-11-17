@@ -4,6 +4,13 @@ JeanCode 1.0 reúne en una sola versión todo lo que se publicó por partes entr
 
 ## Sin publicar (preparativo 2.0.0)
 
+**Control remoto: maneja el agente del PC desde el móvil**
+- Nueva pestaña **PC** en la web y en las apps de Android e iOS: ves las conversaciones del agente de tu PC en vivo, le escribes, lo paras, cambias PLAN/BUILD y los permisos, y apruebas sus diálogos de permiso (vale la primera respuesta, en el PC o en el móvil). No hace falta API en el móvil.
+- Emparejamiento con QR o enlace de un solo uso (10 min) y confirmación en el PC; cada móvil tiene su propia clave, revocable en **Ajustes → Comportamiento → Control desde el móvil**.
+- Conexión directa por la Wi-Fi; desde fuera, P2P (WebRTC) con tu Worker de Cloudflare como punto de encuentro y, si la red bloquea WebRTC, relay por el mismo Worker. Todo cifrado de extremo a extremo (AES-256-GCM): ni la red ni el Worker pueden leer nada.
+- El Worker de `relay/` incluye la sala del control remoto: vuelve a desplegarlo si ya lo usabas.
+
+
 **El modo CODE queda solo en la web**
 - En el escritorio (Windows, macOS, Linux) y en las apps de Android e iOS desaparece la pestaña CODE, su atajo (Ctrl+2) y su entrada en la paleta. En el escritorio se trabaja con AGENT, sobre tus carpetas; en el móvil queda CHAT. La web conserva CHAT y CODE como hasta ahora.
 - Las conversaciones de CODE que hubiera en el escritorio o el móvil no se borran, pero no se muestran allí.

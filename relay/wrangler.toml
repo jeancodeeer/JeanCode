@@ -6,3 +6,12 @@ compatibility_date = "2025-09-01"
 # Hosts propios opcionales, separados por comas:
 # [vars]
 # RELAY_HOSTS = "api.mi-servidor.com"
+
+# Control remoto de JeanCode (móvil → PC): sala de encuentro y relay cifrado.
+[[durable_objects.bindings]]
+name = "REMOTE"
+class_name = "RemoteRoom"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["RemoteRoom"]

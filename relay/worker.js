@@ -43,6 +43,8 @@ export default {
     if (req.method === 'OPTIONS') return new Response(null, { status: 204, headers: cors(origin) });
     const url = new URL(req.url);
     if (url.pathname === '/health') return new Response('{"ok":true}', { headers: { 'Content-Type': 'application/json', ...cors(origin) } });
+    // control remoto de JeanCode: sala de encuentro PC ↔ móvil (solo reenvía marcos ya cifrados de extremo a extremo)
+    if (url.pathname.startsWith('/remote/')) return remote(req, env, url);
     if (!url.pathname.startsWith('/relay/')) return fail(404, 'Usa /relay/<host>/<ruta>.', origin);
     if (!env.RELAY_KEY || !same(req.headers.get('X-Jean-Key') || '', env.RELAY_KEY)) return fail(401, 'X-Jean-Key inválida o ausente.', origin);
     if (!['GET', 'POST'].includes(req.method)) return fail(405, 'Solo GET y POST.', origin);
@@ -71,3 +73,53 @@ export default {
     });
   },
 };
+
+/* ---------------------------------------------------------------- control remoto
+ * GET /remote/<sala>?role=host|phone[&k=RELAY_KEY]  (WebSocket)
+ * La sala (32 hex) la derivan el PC y el móvil de su secreto compartido; el Worker no conoce ese secreto, no puede
+ * leer ni falsificar nada: solo pasa los marcos cifrados de un lado al otro (señalización WebRTC y, si el P2P no
+ * conecta, la conversación entera). Avisa con { t: 'peer', state: 'join' | 'leave' } cuando entra o sale el otro lado.
+ * Si configuraste RELAY_KEY, hace falta (k) para entrar: así nadie más usa tu Worker como relay. */
+async function remote(req, env, url) {
+  const room = url.pathname.slice('/remote/'.length);
+  const role = url.searchParams.get('role');
+  if (!/^[0-9a-f]{32}$/.test(room) || !['host', 'phone'].includes(role)) return new Response('sala o rol no válidos', { status: 400 });
+  if (env.RELAY_KEY && !same(url.searchParams.get('k') || '', env.RELAY_KEY)) return new Response('clave no válida', { status: 401 });
+  if ((req.headers.get('Upgrade') || '').toLowerCase() !== 'websocket') return new Response('se espera un WebSocket', { status: 426 });
+  if (!env.REMOTE) return new Response('falta el Durable Object REMOTE en wrangler.toml', { status: 501 });
+  return env.REMOTE.get(env.REMOTE.idFromName(room)).fetch(req);
+}
+
+const MAX_REMOTE_FRAME = 1_000_000;
+const MAX_PHONES = 3;
+
+export class RemoteRoom {
+  constructor(state) { this.state = state; }
+
+  async fetch(req) {
+    const role = new URL(req.url).searchParams.get('role');
+    const same = this.state.getWebSockets(role);
+    // un solo PC por sala (el nuevo sustituye al anterior); como mucho 3 móviles a la vez
+    if (role === 'host') for (const ws of same) { try { ws.close(4000, 'otro PC ocupó la sala'); } catch { /* */ } }
+    if (role === 'phone' && same.length >= MAX_PHONES) return new Response('demasiados móviles en esta sala', { status: 429 });
+    const [client, server] = Object.values(new WebSocketPair());
+    this.state.acceptWebSocket(server, [role]);
+    this.notify(role, 'join');
+    return new Response(null, { status: 101, webSocket: client });
+  }
+
+  other(role) { return this.state.getWebSockets(role === 'host' ? 'phone' : 'host'); }
+  roleOf(ws) { return this.state.getTags(ws)[0]; }
+  notify(role, state) {
+    for (const ws of this.other(role)) { try { ws.send(JSON.stringify({ t: 'peer', role, state })); } catch { /* */ } }
+  }
+
+  async webSocketMessage(ws, msg) {
+    if (typeof msg !== 'string' || msg.length > MAX_REMOTE_FRAME) return;
+    // solo marcos del protocolo; el contenido va cifrado y no se mira
+    if (!/^\{"t":"(hello|welcome|msg)"/.test(msg)) return;
+    for (const peer of this.other(this.roleOf(ws))) { try { peer.send(msg); } catch { /* */ } }
+  }
+  async webSocketClose(ws) { this.notify(this.roleOf(ws), 'leave'); }
+  async webSocketError(ws) { this.notify(this.roleOf(ws), 'leave'); }
+}

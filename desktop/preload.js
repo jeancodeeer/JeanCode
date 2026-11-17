@@ -76,6 +76,12 @@ contextBridge.exposeInMainWorld('jeancodeDesktop', {
     installFolder: call('skills:installFolder'),
     installUrl: call('skills:installUrl'),
   },
+  remote: {
+    load: call('remote:load'), save: call('remote:save'), qr: call('remote:qr'),
+    lanStart: call('remote:lanStart'), lanStop: call('remote:lanStop'), lanStatus: call('remote:lanStatus'),
+    lanSend: call('remote:lanSend'), lanClose: call('remote:lanClose'),
+    onLan: (fn) => ipcRenderer.on('remote:lan', (_e, ev) => fn(ev)),
+  },
   plugins: {
     list: call('plugins:list'),
     installGit: call('plugins:installGit'),

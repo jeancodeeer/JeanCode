@@ -21,6 +21,8 @@ import { initApps } from './apps.js';
 import { qualityPrompt, detectSensitive, rowsToCsv, rowsToMarkdown, markdownToText, extractLinks, searchThreads, threadToJson } from './quality.js';
 import { loadThreads, saveThreadsSoon, saveThreadsNow, wipeThreads } from './history.js';
 import { createHooks, permissionMode, HOOK_EVENTS } from './hooks.js';
+import { createRemoteHost } from './remote/host.js';
+import { initRemotePhone } from './remote/phone.js';
 import { initAutomations, parseInterval, validateTask, taskSummary, runSummary, describeTaskSchedule, fmtWhen } from './automations.js';
 import { SKILL_CATALOG, SKILL_CATEGORIES } from './skills-catalog.js';
 import { PLUGIN_CATALOG, pluginUrl } from './plugins-catalog.js';
@@ -32,6 +34,10 @@ const desktop = window.jeancodeDesktop || null;
 // que trabaja en tus carpetas, y en el móvil se queda el chat.
 const CODE_MODE = !desktop && !isNativeApp();
 if (!CODE_MODE) $$('.web-only').forEach((el) => { el.hidden = true; }); // pestaña, ayuda… desde el primer instante
+// la pestaña PC (controlar el agente de tu PC) es de la web y el móvil; en el escritorio no tiene sentido
+if (desktop) $$('.remote-only').forEach((el) => { el.hidden = true; });
+let remoteHost = null;   // escritorio: control desde móviles emparejados
+let remotePhone = null;  // web y móvil: controlar un PC
 
 const DEFAULT_SYS = 'Eres Jean, un asistente de programación. Responde en el idioma del usuario, con precisión y código claro.';
 
@@ -589,7 +595,7 @@ $('#new-thread').addEventListener('click', () => { state.current = null; openThr
 document.addEventListener('click', (e) => { if (e.target.closest('[data-news]')) openNews(); });
 
 function setMode(mode) {
-  if ((mode === 'agent' && !desktop) || (mode === 'code' && !CODE_MODE)) return;
+  if ((mode === 'agent' && !desktop) || (mode === 'code' && !CODE_MODE) || (mode === 'remote' && desktop)) return;
   state.mode = mode;
   applyRoute();
   $$('.mode').forEach((b) => {
@@ -600,7 +606,12 @@ function setMode(mode) {
   $('#view-chat').hidden = mode !== 'chat';
   $('#view-code').hidden = mode !== 'code';
   $('#view-agent').hidden = mode !== 'agent';
-  $('#crumb-mode').textContent = mode === 'agent' ? `AGENT · ${state.agent.toUpperCase()}` : mode.toUpperCase();
+  $('#view-remote').hidden = mode !== 'remote';
+  $('#composer').hidden = mode === 'remote'; // la vista PC tiene su propia caja de mensaje
+  // el modelo lo elige el PC, no este dispositivo: fuera el selector, la ruta y el título de conversación local
+  for (const el of [$('#route-menu'), $('.topbar .model'), $('#crumb-title')?.previousElementSibling, $('#crumb-title')]) if (el) el.hidden = mode === 'remote';
+  $('#crumb-mode').textContent = mode === 'agent' ? `AGENT · ${state.agent.toUpperCase()}` : mode === 'remote' ? 'CONTROLAR MI PC' : mode.toUpperCase();
+  if (mode === 'remote') { renderThreads(); remotePhone?.autoconnect(); return; }
   updateHint();
   renderThreads();
   openThread(state.threads.find((t) => t.mode === mode)?.id || null);
@@ -1136,6 +1147,7 @@ async function openNews() {
 function busy(on) {
   $('#send-btn').disabled = on;
   $('#stop-btn').hidden = !on;
+  remoteHost?.pushState();
 }
 
 $('#composer').addEventListener('submit', async (e) => {
@@ -1199,7 +1211,7 @@ async function send(text) {
   state.abort = new AbortController();
   busy(true);
   try {
-    if (state.mode === 'agent') await sendAgent(t, m, text, turn);
+    if (state.mode === 'agent') { remoteHost?.emit({ thread: t.id, kind: 'user', text }); await sendAgent(t, m, text, turn); }
     else await sendChat(t, m);
   } catch (err) {
     if (err.name !== 'AbortError') {
@@ -1216,7 +1228,110 @@ async function send(text) {
     t.updated = Date.now();
     saveThreads();
     updateContext();
+    if (state.mode === 'agent') remoteHost?.emit({ thread: t.id, kind: 'turn-end' });
   }
+}
+
+/* ---------------------------------------------------------------- control remoto: el agente, visto desde el móvil */
+const remoteCallIds = new WeakMap();
+let remoteLastDelta = 0;
+function remoteEmit(threadId, ev) {
+  if (!remoteHost?.connected() || ev.nested) return; // de los subagentes llega solo su resumen
+  const send = (x) => remoteHost.emit({ thread: threadId, ...x });
+  const callId = (c) => { if (!remoteCallIds.has(c)) remoteCallIds.set(c, Math.random().toString(36).slice(2, 10)); return remoteCallIds.get(c); };
+  const label = (c) => `${c.tool} ${String(toolTarget(c) ?? '').slice(0, 140)}`.trim();
+  switch (ev.type) {
+    case 'assistant-start': send({ kind: 'assistant-start' }); break;
+    case 'assistant-delta': if (Date.now() - remoteLastDelta > 200) { remoteLastDelta = Date.now(); send({ kind: 'delta', text: stripToolBlocks(ev.text || '') }); } break;
+    case 'assistant-end': send({ kind: 'assistant-end', text: stripToolBlocks(ev.text || '') }); break;
+    case 'tool-start': send({ kind: 'tool', id: callId(ev.call), tool: ev.call.tool, label: label(ev.call), status: 'start' }); break;
+    case 'tool-end': send({ kind: 'tool', id: callId(ev.call), tool: ev.call.tool, label: label(ev.call), status: /^(ERROR|DENEGADO|RECHAZADO|BLOQUEADO|DETENIDO)/.test(String(ev.result ?? '')) ? 'error' : 'ok' }); break;
+    case 'subagent-start': send({ kind: 'system', text: `Subagente${ev.agent ? ` ${ev.agent}` : ''} lanzado` }); break;
+    case 'subagent-end': send({ kind: 'system', text: subagentSummary(ev) }); break;
+    case 'todos': send({ kind: 'todos', todos: ev.todos }); break;
+    case 'hook': for (const x of [...(ev.messages || [])]) send({ kind: 'system', text: `[hook ${ev.event}] ${x}` }); break;
+    default: break;
+  }
+}
+
+/** Lo que el móvil puede ver y hacer del agente de este PC. */
+function remoteApp(hostName) {
+  const agentThreads = () => state.threads.filter((x) => x.mode === 'agent');
+  return {
+    hostName: () => hostName,
+    toast,
+    snapshot: () => ({
+      host: hostName, workspace: state.workspace || '', perm: state.perm, agent: state.agent, busy: !!state.abort,
+      thread: (state.mode === 'agent' && state.current) || agentThreads()[0]?.id || null, model: currentModel()?.id || '',
+    }),
+    threads: () => agentThreads().slice(0, 60).map((x) => ({ id: x.id, title: x.title, updated: x.updated, workspace: x.workspace || '' })),
+    thread: (id) => {
+      const x = agentThreads().find((y) => y.id === id);
+      if (!x) return null;
+      return { id: x.id, title: x.title, messages: x.messages.filter((m) => (m.role === 'user' || m.role === 'assistant') && typeof m.content === 'string').slice(-80).map(({ role, content }) => ({ role, content: content.slice(0, 20000) })) };
+    },
+    send: async (text, threadId, device) => {
+      if (state.abort) throw new Error('El agente está ocupado: espera a que termine o páralo.');
+      if (state.mode !== 'agent') setMode('agent');
+      if (threadId && agentThreads().some((x) => x.id === threadId)) { if (state.current !== threadId) openThread(threadId); } else { state.current = null; openThread(null); }
+      addMessage('system', `Mensaje enviado desde el móvil «${device?.name || 'móvil'}».`);
+      send(text); // sin esperar: el móvil sigue el turno por los eventos
+      setTimeout(() => remoteHost?.pushThreads(), 300);
+    },
+    stop: () => stopEverything('detenida desde el móvil'),
+    newThread: () => { setMode('agent'); state.current = null; openThread(null); },
+    setPerm: (v) => { if (!['ask', 'auto-edit'].includes(v)) return; state.perm = v; store.set('perm', v); $('#perm-mode').value = v; },
+    setAgent: (v) => { if (['plan', 'build'].includes(v)) setAgent(v); },
+    confirmPair: ({ name, platform }) => confirmDialog({
+      title: 'EMPAREJAR UN MÓVIL', localOnly: true, where: '',
+      command: `«${name}»${platform ? ` (${platform})` : ''} quiere controlar JeanCode en este PC: ver las conversaciones del agente, escribirle, pararlo y aprobar sus permisos.\n\nAcéptalo solo si es tu móvil y acabas de escanear el código.`,
+    }).then((v) => v === true),
+  };
+}
+
+/** Ajustes → Control desde el móvil (escritorio). */
+async function initRemoteHostUi() {
+  const host = (await desktop.remote.lanStatus().catch(() => ({}))).hostname || 'PC';
+  remoteHost = createRemoteHost({ desktop, app: remoteApp(store.get('remoteHostName', '') || host) });
+  let pairTimer = null;
+  const render = (s) => {
+    $('#remote-enabled').checked = s.enabled;
+    $('#remote-lan').checked = s.lan;
+    if (document.activeElement !== $('#remote-worker')) $('#remote-worker').value = s.worker || '';
+    if (document.activeElement !== $('#remote-wkey')) $('#remote-wkey').value = s.wkey || '';
+    $('#remote-pair').disabled = !s.enabled;
+    $('#remote-status').textContent = !s.enabled ? 'Desactivado.' : [
+      s.lan ? (s.lanRunning ? `Wi-Fi: ${s.lanUrls.join(' · ') || 'sin red local'}` : 'Wi-Fi: no se pudo escuchar') : 'Wi-Fi: desactivada',
+      s.worker ? `Internet: ${s.relayRooms ? 'conectado al Worker' : 'conectando con el Worker…'}` : 'Internet: sin Worker (solo Wi-Fi)',
+    ].join(' · ');
+    if (!s.pairing) { $('#remote-qr').hidden = true; clearInterval(pairTimer); }
+    $('#remote-devices').innerHTML = s.devices.map((d) => `<li><span class="status ${d.online.length ? 'ok' : ''}" aria-hidden="true"></span>
+      <span class="ep-prov">${esc(d.name)}</span>
+      <span class="ep-url apps-desc">${d.online.length ? `conectado (${esc(d.online.map((k) => ({ lan: 'Wi-Fi', p2p: 'P2P', relay: 'relay' }[k] || k)).join(', '))})` : d.lastSeen ? `visto ${esc(new Date(d.lastSeen).toLocaleString())}` : 'emparejado, aún sin conectar'}</span>
+      <button class="btn ghost sm" type="button" data-remote-revoke="${esc(d.id)}">Quitar</button></li>`).join('') || '<li class="fine">Ningún móvil emparejado.</li>';
+  };
+  remoteHost.onChange(render);
+  $('#remote-enabled').addEventListener('change', (e) => remoteHost.configure({ enabled: e.target.checked }).catch((err) => toast(String(err.message).toUpperCase())));
+  $('#remote-lan').addEventListener('change', (e) => remoteHost.configure({ lan: e.target.checked }).catch((err) => toast(String(err.message).toUpperCase())));
+  $('#remote-save').addEventListener('click', () => remoteHost.configure({ worker: $('#remote-worker').value, wkey: $('#remote-wkey').value.trim() })
+    .then(() => toast('CONTROL REMOTO: GUARDADO')).catch((err) => toast(String(err.message).toUpperCase())));
+  $('#remote-pair').addEventListener('click', async () => {
+    try {
+      const p = await remoteHost.startPairing();
+      $('#remote-qr').hidden = false;
+      $('#remote-qr-img').src = p.qr;
+      $('#remote-copy').onclick = () => navigator.clipboard.writeText(p.url).then(() => toast('ENLACE COPIADO')).catch(() => toast('NO SE PUDO COPIAR'));
+      clearInterval(pairTimer);
+      const tick = () => { const s = Math.max(0, Math.round((p.exp - Date.now()) / 1000)); $('#remote-exp').textContent = `caduca en ${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`; };
+      tick(); pairTimer = setInterval(tick, 1000);
+    } catch (err) { toast(String(err.message).toUpperCase()); }
+  });
+  $('#remote-cancel').addEventListener('click', () => { remoteHost.cancelPairing(); render(remoteHost.status()); });
+  $('#remote-devices').addEventListener('click', async (e) => {
+    const b = e.target.closest('[data-remote-revoke]');
+    if (b && await confirmDialog({ title: 'QUITAR MÓVIL', command: 'Ese móvil deja de poder conectarse. Para volver a usarlo habrá que emparejarlo otra vez.', localOnly: true, where: '' })) remoteHost.revoke(b.dataset.remoteRevoke);
+  });
+  await remoteHost.load();
 }
 
 /* ------------------------------------------------------------- comandos */
@@ -2249,6 +2364,7 @@ async function sendAgent(t, m, text, turn) {
       if (ev.type === 'todos' && !ev.nested) { t.todos = ev.todos; renderTodos(ev.todos); }
       if (ev.type === 'file-changed') state.fileCache = null;
       if (ev.type === 'hook') showHookResult(ev.event, ev);
+      remoteEmit(t.id, ev);
       updateContext();
     },
   };
@@ -2306,7 +2422,14 @@ streamElAll().forEach((el) => el.addEventListener('click', async (e) => {
 
 function streamElAll() { return [$('#chat-stream'), $('#code-stream'), $('#agent-stream')]; }
 
-function confirmDialog({ title, command, path, before, after, allowAlways = false, alwaysLabel = '', where = null }) {
+function confirmDialog(opts) {
+  // con un móvil conectado, la misma pregunta llega al móvil y vale la primera respuesta (salvo localOnly)
+  const remote = !opts.localOnly && remoteHost?.connected() ? remoteHost.ask({ ...opts, where: opts.where ?? state.workspace ?? '' }) : null;
+  const local = localConfirm(opts, remote?.promise);
+  if (remote) local.finally(() => remote.cancel());
+  return local;
+}
+function localConfirm({ title, command, path, before, after, allowAlways = false, alwaysLabel = '', where = null }, remoteAnswer = null) {
   return new Promise((resolve) => {
     const d = $('#panel-confirm');
     $('#confirm-title').textContent = title;
@@ -2320,7 +2443,9 @@ function confirmDialog({ title, command, path, before, after, allowAlways = fals
       $('#confirm-path').textContent = `${path}   +${st.add} −${st.del}`;
       body.innerHTML = `<pre class="diff">${ops.map((o) => `<span class="d d${o.t === '+' ? 'a' : o.t === '-' ? 'r' : o.t === '@' ? 's' : 'c'}">${o.t === '@' ? '' : esc(o.t)} ${esc(o.s)}</span>`).join('\n')}</pre>`;
     }
-    const done = (v) => { d.close(); resolve(v); };
+    let settled = false;
+    const done = (v) => { if (settled) return; settled = true; d.close(); resolve(v); };
+    remoteAnswer?.then((v) => done(v));
     const always = $('#confirm-always');
     const canAlways = allowAlways && command && (alwaysLabel || !UNSAFE_CMD.test(command.trim()));
     always.hidden = !canAlways;
@@ -2328,7 +2453,7 @@ function confirmDialog({ title, command, path, before, after, allowAlways = fals
     always.onclick = () => done('always');
     $('#confirm-yes').onclick = () => done(true);
     $('#confirm-no').onclick = () => done(false);
-    d.oncancel = () => resolve(false);
+    d.oncancel = () => { if (!settled) { settled = true; resolve(false); } };
     d.showModal();
     $('#confirm-no').focus();
   });
@@ -3170,8 +3295,14 @@ if ('serviceWorker' in navigator && location.protocol.startsWith('http') && !des
   let warned = false;
   state.threads = await loadThreads(() => { if (!warned) { warned = true; toast('NO SE PUDO GUARDAR EL HISTORIAL: REVISA EL ESPACIO DEL DISCO'); } });
   window.addEventListener('pagehide', () => { saveThreadsNow(state.threads.slice(0, 200)); });
-  if (getEndpoints().length) await enterApp();
+  if (!desktop) remotePhone = initRemotePhone({ $, esc, store, toast, renderMarkdown, platform: isNativeApp() ? 'app' : 'web' });
+  if (desktop?.remote) initRemoteHostUi().catch((e) => console.warn('control remoto', e));
+  // controlar un PC no necesita API propia: un enlace de emparejamiento o un PC ya emparejado entran directos
+  const wantsRemote = !!remotePhone && (remotePhone.fromLink || (!getEndpoints().length && store.get('remotePCs', []).length));
+  if (getEndpoints().length || wantsRemote) await enterApp();
   else showSplash();
+  if (wantsRemote) setMode('remote');
+  $('#splash-remote')?.addEventListener('click', async () => { await enterApp(); setMode('remote'); });
   setTimeout(() => checkUpdate(), 1500); // escritorio y móvil, también antes de conectar una API
 })();
 

@@ -386,6 +386,31 @@ ipcMain.handle('plugins:installFolder', async () => {
 ipcMain.handle('plugins:setEnabled', (_e, id, on) => plugins().setEnabled(String(id), !!on));
 ipcMain.handle('plugins:remove', (_e, id) => plugins().remove(String(id)));
 
+/* ---------------- control remoto desde el móvil ---------------- */
+// Móviles emparejados (con su clave) y ajustes en <userData>/remote.json, cifrado con el llavero del sistema.
+const REMOTE_FILE = () => path.join(app.getPath('userData'), 'remote.json');
+const remoteLan = require('./lib/remote-lan').create({ onEvent: (ev) => win?.webContents.send('remote:lan', ev) });
+ipcMain.handle('remote:load', async () => {
+  try {
+    const j = JSON.parse(await fs.readFile(REMOTE_FILE(), 'utf8'));
+    return j.enc ? JSON.parse(decrypt(j.enc)) : j.data || {};
+  } catch { return {}; }
+});
+ipcMain.handle('remote:save', async (_e, data) => {
+  const text = JSON.stringify(data ?? {});
+  if (text.length > 200000) throw new Error('datos del control remoto demasiado grandes');
+  const body = safeStorage.isEncryptionAvailable() ? { enc: encrypt(text) } : { data: JSON.parse(text) };
+  await fs.writeFile(REMOTE_FILE(), JSON.stringify(body), 'utf8');
+  return true;
+});
+ipcMain.handle('remote:lanStart', (_e, port) => remoteLan.start(Number(port) || undefined));
+ipcMain.handle('remote:lanStop', () => remoteLan.stop());
+ipcMain.handle('remote:lanStatus', () => remoteLan.status());
+ipcMain.handle('remote:lanSend', (_e, conn, text) => remoteLan.send(Number(conn), String(text)));
+ipcMain.handle('remote:lanClose', (_e, conn) => remoteLan.close(Number(conn)));
+ipcMain.handle('remote:qr', (_e, text) => require('qrcode').toDataURL(String(text).slice(0, 2000), { margin: 2, scale: 6, errorCorrectionLevel: 'M', color: { dark: '#000000', light: '#f2f1ec' } }));
+app.on('before-quit', () => remoteLan.stop());
+
 app.whenReady().then(() => {
   createWindow();
   app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); });

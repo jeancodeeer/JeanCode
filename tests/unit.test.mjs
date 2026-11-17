@@ -1082,3 +1082,105 @@ test('plugins: un "name" malicioso no sale de la carpeta de plugins', async () =
   await p.remove('..'); // slug('..') = 'plugin': nunca la carpeta padre
   assert.ok(fsx.existsSync(join(parent, 'centinela.txt')));
 });
+/* ---------------- control remoto: cifrado, sesión y transportes ---------------- */
+const RC = await import('../web/js/remote/crypto.js');
+const RL = await import('../web/js/remote/link.js');
+
+test('remoto: cifrado E2E, saludo, secuencia, manipulación y otra sala', async () => {
+  const secret = RC.b64u(RC.randomBytes(32));
+  const a = await RC.deriveKeys(secret);
+  const b = await RC.deriveKeys(RC.unb64u(secret));
+  assert.equal(a.room, b.room); assert.match(a.room, /^[0-9a-f]{32}$/);
+  assert.notEqual(a.room, (await RC.deriveKeys(RC.randomBytes(32))).room);
+  const phone = new RC.Session(a.key, 'phone');
+  const host = new RC.Session(b.key, 'host');
+  const [h, welcome] = await host.accept(await phone.hello({ name: 'Pixel' }));
+  assert.equal(h.name, 'Pixel');
+  await phone.welcome(welcome);
+  const f1 = await phone.wrap({ type: 'send', text: 'hola' });
+  assert.ok(!JSON.stringify(f1).includes('hola'), 'el contenido no viaja en claro');
+  assert.deepEqual(await host.unwrap(f1), { type: 'send', text: 'hola' });
+  await assert.rejects(host.unwrap(f1), /repetido/, 'un marco grabado no se puede repetir');
+  await assert.rejects(phone.unwrap(f1), /./, 'ni devolverse en sentido contrario');
+  const f2 = await phone.wrap({ type: 'stop' });
+  const tampered = { ...f2, ct: f2.ct.slice(0, -4) + (f2.ct.endsWith('AAAA') ? 'BBBB' : 'AAAA') };
+  await assert.rejects(host.unwrap(tampered), /./, 'manipulado: se rechaza');
+  // otra conexión con la misma clave no acepta marcos de esta
+  const host2 = new RC.Session(b.key, 'host');
+  const phone2 = new RC.Session(a.key, 'phone');
+  await phone2.welcome((await host2.accept(await phone2.hello()))[1]);
+  await assert.rejects(host2.unwrap(await phone.wrap({ type: 'x' })), /./, 'marcos de otra sesión: rechazados');
+  // saludo caducado
+  const old = new RC.Session(a.key, 'phone');
+  const realNow = Date.now; Date.now = () => realNow() - 10 * 60000;
+  const stale = await old.hello();
+  Date.now = realNow;
+  await assert.rejects(new RC.Session(b.key, 'host').accept(stale), /caducado/);
+  // emparejamiento
+  const code = RC.encodePairing({ host: 'h1', name: 'PC', secret, lan: ['ws://192.168.1.5:47321', 'javascript:alert(1)'], worker: 'https://x.workers.dev', exp: Date.now() + 60000 });
+  const p = RC.decodePairing(`https://jeancodeeer.github.io/JeanCode/#pair=${code}`);
+  assert.deepEqual(p.lan, ['ws://192.168.1.5:47321'], 'solo URLs ws(s) válidas');
+  assert.equal(p.worker, 'https://x.workers.dev');
+  assert.throws(() => RC.decodePairing(RC.encodePairing({ host: 'h', secret, exp: Date.now() - 1 })), /caducó/);
+  assert.throws(() => RC.decodePairing('basura'), /no es válido/);
+});
+
+/** WebSocket simulado: las URLs se resuelven contra `servers` (url → (serverPipe) => void). */
+function fakeNet(servers) {
+  return class FakeWS {
+    constructor(url) {
+      this.readyState = 0;
+      const route = Object.keys(servers).find((k) => url.startsWith(k));
+      setTimeout(() => {
+        if (!route) { this.onerror?.(); this.onclose?.(); return; }
+        const server = new RL.Pipe('lan');
+        server.send = (obj) => setTimeout(() => this.onmessage?.({ data: JSON.stringify(obj) }), 0);
+        server.close = () => { this.readyState = 3; this.onclose?.(); server.ended(); };
+        this.toServer = (text) => setTimeout(() => server.deliver(text), 0);
+        this.serverPipe = server;
+        this.readyState = 1;
+        servers[route](server, url);
+        this.onopen?.();
+      }, 1);
+    }
+    send(text) { this.toServer(text); }
+    close() { this.readyState = 3; this.serverPipe?.ended(); this.onclose?.(); }
+  };
+}
+
+test('remoto: el móvil prueba la Wi-Fi y si no, el relay; mensajes en los dos sentidos y reconexión', async () => {
+  const secret = RC.randomBytes(32);
+  const { key, room } = await RC.deriveKeys(secret);
+  const got = [];
+  const acceptor = new RL.HostAcceptor({
+    rooms: async (r) => (r === room ? { key, id: 'dev1' } : null),
+    onLink: (link, hello) => { got.push(['link', link.kind, hello.name]); link.on('message', (m) => { got.push(['msg', m.type]); link.send({ type: 'echo', of: m.type }); }); },
+    RTC: null,
+  });
+  const lanWS = fakeNet({ 'ws://192.168.1.5:1/r/': (pipe, url) => acceptor.accept(pipe, url.split('/r/')[1]) });
+  const link = await RL.phoneConnect({ secret: RC.b64u(secret), lan: ['ws://192.168.1.9:1', 'ws://192.168.1.5:1'] }, { hello: { name: 'Pixel' }, WS: lanWS, p2p: false });
+  assert.equal(link.kind, 'lan');
+  const echo = new Promise((r) => link.on('message', r));
+  await link.send({ type: 'ping' });
+  assert.deepEqual(await echo, { type: 'echo', of: 'ping' });
+  assert.deepEqual(got.slice(0, 2), [['link', 'lan', 'Pixel'], ['msg', 'ping']]);
+  // sala equivocada: el PC no responde
+  const wrong = await RC.deriveKeys(RC.randomBytes(32));
+  await assert.rejects(RL.phoneConnect({ secret: RC.b64u(RC.randomBytes(32)), lan: ['ws://192.168.1.5:1'] }, { WS: lanWS, p2p: false }).catch((e) => { throw e; }), /./);
+  void wrong;
+  // sin Wi-Fi: relay por el Worker (una sala con un único tubo hacia el PC, como el Durable Object)
+  let hostPipe = null;
+  const relayWS = fakeNet({ 'wss://w.example/remote/': (pipe) => { hostPipe = pipe; acceptor.accept(pipe, room); } });
+  const r1 = await RL.phoneConnect({ secret: RC.b64u(secret), lan: [], worker: 'https://w.example' }, { hello: { name: 'Pixel' }, WS: relayWS, p2p: false });
+  assert.equal(r1.kind, 'relay');
+  const e1 = new Promise((r) => r1.on('message', r));
+  await r1.send({ type: 'state' });
+  assert.equal((await e1).of, 'state');
+  assert.ok(hostPipe);
+  // aviso del Worker: el móvil se fue → la conexión del PC se cierra
+  const closed = new Promise((r) => [...acceptor.links].at(-1).on('close', r));
+  hostPipe.deliver(JSON.stringify({ t: 'peer', state: 'leave' }));
+  await closed;
+  assert.equal(RL.relayUrl('https://w.example', 'abc', 'host', 'k1'), 'wss://w.example/remote/abc?role=host&k=k1');
+  await assert.rejects(RL.phoneConnect({ secret: RC.b64u(secret), lan: [] }, { WS: relayWS }), /Worker/);
+});

@@ -20,3 +20,15 @@ Sin terminal: en el panel de Cloudflare, **Workers → Create → Hello World**,
 - Solo https, sin seguir redirecciones, sin guardar nada. La clave del proveedor viaja sin tocarse; tu `RELAY_KEY` no se reenvía.
 - Mantiene el streaming: las respuestas llegan poco a poco igual que en directo.
 - El plan gratuito de Workers da 100 000 peticiones al día.
+
+## Control remoto del PC desde el móvil
+
+El mismo Worker sirve de punto de encuentro para [manejar el agente del PC desde el móvil](../docs/remote.md):
+`/remote/<sala>` es una sala (Durable Object `RemoteRoom`) que presenta el móvil al PC para la conexión P2P y, si la
+red no la deja, pasa los mensajes. Todo va cifrado de extremo a extremo: el Worker no puede leer nada.
+
+- `npx wrangler deploy` ya crea la sala (está en `wrangler.toml`). Si desplegaste una versión anterior, vuelve a
+  desplegar.
+- Si configuraste `RELAY_KEY`, también se pide para entrar en las salas.
+- Pon la URL del Worker (y la clave) en el PC: **Ajustes → Comportamiento → Control desde el móvil**.
+- Para probarlo sin desplegar: `npx wrangler dev` y, en el PC, `http://127.0.0.1:8787` como URL del Worker.

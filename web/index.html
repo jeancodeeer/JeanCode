@@ -90,6 +90,7 @@
       <div id="splash-msg" class="msg" role="status" aria-live="polite"></div>
       <button class="btn primary big" type="submit" id="splash-go">Conectar</button>
       <button class="btn quiet" type="button" id="splash-local">Usar modelos de esta PC</button>
+      <button class="btn quiet remote-only" type="button" id="splash-remote">Solo quiero controlar mi PC</button>
     </form>
 
     <details class="fold">
@@ -130,6 +131,7 @@
       <button class="mode active" data-mode="chat" role="tab" aria-selected="true">Chat</button>
       <button class="mode web-only" data-mode="code" role="tab" aria-selected="false">Code</button>
       <button class="mode desktop-only" data-mode="agent" role="tab" aria-selected="false" hidden>Agent</button>
+      <button class="mode remote-only" data-mode="remote" role="tab" aria-selected="false">PC</button>
     </nav>
 
     <button class="btn new" id="new-thread"><svg class="i"><use href="#i-plus"/></svg>Nueva conversación</button>
@@ -273,6 +275,48 @@
           <h2 class="empty-title">Agente local</h2>
           <p class="muted">Lee y edita tu carpeta de trabajo, ejecuta comandos con tu permiso y lanza subagentes.</p>
         </div>
+      </div>
+    </section>
+
+    <!-- CONTROL REMOTO: manejar desde el móvil el agente de JeanCode en tu PC -->
+    <section class="view" id="view-remote" hidden>
+      <div class="rm-bar">
+        <span class="rm-status" id="rm-status" role="status" aria-live="polite" data-kind="off">Sin conectar</span>
+        <button class="btn sm" type="button" id="rm-connect" hidden>Conectar</button>
+        <button class="btn ghost sm" type="button" id="rm-disconnect" hidden>Desconectar</button>
+      </div>
+      <div class="rm-pair" id="rm-pair">
+        <h2 class="empty-title">Controla tu PC</h2>
+        <p class="muted">Maneja desde aquí el agente de JeanCode que corre en tu PC: ves lo que hace en vivo, le escribes, lo paras y apruebas sus permisos. En el PC: <strong>Ajustes → Control desde el móvil → Emparejar un móvil</strong>, y escanea el QR con la cámara (o pega el enlace). En la misma Wi-Fi la conexión es directa; desde fuera, P2P cifrado.</p>
+        <ul class="rows" id="rm-pcs"></ul>
+        <div class="row gap wrap">
+          <button class="btn" type="button" id="rm-scan">Escanear QR</button>
+          <form id="rm-pair-form" class="add-form grow">
+            <input id="rm-code" type="text" placeholder="Pega el enlace o el código de emparejamiento" spellcheck="false" autocomplete="off" aria-label="Código de emparejamiento">
+            <button class="btn primary" type="submit">Emparejar</button>
+          </form>
+        </div>
+        <video id="rm-video" class="rm-video" playsinline muted hidden></video>
+      </div>
+      <div class="rm-main" id="rm-main" hidden>
+        <div class="rm-head row gap wrap">
+          <select id="rm-threads" aria-label="Conversación" class="grow"></select>
+          <button class="btn ghost sm" type="button" id="rm-new">Nueva</button>
+        </div>
+        <div class="rm-head row gap wrap">
+          <span class="fine mono grow" id="rm-folder"></span><span class="fine mono" id="rm-model"></span>
+          <select id="rm-agent" aria-label="Modo del agente"><option value="build">BUILD</option><option value="plan">PLAN</option></select>
+          <select id="rm-perm" aria-label="Permisos"><option value="ask">Preguntar todo</option><option value="auto-edit">Editar sin preguntar</option></select>
+        </div>
+        <ul class="rm-todos" id="rm-todos" hidden></ul>
+        <div class="stream rm-stream" id="rm-stream"></div>
+        <div id="rm-confirms" class="rm-confirms" aria-live="assertive"></div>
+        <form class="rm-form row gap" id="rm-form">
+          <textarea id="rm-input" rows="2" class="grow" placeholder="Escribe al agente de tu PC…" aria-label="Mensaje para el PC"></textarea>
+          <span class="fine mono" id="rm-busy" hidden>TRABAJANDO…</span>
+          <button class="btn" type="button" id="rm-stop" hidden>Parar</button>
+          <button class="btn primary" type="submit" id="rm-send">Enviar</button>
+        </form>
       </div>
     </section>
 
@@ -446,6 +490,27 @@
       <textarea id="sys-chat" rows="3" spellcheck="false"></textarea>
     </label>
     <label class="check desktop-only" hidden><input type="checkbox" id="auto-diag" checked> Revisar cada archivo que edite el agente (errores de sintaxis al momento)</label>
+    <h3 class="desktop-only" hidden>Control desde el móvil</h3>
+    <div class="desktop-only" id="remote-host" hidden>
+      <p class="note">Maneja el agente de este PC desde tu móvil (web o app de JeanCode), como Remote Control de Claude Code. Todo va cifrado de extremo a extremo con una clave por móvil. En la misma Wi-Fi la conexión es directa; para usarlo desde fuera hace falta tu <strong>Worker</strong> de Cloudflare (el de la carpeta <code>relay/</code>): intenta P2P y, si la red no lo deja, pasa por él (sin poder leer nada). Solo funciona con JeanCode abierto.</p>
+      <label class="check"><input type="checkbox" id="remote-enabled"> Permitir el control desde móviles emparejados</label>
+      <label class="check"><input type="checkbox" id="remote-lan" checked> Conexión directa en la misma Wi-Fi</label>
+      <div class="row gap wrap">
+        <input id="remote-worker" type="url" class="grow" placeholder="Worker para conectar desde fuera: https://jeancode-relay.tu-usuario.workers.dev" spellcheck="false" aria-label="URL del Worker">
+        <input id="remote-wkey" type="password" placeholder="RELAY_KEY (si la configuraste)" spellcheck="false" autocomplete="off" aria-label="Clave del Worker">
+        <button class="btn" type="button" id="remote-save">Guardar</button>
+      </div>
+      <p class="fine mono" id="remote-status" role="status" aria-live="polite"></p>
+      <div class="row gap wrap"><button class="btn primary" type="button" id="remote-pair">Emparejar un móvil</button></div>
+      <div class="remote-qr" id="remote-qr" hidden>
+        <img id="remote-qr-img" alt="Código QR para emparejar el móvil" width="240" height="240">
+        <div>
+          <p class="note">Escanéalo con la cámara del móvil (abre JeanCode web) o, en la app, con <strong>PC → Escanear QR</strong>. También puedes copiar el enlace. Caduca a los 10 minutos y sirve una sola vez; al usarlo, el PC te pedirá confirmación.</p>
+          <div class="row gap wrap"><button class="btn sm" type="button" id="remote-copy">Copiar enlace</button><button class="btn ghost sm" type="button" id="remote-cancel">Cancelar</button><span class="fine mono" id="remote-exp"></span></div>
+        </div>
+      </div>
+      <ul class="rows" id="remote-devices"></ul>
+    </div>
     <h3 class="desktop-only" hidden>Hooks del usuario</h3>
     <p class="note desktop-only" hidden>Comandos que se ejecutan solos en momentos del agente, en todos tus proyectos, con el mismo formato que el <code>settings.json</code> de Claude Code: eventos <code>PreToolUse</code>, <code>PermissionRequest</code>, <code>PostToolUse</code>, <code>PostToolUseFailure</code>, <code>UserPromptSubmit</code>, <code>Notification</code>, <code>Stop</code>, <code>SubagentStart</code>, <code>SubagentStop</code>, <code>PreCompact</code>, <code>SessionStart</code> y <code>SessionEnd</code>. Las herramientas se llaman como en Claude Code (<code>Bash</code>, <code>Read</code>, <code>Write</code>, <code>Edit</code>…), así que tus hooks de Claude funcionan tal cual. Escribe <code>/hooks</code> en el agente para ver los activos. <a href="https://github.com/jeancodeeer/JeanCode/blob/main/docs/automations.md" target="_blank" rel="noopener">Guía y ejemplos</a>.</p>
     <label class="field desktop-only" hidden><span class="label">settings.json</span>

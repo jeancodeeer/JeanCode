@@ -4,7 +4,7 @@ const CACHE = 'jeancode-1.2.3'; // la fija scripts/version.mjs
 const SHELL = [
   './', 'index.html', 'favicon.svg', 'icons/icon-192.png', 'icons/icon-512.png', 'icons/maskable-512.png', 'manifest.webmanifest',
   'css/fonts.css', 'css/jeancode.css',
-  'js/app.js', 'js/api.js', 'js/agent.js', 'js/code.js', 'js/reasoning.js', 'js/update.js', 'js/run.js', 'js/sandbox.js', 'js/batch.js', 'js/commands.js', 'js/computer.js', 'js/connectors.js', 'js/apps.js', 'js/skills-catalog.js', 'js/plugins-catalog.js', 'js/cron.js', 'js/hooks.js', 'js/automations.js', 'js/history.js', 'js/quality.js', 'js/config.js', 'js/diff.js',
+  'js/app.js', 'js/api.js', 'js/agent.js', 'js/code.js', 'js/reasoning.js', 'js/update.js', 'js/run.js', 'js/sandbox.js', 'js/batch.js', 'js/commands.js', 'js/computer.js', 'js/connectors.js', 'js/apps.js', 'js/skills-catalog.js', 'js/plugins-catalog.js', 'js/cron.js', 'js/remote/crypto.js', 'js/remote/link.js', 'js/remote/host.js', 'js/remote/phone.js', 'js/hooks.js', 'js/automations.js', 'js/history.js', 'js/quality.js', 'js/config.js', 'js/diff.js',
   'js/hf.js', 'js/md.js', 'js/capabilities.js', 'js/providers.js', 'js/router.js', 'js/store.js', 'js/version.js', 'js/zip.js',
   'fonts/IBMPlexMono-400.woff2', 'fonts/IBMPlexMono-500.woff2', 'fonts/IBMPlexMono-700.woff2',
   'fonts/IBMPlexSans-400.woff2', 'fonts/IBMPlexSans-500.woff2', 'fonts/IBMPlexSans-700.woff2',
