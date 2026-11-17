@@ -166,6 +166,19 @@ public class JeanDevicePlugin extends Plugin {
         });
     }
 
+    /** DNS del teléfono para webfetch: todas las direcciones del nombre (se rechaza si alguna es privada). */
+    @PluginMethod
+    public void resolve(PluginCall call) {
+        String host = call.getString("host", "");
+        async(call, () -> {
+            com.getcapacitor.JSArray list = new com.getcapacitor.JSArray();
+            for (java.net.InetAddress a : java.net.InetAddress.getAllByName(host)) list.put(a.getHostAddress());
+            JSObject r = new JSObject();
+            r.put("addresses", list);
+            return r;
+        });
+    }
+
     @PluginMethod
     public void screenshot(PluginCall call) {
         int maxWidth = call.getInt("maxWidth", 720);

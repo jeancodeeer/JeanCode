@@ -52,22 +52,42 @@ export function isPrivateHost(host) {
   return false;
 }
 
-/** webfetch del móvil: misma salida que el del escritorio. fetchText(url) → { status, url, type, text } (red nativa). */
-export async function webfetch(url, fetchText) {
-  if (!fetchText) return 'ERROR: webfetch no está disponible aquí.';
+const PRIVATE = 'ERROR: por seguridad, webfetch no abre direcciones locales ni de redes privadas.';
+
+/**
+ * webfetch del móvil: misma salida y mismas defensas que el del escritorio (assertPublic).
+ *   fetchText(url) → { status, location, type, text }   SIN seguir redirecciones (red nativa)
+ *   resolve(host)  → [direcciones IP]                     DNS del propio teléfono
+ * Antes de CADA petición (también tras cada redirección, hasta 5) se comprueba el protocolo, el nombre y TODAS las
+ * direcciones a las que resuelve: un nombre que apunta a 127.0.0.1 o a la red de casa no se abre.
+ */
+export async function webfetch(url, fetchText, resolve) {
+  if (!fetchText || !resolve) return 'ERROR: webfetch no está disponible aquí.';
   let u;
   try { u = new URL(url); } catch { return 'ERROR: URL inválida'; }
-  if (!['http:', 'https:'].includes(u.protocol)) return 'ERROR: solo http y https';
-  if (isPrivateHost(u.hostname)) return 'ERROR: por seguridad, webfetch no abre direcciones locales ni de redes privadas.';
-  const r = await fetchText(u.href);
-  if (r.url && isPrivateHost(new URL(r.url).hostname)) return 'ERROR: la página redirigió a una dirección privada; no se lee.';
+  let r;
+  for (let hop = 0; ; hop++) {
+    if (!['http:', 'https:'].includes(u.protocol)) return 'ERROR: solo http y https';
+    if (isPrivateHost(u.hostname)) return hop ? 'ERROR: la página redirigió a una dirección privada; no se lee.' : PRIVATE;
+    const host = u.hostname.replace(/^\[|\]$/g, '');
+    if (!/^[\d.]+$/.test(host) && !host.includes(':')) {
+      let addrs;
+      try { addrs = await resolve(host); } catch (e) { return `ERROR: no se pudo resolver ${host} (${e.message})`; }
+      if (!addrs?.length) return `ERROR: ${host} no existe`;
+      if (addrs.some(isPrivateHost)) return `${PRIVATE.replace(/\.$/, '')}: ${host} apunta a ${addrs.find(isPrivateHost)}.`;
+    }
+    r = await fetchText(u.href);
+    if (!(r.status >= 300 && r.status < 400 && r.location)) break;
+    if (hop >= 4) return 'ERROR: demasiadas redirecciones';
+    u = new URL(r.location, u);
+  }
   let text = String(r.text ?? '');
   if (/html/i.test(r.type || '') || /^\s*<(!doctype|html)/i.test(text)) {
     text = text.replace(/<(script|style|noscript)[\s\S]*?<\/\1>/gi, ' ').replace(/<br\s*\/?>|<\/(p|div|h\d|li|tr)>/gi, '\n')
       .replace(/<[^>]+>/g, ' ').replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>')
       .replace(/[ \t]+/g, ' ').replace(/\n\s*\n+/g, '\n\n');
   }
-  return `${r.status} ${r.url || u.href}\n\n${text.trim().slice(0, 40000)}`;
+  return `${r.status} ${u.href}\n\n${text.trim().slice(0, 40000)}`;
 }
 
 /** Un "desktop" para agent.js sobre el ayudante del teléfono. root = carpeta de trabajo (p. ej. /sdcard/JeanCode). */
@@ -215,7 +235,7 @@ export function createPhoneDesktop(dev, { fetchText = null } = {}) {
 
   return {
     fs, shell, proc,
-    web: { fetch: (url) => webfetch(url, fetchText) },
+    web: { fetch: (url) => webfetch(url, fetchText, dev.resolve) },
     skills: { list: async () => [], read: async () => { throw new Error('las skills están en el PC'); } },
     system: {
       async info() {

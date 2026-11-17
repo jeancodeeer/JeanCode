@@ -1276,16 +1276,35 @@ test('móvil: el agente usa el ayudante del iPhone (Python real) para archivos y
 test('móvil: webfetch con la red nativa, como el del escritorio, sin direcciones privadas', async () => {
   for (const h of ['localhost', '127.0.0.1', '10.1.2.3', '192.168.1.5', '172.20.0.1', '169.254.169.254', '[::1]', 'fd00::1', 'impresora.local', '100.64.0.1']) assert.equal(MS.isPrivateHost(h), true, h);
   for (const h of ['example.com', '8.8.8.8', '172.32.0.1', 'docs.python.org']) assert.equal(MS.isPrivateHost(h), false, h);
+  const html = '<html><head><style>p{}</style><script>alert(1)</script></head><body><h1>Título</h1><p>Uno &amp; dos</p></body></html>';
   const pages = {
-    'https://docs.example.com/x': { status: 200, url: 'https://docs.example.com/x', type: 'text/html', text: '<html><head><style>p{}</style><script>alert(1)</script></head><body><h1>Título</h1><p>Uno &amp; dos</p></body></html>' },
-    'https://corto.example/r': { status: 200, url: 'http://192.168.1.1/admin', type: 'text/html', text: 'router' },
+    'https://docs.example.com/x': { status: 200, type: 'text/html', text: html },
+    'https://corto.example/r': { status: 302, location: 'http://192.168.1.1/admin' },
+    'https://salto.example/a': { status: 301, location: '/b' },
+    'https://salto.example/b': { status: 302, location: 'https://docs.example.com/x' },
+    'https://bucle.example/': { status: 302, location: 'https://bucle.example/' },
+    'https://cuela.example/r': { status: 302, location: 'https://interno.example/' },
   };
-  const fetchText = async (u) => pages[u];
-  assert.equal(await MS.webfetch('https://docs.example.com/x', fetchText), '200 https://docs.example.com/x\n\nTítulo\n Uno & dos');
-  assert.match(await MS.webfetch('http://192.168.1.1/admin', fetchText), /redes privadas/);
-  assert.match(await MS.webfetch('https://corto.example/r', fetchText), /redirigió a una dirección privada/);
-  assert.match(await MS.webfetch('file:///etc/passwd', fetchText), /solo http/);
-  assert.match(await MS.webfetch('https://x.example', null), /no está disponible/);
+  const asked = [];
+  const fetchText = async (u) => { asked.push(u); return pages[u]; };
+  // DNS: interno.example y rebind.nip.io apuntan a direcciones privadas
+  const dns = { 'docs.example.com': ['93.184.215.14'], 'corto.example': ['93.184.215.15'], 'salto.example': ['93.184.215.16'], 'bucle.example': ['93.184.215.17'],
+    'cuela.example': ['93.184.215.18'], 'interno.example': ['8.8.8.8', '10.0.0.5'], '127.0.0.1.nip.io': ['127.0.0.1'] };
+  const resolve = async (h) => dns[h] || [];
+  assert.equal(await MS.webfetch('https://docs.example.com/x', fetchText, resolve), '200 https://docs.example.com/x\n\nTítulo\n Uno & dos');
+  assert.match(await MS.webfetch('http://192.168.1.1/admin', fetchText, resolve), /redes privadas/);
+  assert.match(await MS.webfetch('https://127.0.0.1.nip.io/', fetchText, resolve), /redes privadas: 127\.0\.0\.1\.nip\.io apunta a 127\.0\.0\.1\./, 'un nombre que resuelve a una IP local');
+  asked.length = 0;
+  assert.match(await MS.webfetch('https://corto.example/r', fetchText, resolve), /redirigió a una dirección privada/);
+  assert.deepEqual(asked, ['https://corto.example/r'], 'la dirección privada de la redirección NO se llega a pedir');
+  asked.length = 0;
+  assert.match(await MS.webfetch('https://cuela.example/r', fetchText, resolve), /interno\.example apunta a 10\.0\.0\.5/, 'basta con UNA dirección privada');
+  assert.deepEqual(asked, ['https://cuela.example/r']);
+  assert.equal(await MS.webfetch('https://salto.example/a', fetchText, resolve), '200 https://docs.example.com/x\n\nTítulo\n Uno & dos', 'redirecciones públicas: se siguen');
+  assert.match(await MS.webfetch('https://bucle.example/', fetchText, resolve), /demasiadas redirecciones/);
+  assert.match(await MS.webfetch('https://no-existe.example/', fetchText, resolve), /no existe/);
+  assert.match(await MS.webfetch('file:///etc/passwd', fetchText, resolve), /solo http/);
+  assert.match(await MS.webfetch('https://x.example', null, resolve), /no está disponible/);
 });
 
 test('móvil: procesos en segundo plano (arrancar, salida, código de salida y parar el grupo)', async (t) => {
@@ -1314,6 +1333,9 @@ test('móvil: procesos en segundo plano (arrancar, salida, código de salida y p
   const quick = await d.proc.start(root, 'echo listo; exit 3');
   assert.match(quick, /^p2 iniciado: .*\n\(terminó enseguida, salida 3\)\nlisto$/);
   assert.match(await d.proc.output('p2'), /^p2 \(terminado, salida 3\)/);
+  // DNS real a través del ayudante (webfetch comprueba cada dirección antes de pedir)
+  assert.ok((await dev.resolve('localhost')).some((a) => a === '127.0.0.1' || a === '::1'));
+  await assert.rejects(dev.resolve('no-existe.invalid'), /no se pudo resolver/);
 });
 
 test('móvil: pantalla del iPhone (jeancode-hid y uiopen): coordenadas, escapes y apps', async () => {

@@ -17,6 +17,7 @@ import hmac
 import json
 import os
 import secrets
+import socket
 import subprocess
 import sys
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -102,6 +103,13 @@ class Handler(BaseHTTPRequestHandler):
                 return self.reply(200, {'ok': True, 'screen': screen, 'user': run('id', 5000)['out'].strip(), 'system': run('uname -srm; sw_vers 2>/dev/null', 5000)['out'].strip()})
             if self.path == '/exec':
                 return self.reply(200, run(str(data.get('cmd', '')), data.get('timeout')))
+            if self.path == '/resolve':
+                # DNS del iPhone para webfetch: la app rechaza el nombre si alguna dirección es privada
+                try:
+                    infos = socket.getaddrinfo(str(data.get('host', '')), None)
+                except socket.gaierror as e:
+                    return self.reply(200, {'error': f'no se pudo resolver: {e.strerror}'})
+                return self.reply(200, {'addresses': sorted({i[4][0] for i in infos})})
             if self.path == '/read':
                 path = str(data.get('path', ''))
                 limit = min(int(data.get('maxBytes') or MAX_BODY), MAX_BODY)

@@ -27,6 +27,7 @@ function androidBackend() {
     readFile: async (path) => (await P.readFile({ path, maxBytes: MAX_READ })).b64,
     writeFile: (path, b64) => P.writeFile({ path, b64 }),
     screenshot: (maxWidth = 720) => P.screenshot({ maxWidth }),
+    resolve: async (host) => (await P.resolve({ host })).addresses || [], // DNS del teléfono (webfetch)
     screen: true,
   };
 }
@@ -50,6 +51,7 @@ export function iosBackend({ url = IOS_HELPER_URL, token, http }) {
     exec: (cmd, timeoutMs = 120000) => call('/exec', { cmd, timeout: timeoutMs }),
     readFile: async (path) => (await call('/read', { path, maxBytes: MAX_READ })).b64,
     writeFile: (path, b64) => call('/write', { path, b64 }),
+    resolve: async (host) => (await call('/resolve', { host })).addresses || [], // DNS del iPhone (webfetch)
     /** Captura con jeancode-hid (IOSurface) reducida a maxWidth: { b64, mime, width, height, realWidth, realHeight } | null */
     screenshot: async (maxWidth = 540) => {
       const r = await dev.exec(`mkdir -p ${sq(SHOT.replace(/\/[^/]*$/, ''))} && jeancode-hid screenshot ${sq(SHOT)} ${Math.round(maxWidth)}`, 20000);
@@ -74,16 +76,16 @@ export async function nativePost(url, body, headers = {}) {
   return r.json();
 }
 
-/** GET de una página para webfetch: red nativa de la app (sin CORS). → { status, url, type, text } */
+/**
+ * GET de una página para webfetch con la red nativa de la app (sin CORS) y SIN seguir redirecciones: webfetch las
+ * sigue una a una, comprobando cada destino. → { status, location, type, text }
+ */
 export async function nativeGetText(url) {
   const H = cap()?.Plugins?.CapacitorHttp;
-  if (H) {
-    const r = await H.request({ url, method: 'GET', headers: { 'User-Agent': 'JeanCode' }, responseType: 'text', connectTimeout: 15000, readTimeout: 20000 });
-    const type = Object.entries(r.headers || {}).find(([k]) => k.toLowerCase() === 'content-type')?.[1] || '';
-    return { status: r.status, url: r.url || url, type, text: typeof r.data === 'string' ? r.data : JSON.stringify(r.data) };
-  }
-  const r = await fetch(url, { signal: AbortSignal.timeout(20000) });
-  return { status: r.status, url: r.url, type: r.headers.get('content-type') || '', text: await r.text() };
+  if (!H) throw new Error('la red nativa no está disponible');
+  const r = await H.request({ url, method: 'GET', headers: { 'User-Agent': 'JeanCode' }, responseType: 'text', connectTimeout: 15000, readTimeout: 20000, disableRedirects: true });
+  const header = (name) => Object.entries(r.headers || {}).find(([k]) => k.toLowerCase() === name)?.[1] || '';
+  return { status: r.status, location: header('location'), type: header('content-type'), text: typeof r.data === 'string' ? r.data : JSON.stringify(r.data) };
 }
 
 /** El backend de este teléfono, o null si la app no corre en Android/iOS. */
