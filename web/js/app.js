@@ -1484,7 +1484,7 @@ async function runAutomation(task, { extra = '', trigger = 'schedule' } = {}) {
     chat: (o) => routedChat({ id: o.model, ep: o.ep }, o, { models: state.routable || state.models, mode: 'agent', endpoints: getEndpoints(), decision, need: { tools: true } }).then((r) => r.text),
     confirm: async (o) => { denied.push(`${o.title}: ${String(o.command || o.path || '').split('\n')[0].slice(0, 120)}`); return false; },
     isAllowed: (cmd) => !UNSAFE_CMD.test(cmd.trim()) && allowList.includes(cmd.trim()), allowCommand: () => {},
-    scheduler: schedulerFor(t, task.folder),
+    scheduler: schedulerFor(t, task.folder, perm),
     onEvent: (ev) => {
       if (ev.type === 'tool-end' && !ev.nested) tools.push(`${ev.call.tool}${/^(ERROR|DENEGADO|RECHAZADO|BLOQUEADO)/.test(String(ev.result)) ? ' ✕' : ' ✓'}`);
       if (ev.type === 'hook') collect(ev.event, ev);
@@ -1503,7 +1503,8 @@ async function runAutomation(task, { extra = '', trigger = 'schedule' } = {}) {
 }
 
 /** Lo que el agente puede hacer con las tareas programadas (schedule_task, send_later, schedule_wakeup). */
-function schedulerFor(t, folder) {
+/** perm = modo de permisos de QUIEN programa: lo que cree nunca tendrá más permisos que él. */
+function schedulerFor(t, folder, perm) {
   if (!automations) return null;
   const pick = (a) => {
     if (a.cron) return { type: 'cron', cron: String(a.cron) };
@@ -1554,7 +1555,7 @@ function schedulerFor(t, folder) {
       if (!Number.isFinite(at) || (!a.at && !a.delay_minutes)) return 'ERROR: indica "delay_minutes" (mínimo 1) o "at" (fecha ISO).';
       const msg = String(a.message || '').trim();
       if (!msg) return 'ERROR: falta "message".';
-      const x = automations.create({ name: a.name || `↩ ${msg.slice(0, 40)}`, prompt: msg, folder, schedule: { type: 'once', at }, perm: state.perm === 'plan' ? 'read' : 'edit',
+      const x = automations.create({ name: a.name || `↩ ${msg.slice(0, 40)}`, prompt: msg, folder, schedule: { type: 'once', at }, perm: perm === 'auto-edit' ? 'edit' : 'read',
         target: 'same', threadId: t.id, kind: 'send_later', notify: true }, { by: 'agent' });
       return `Programado: este mensaje volverá a esta conversación ${fmtWhen(x.schedule.at)}. Se puede cancelar en Automatizaciones.`;
     },
@@ -2097,8 +2098,10 @@ async function hookEngine(project, o = {}) {
   const folder = o.folder || state.workspace;
   const global = desktop.hooks ? await desktop.hooks.global().catch(() => null) : null;
   if (global?.error) addMessage('system', `Los hooks del usuario no son válidos (${global.error}): Ajustes → Comportamiento.`);
-  const off = global?.disableAll || project?.disableAll; // "disableAllHooks": true en cualquier settings los apaga todos
-  const sources = off ? [] : [{ hooks: global?.hooks, label: 'usuario' }, ...(project?.sources || [])];
+  // "disableAllHooks": true del usuario apaga todos; el de un proyecto solo apaga los del proyecto
+  // (un repositorio ajeno no puede desactivar tus hooks de usuario)
+  const off = !!global?.disableAll;
+  const sources = off ? [] : [{ hooks: global?.hooks, label: 'usuario' }, ...(project?.disableAll ? [] : project?.sources || [])];
   const engine = createHooks(sources, {
     exec: (command, input, timeout) => desktop.hooks.exec(folder, command, input, timeout),
     llm: (prompt, timeout) => hookLlm(prompt, timeout, o.model),
@@ -2219,7 +2222,7 @@ async function sendAgent(t, m, text, turn) {
     // el agente pide cada paso al enrutador; si cambia de backend, los pasos siguientes siguen en el nuevo
     chat: (o) => routedChat({ id: o.model, ep: o.ep }, o, routeCtx((to) => { ctx.ep = to.ep; ctx.model = to.id; })).then((r) => r.text),
     signal: state.abort.signal, confirm: confirmWithAttention, isAllowed, allowCommand, hooks: engine, computer,
-    notify: (type, message) => hookNotify(t.id, type, message), scheduler: schedulerFor(t, state.workspace),
+    notify: (type, message) => hookNotify(t.id, type, message), scheduler: schedulerFor(t, state.workspace, state.agent === 'plan' ? 'plan' : state.perm),
     autoDiagnostics: store.get('autoDiag', true), mcp: mcpTools,
     onEvent: (ev) => {
       if (ev.type === 'usage') { addUsage(t, ev.usage, { ep: ctx.ep, id: ctx.model }); if (row) setUsage(row, ev.usage); }

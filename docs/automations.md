@@ -18,7 +18,7 @@ reglas («nunca toques `.env`»), formatear, avisar o dar contexto sin depender 
 | Proyecto | `.claude/settings.json`, `.claude/settings.local.json`, `.jeancode/settings.json`, `.jeancode/settings.local.json` | se pide la primera vez y cada vez que cambian |
 | Proyecto (antiguo) | `.jeancode/hooks.json` con el formato de JeanCode ≤ 1.2 (`pre_tool`, `post_edit`…) | igual; se convierte solo |
 
-Se suman todos (el mismo comando en dos archivos corre una vez). `"disableAllHooks": true` en cualquiera los apaga.
+Se suman todos (el mismo comando en dos archivos corre una vez). `"disableAllHooks": true` en tus ajustes los apaga todos; en un proyecto solo apaga los de ese proyecto (un repositorio ajeno no puede desactivar tus hooks).
 `/hooks` en el agente muestra los activos y de dónde vienen. Los **plugins** no aportan hooks: nunca se ejecutan.
 
 ```json
@@ -143,7 +143,7 @@ Cómo se ejecutan (igual que una sesión programada de Claude):
 | HERRAMIENTA | EQUIVALE EN CLAUDE A | QUÉ HACE |
 |---|---|---|
 | `schedule_task` | las herramientas de tareas programadas | `list`, `runs` (historial), `create`, `update`, `delete`, `run` (con `text` extra). Crear, cambiar, borrar y lanzar **piden tu permiso** con la tarea completa a la vista; en PLAN solo lista |
-| `send_later` | `send_later` | un mensaje que vuelve a **esta** conversación dentro de X minutos o a una hora. Si la tienes abierta, se entrega como un mensaje normal cuando el agente quede libre |
+| `send_later` | `send_later` | un mensaje que vuelve a **esta** conversación dentro de X minutos o a una hora. Si la tienes abierta, se entrega como un mensaje normal cuando el agente quede libre; si no, corre sin supervisión con *Puede editar* solo si se programó en modo «Editar sin preguntar» (nunca con más permisos que quien lo programó) |
 | `schedule_wakeup` | `ScheduleWakeup` | en un `/loop` sin intervalo, cuándo repetir (60–3600 s) |
 
 Las tareas creadas por el agente se marcan como tales en el panel; como mucho 20 activas.
