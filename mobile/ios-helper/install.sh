@@ -7,6 +7,9 @@ PREFIX=""
 [ -d /var/jb ] && PREFIX=/var/jb
 PY="$PREFIX/usr/bin/python3"
 [ -x "$PY" ] || { echo "Falta python3: instálalo desde Sileo (paquete python3) y vuelve a ejecutar."; exit 1; }
+# webfetch usa HTTPS verificado: hacen falta los certificados raíz (paquete ca-certificates de Procursus)
+"$PY" -c "import os,ssl; p=ssl.get_default_verify_paths(); raise SystemExit(0 if (p.cafile and os.path.exists(p.cafile)) or (p.capath and os.path.isdir(p.capath)) else 1)" \
+  || echo "Aviso: python3 no encuentra certificados raíz; instala «ca-certificates» desde Sileo para que webfetch abra páginas HTTPS."
 HERE=$(cd "$(dirname "$0")" && pwd)
 install -d "$PREFIX/usr/libexec/jeancode"
 install -m 755 "$HERE/jeancode_helper.py" "$PREFIX/usr/libexec/jeancode/jeancode_helper.py"

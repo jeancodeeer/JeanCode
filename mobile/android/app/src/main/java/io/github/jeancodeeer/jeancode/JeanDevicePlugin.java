@@ -179,6 +179,59 @@ public class JeanDevicePlugin extends Plugin {
         });
     }
 
+    private static final int MAX_FETCH = 5 * 1024 * 1024;
+    private static final java.util.regex.Pattern IP_LITERAL = java.util.regex.Pattern.compile("^([0-9]{1,3}([.][0-9]{1,3}){3}|[0-9a-fA-F:.]*:[0-9a-fA-F:.]*)$");
+    private final okhttp3.OkHttpClient http = new okhttp3.OkHttpClient.Builder()
+        .followRedirects(false).followSslRedirects(false) // webfetch sigue y comprueba cada redirección
+        .proxy(java.net.Proxy.NO_PROXY) // con un proxy, el que resolvería el nombre sería él
+        .connectTimeout(15, TimeUnit.SECONDS).readTimeout(20, TimeUnit.SECONDS).callTimeout(40, TimeUnit.SECONDS)
+        .build();
+
+    /**
+     * GET para webfetch conectando SOLO a las IP que la app ya comprobó (no vuelve a preguntar al DNS, así que un
+     * DNS que cambie de respuesta no cuela una dirección privada). TLS sigue verificando el certificado con el nombre.
+     * No sigue redirecciones. → { status, location, type, text }
+     */
+    @PluginMethod
+    public void fetch(PluginCall call) {
+        String url = call.getString("url", "");
+        com.getcapacitor.JSArray list = call.getArray("addresses", new com.getcapacitor.JSArray());
+        async(call, () -> {
+            okhttp3.HttpUrl u = okhttp3.HttpUrl.parse(url);
+            if (u == null || !(u.scheme().equals("http") || u.scheme().equals("https"))) throw new IllegalArgumentException("solo http y https");
+            java.util.List<java.net.InetAddress> pinned = new java.util.ArrayList<>();
+            for (int i = 0; i < list.length(); i++) {
+                String ip = list.getString(i);
+                // solo IP literales: getByName con una IP no consulta el DNS
+                if (!IP_LITERAL.matcher(ip).matches()) throw new IllegalArgumentException("dirección no válida: " + ip);
+                pinned.add(java.net.InetAddress.getByName(ip));
+            }
+            if (pinned.isEmpty()) throw new IllegalArgumentException("sin direcciones comprobadas");
+            final String host = u.host();
+            okhttp3.OkHttpClient client = http.newBuilder().dns(h -> {
+                if (!h.equalsIgnoreCase(host)) throw new java.net.UnknownHostException("nombre no comprobado: " + h);
+                return pinned;
+            }).build();
+            okhttp3.Request req = new okhttp3.Request.Builder().url(u).header("User-Agent", "JeanCode").header("Accept", "*/*").get().build();
+            try (okhttp3.Response res = client.newCall(req).execute()) {
+                JSObject r = new JSObject();
+                r.put("status", res.code());
+                r.put("location", res.header("Location", ""));
+                r.put("type", res.header("Content-Type", ""));
+                okhttp3.ResponseBody body = res.body();
+                String text = "";
+                if (body != null) {
+                    okio.BufferedSource src = body.source();
+                    src.request(MAX_FETCH); // como mucho 5 MB (ya descomprimido por OkHttp)
+                    long n = Math.min(src.getBuffer().size(), MAX_FETCH);
+                    text = src.getBuffer().readString(n, java.nio.charset.StandardCharsets.UTF_8);
+                }
+                r.put("text", text);
+                return r;
+            }
+        });
+    }
+
     @PluginMethod
     public void screenshot(PluginCall call) {
         int maxWidth = call.getInt("maxWidth", 720);

@@ -46,9 +46,10 @@ export function isPrivateHost(host) {
   const v4 = h.match(/^(\d+)\.(\d+)\.(\d+)\.(\d+)$/);
   if (v4) {
     const [a, b] = [+v4[1], +v4[2]];
-    return a === 10 || a === 127 || a === 0 || (a === 169 && b === 254) || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) || (a === 100 && b >= 64 && b <= 127) || a >= 224;
+    return a === 10 || a === 127 || a === 0 || (a === 169 && b === 254) || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) || (a === 100 && b >= 64 && b <= 127) || (a === 192 && b === 0) || (a === 198 && (b === 18 || b === 19)) || a >= 224;
   }
-  if (h.includes(':')) return h === '::1' || h === '::' || /^(fc|fd|fe8|fe9|fea|feb)/.test(h) || h.startsWith('::ffff:');
+  // IPv6: loopback, sin especificar, únicas locales, enlace local, multicast, IPv4 mapeada, NAT64 y 6to4
+  if (h.includes(':')) return h === '::1' || h === '::' || /^(fc|fd|fe8|fe9|fea|feb|ff)/.test(h) || h.startsWith('::ffff:') || h.startsWith('64:ff9b:') || h.startsWith('2002:');
   return false;
 }
 
@@ -56,27 +57,31 @@ const PRIVATE = 'ERROR: por seguridad, webfetch no abre direcciones locales ni d
 
 /**
  * webfetch del móvil: misma salida y mismas defensas que el del escritorio (assertPublic).
- *   fetchText(url) → { status, location, type, text }   SIN seguir redirecciones (red nativa)
- *   resolve(host)  → [direcciones IP]                     DNS del propio teléfono
+ *   fetchPinned(url, addresses) → { status, location, type, text }   red nativa, SIN seguir redirecciones, y
+ *                                 conectando SOLO a esas IP (no vuelve a resolver el nombre)
+ *   resolve(host)               → [direcciones IP]                     DNS del propio teléfono
  * Antes de CADA petición (también tras cada redirección, hasta 5) se comprueba el protocolo, el nombre y TODAS las
- * direcciones a las que resuelve: un nombre que apunta a 127.0.0.1 o a la red de casa no se abre.
+ * direcciones a las que resuelve: un nombre que apunta a 127.0.0.1 o a la red de casa no se abre. La conexión va a
+ * las direcciones ya comprobadas, así que un DNS que cambie de respuesta entre la comprobación y la petición
+ * (DNS rebinding) no puede colar una dirección privada.
  */
-export async function webfetch(url, fetchText, resolve) {
-  if (!fetchText || !resolve) return 'ERROR: webfetch no está disponible aquí.';
+export async function webfetch(url, fetchPinned, resolve) {
+  if (!fetchPinned || !resolve) return 'ERROR: webfetch no está disponible aquí.';
   let u;
   try { u = new URL(url); } catch { return 'ERROR: URL inválida'; }
   let r;
   for (let hop = 0; ; hop++) {
     if (!['http:', 'https:'].includes(u.protocol)) return 'ERROR: solo http y https';
+    if (u.username || u.password) return 'ERROR: URL con usuario o contraseña; no se abre';
     if (isPrivateHost(u.hostname)) return hop ? 'ERROR: la página redirigió a una dirección privada; no se lee.' : PRIVATE;
     const host = u.hostname.replace(/^\[|\]$/g, '');
+    let addrs = [host];
     if (!/^[\d.]+$/.test(host) && !host.includes(':')) {
-      let addrs;
       try { addrs = await resolve(host); } catch (e) { return `ERROR: no se pudo resolver ${host} (${e.message})`; }
       if (!addrs?.length) return `ERROR: ${host} no existe`;
       if (addrs.some(isPrivateHost)) return `${PRIVATE.replace(/\.$/, '')}: ${host} apunta a ${addrs.find(isPrivateHost)}.`;
     }
-    r = await fetchText(u.href);
+    try { r = await fetchPinned(u.href, addrs); } catch (e) { return `ERROR: ${e.message || e}`; }
     if (!(r.status >= 300 && r.status < 400 && r.location)) break;
     if (hop >= 4) return 'ERROR: demasiadas redirecciones';
     u = new URL(r.location, u);
@@ -91,7 +96,7 @@ export async function webfetch(url, fetchText, resolve) {
 }
 
 /** Un "desktop" para agent.js sobre el ayudante del teléfono. root = carpeta de trabajo (p. ej. /sdcard/JeanCode). */
-export function createPhoneDesktop(dev, { fetchText = null } = {}) {
+export function createPhoneDesktop(dev) {
   const sh = async (cmd, timeout = 60000) => {
     const r = await dev.exec(cmd, timeout);
     return { code: r.code ?? -1, out: String(r.out ?? ''), err: String(r.err ?? '') };
@@ -235,7 +240,7 @@ export function createPhoneDesktop(dev, { fetchText = null } = {}) {
 
   return {
     fs, shell, proc,
-    web: { fetch: (url) => webfetch(url, fetchText, dev.resolve) },
+    web: { fetch: (url) => webfetch(url, dev.fetch, dev.resolve) },
     skills: { list: async () => [], read: async () => { throw new Error('las skills están en el PC'); } },
     system: {
       async info() {

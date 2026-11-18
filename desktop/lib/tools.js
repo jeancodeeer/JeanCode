@@ -420,27 +420,80 @@ function privateIp(ip) {
   return BLOCKED.check(ip, net.isIPv6(ip) ? 'ipv6' : 'ipv4');
 }
 
-async function assertPublic(u) {
+/** Direcciones públicas a las que resuelve la URL (o error). Son las ÚNICAS a las que se conectará pinnedGet. */
+async function assertPublic(u, lookup = dns.lookup) {
   if (!['http:', 'https:'].includes(u.protocol)) throw new Error('solo http/https');
+  if (u.username || u.password) throw new Error('URL con usuario o contraseña');
   const host = u.hostname.replace(/^\[|\]$/g, '');
-  const addrs = net.isIP(host) ? [{ address: host }] : await dns.lookup(host, { all: true });
+  const addrs = net.isIP(host) ? [{ address: host, family: net.isIP(host) }] : await lookup(host, { all: true });
   if (!addrs.length || addrs.some((a) => privateIp(a.address))) throw new Error(`destino no permitido (red local o privada): ${u.hostname}`);
+  return addrs.map((a) => ({ address: a.address, family: a.family || net.isIP(a.address) }));
 }
 
-async function webfetch(url) {
+const http = require('node:http');
+const https = require('node:https');
+const zlib = require('node:zlib');
+const MAX_PAGE = 5 * 1024 * 1024;
+
+/**
+ * GET que se conecta SOLO a las direcciones ya comprobadas: el `lookup` de la petición las devuelve tal cual, sin
+ * volver a preguntar al DNS, así que un DNS que cambie de respuesta (DNS rebinding) no cuela una IP privada.
+ * TLS verifica el certificado con el nombre de la URL. No sigue redirecciones. → { status, location, type, text }
+ */
+function pinnedGet(u, addrs, { timeout = 20000 } = {}) {
+  const host = u.hostname.replace(/^\[|\]$/g, '');
+  const lib = u.protocol === 'https:' ? https : http;
+  return new Promise((resolve, reject) => {
+    const req = lib.request({
+      protocol: u.protocol, hostname: host, port: u.port || undefined, path: `${u.pathname}${u.search}`, method: 'GET',
+      headers: { 'User-Agent': 'JeanCode', Accept: '*/*', 'Accept-Encoding': 'gzip, deflate, br' },
+      servername: net.isIP(host) ? undefined : host,
+      lookup: (_h, opts, cb) => (opts && opts.all ? cb(null, addrs) : cb(null, addrs[0].address, addrs[0].family)),
+      agent: false, // sin sockets reutilizados de otra petición
+      timeout,
+    }, (res) => {
+      const chunks = [];
+      let size = 0;
+      res.on('data', (c) => {
+        size += c.length;
+        if (size > MAX_PAGE) { res.destroy(); return; }
+        chunks.push(c);
+      });
+      res.on('close', () => {
+        let body = Buffer.concat(chunks);
+        const enc = String(res.headers['content-encoding'] || '').toLowerCase();
+        const opts = { maxOutputLength: MAX_PAGE }; // una «bomba» comprimida no llena la memoria
+        try {
+          if (enc.includes('gzip')) body = zlib.gunzipSync(body, { ...opts, finishFlush: zlib.constants.Z_SYNC_FLUSH });
+          else if (enc.includes('deflate')) body = zlib.inflateSync(body, { ...opts, finishFlush: zlib.constants.Z_SYNC_FLUSH });
+          else if (enc.includes('br')) body = zlib.brotliDecompressSync(body, opts);
+        } catch (e) { return reject(new Error(e.code === 'ERR_BUFFER_TOO_LARGE' ? 'página demasiado grande' : `respuesta comprimida no válida (${e.message})`)); }
+        resolve({ status: res.statusCode || 0, location: res.headers.location || '', type: res.headers['content-type'] || '', text: body.toString('utf8') });
+      });
+      res.on('error', reject);
+    });
+    const deadline = setTimeout(() => req.destroy(new Error('sin respuesta a tiempo')), timeout + 10000);
+    req.on('timeout', () => req.destroy(new Error('sin respuesta a tiempo')));
+    req.on('error', reject);
+    req.on('close', () => clearTimeout(deadline));
+    req.end();
+  });
+}
+
+async function webfetch(url, { lookup } = {}) {
   let u;
   try { u = new URL(url); } catch { throw new Error('URL inválida'); }
   let res;
   for (let hop = 0; hop < 5; hop++) {
-    await assertPublic(u);
-    res = await fetch(u, { headers: { 'User-Agent': 'JeanCode' }, redirect: 'manual', signal: AbortSignal.timeout(20000) });
-    const loc = res.status >= 300 && res.status < 400 ? res.headers.get('location') : null;
+    const addrs = await assertPublic(u, lookup);
+    res = await pinnedGet(u, addrs);
+    const loc = res.status >= 300 && res.status < 400 ? res.location : null;
     if (!loc) break;
     u = new URL(loc, u);
     if (hop === 4) throw new Error('demasiadas redirecciones');
   }
-  const type = res.headers.get('content-type') || '';
-  let text = await res.text();
+  const type = res.type;
+  let text = res.text;
   if (type.includes('html')) {
     text = text.replace(/<(script|style|noscript)[\s\S]*?<\/\1>/gi, ' ').replace(/<br\s*\/?>|<\/(p|div|h\d|li|tr)>/gi, '\n')
       .replace(/<[^>]+>/g, ' ').replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>')
@@ -540,5 +593,5 @@ async function execHook(root, command, input, timeoutSec = 60) {
 module.exports = {
   inside, list, read, write: writeTracked, edit: editTracked, search, run, cancelRuns, systemInfo, osShort,
   startProcess, processOutput, listProcesses, stopProcess, stopAllProcesses, move, killTree,
-  undo, peek, glob, webfetch, projectMemory, commands, agents, hooks, cleanHooks, execHook, beginTurn, rewind,
+  undo, peek, glob, webfetch, pinnedGet, projectMemory, commands, agents, hooks, cleanHooks, execHook, beginTurn, rewind,
 };

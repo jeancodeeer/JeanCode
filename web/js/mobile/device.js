@@ -6,7 +6,8 @@
 //   iPhone (jailbreak)            jeancode_helper.py (mobile/ios-helper): servicio local en 127.0.0.1:47322 con un token.
 //
 // Interfaz común: status(), exec(cmd, timeoutMs) → { code, out, err }, readFile(path) → texto base64,
-// writeFile(path, b64), screenshot(maxWidth) → { b64, mime, width, height } | null (sin pantalla).
+// writeFile(path, b64), screenshot(maxWidth) → { b64, mime, width, height } | null (sin pantalla),
+// resolve(host) → [IP] y fetch(url, addresses) → { status, location, type, text } para webfetch.
 
 export const IOS_HELPER_URL = 'http://127.0.0.1:47322';
 const MAX_READ = 4 * 1024 * 1024;
@@ -28,6 +29,8 @@ function androidBackend() {
     writeFile: (path, b64) => P.writeFile({ path, b64 }),
     screenshot: (maxWidth = 720) => P.screenshot({ maxWidth }),
     resolve: async (host) => (await P.resolve({ host })).addresses || [], // DNS del teléfono (webfetch)
+    // GET que se conecta SOLO a esas IP ya comprobadas (OkHttp con un DNS fijo) y no sigue redirecciones
+    fetch: (url, addresses) => P.fetch({ url, addresses }),
     screen: true,
   };
 }
@@ -52,6 +55,8 @@ export function iosBackend({ url = IOS_HELPER_URL, token, http }) {
     readFile: async (path) => (await call('/read', { path, maxBytes: MAX_READ })).b64,
     writeFile: (path, b64) => call('/write', { path, b64 }),
     resolve: async (host) => (await call('/resolve', { host })).addresses || [], // DNS del iPhone (webfetch)
+    // GET por el ayudante, conectando SOLO a esas IP ya comprobadas, sin seguir redirecciones
+    fetch: (url, addresses) => call('/fetch', { url, addresses }),
     /** Captura con jeancode-hid (IOSurface) reducida a maxWidth: { b64, mime, width, height, realWidth, realHeight } | null */
     screenshot: async (maxWidth = 540) => {
       const r = await dev.exec(`mkdir -p ${sq(SHOT.replace(/\/[^/]*$/, ''))} && jeancode-hid screenshot ${sq(SHOT)} ${Math.round(maxWidth)}`, 20000);
@@ -74,18 +79,6 @@ export async function nativePost(url, body, headers = {}) {
   const r = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json', ...headers }, body: JSON.stringify(body) });
   if (r.status === 401) throw new Error('token del ayudante incorrecto');
   return r.json();
-}
-
-/**
- * GET de una página para webfetch con la red nativa de la app (sin CORS) y SIN seguir redirecciones: webfetch las
- * sigue una a una, comprobando cada destino. → { status, location, type, text }
- */
-export async function nativeGetText(url) {
-  const H = cap()?.Plugins?.CapacitorHttp;
-  if (!H) throw new Error('la red nativa no está disponible');
-  const r = await H.request({ url, method: 'GET', headers: { 'User-Agent': 'JeanCode' }, responseType: 'text', connectTimeout: 15000, readTimeout: 20000, disableRedirects: true });
-  const header = (name) => Object.entries(r.headers || {}).find(([k]) => k.toLowerCase() === name)?.[1] || '';
-  return { status: r.status, location: header('location'), type: header('content-type'), text: typeof r.data === 'string' ? r.data : JSON.stringify(r.data) };
 }
 
 /** El backend de este teléfono, o null si la app no corre en Android/iOS. */

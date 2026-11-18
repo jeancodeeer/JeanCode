@@ -1286,7 +1286,8 @@ test('móvil: webfetch con la red nativa, como el del escritorio, sin direccione
     'https://cuela.example/r': { status: 302, location: 'https://interno.example/' },
   };
   const asked = [];
-  const fetchText = async (u) => { asked.push(u); return pages[u]; };
+  const pinned = [];
+  const fetchText = async (u, addrs) => { asked.push(u); pinned.push(addrs); return pages[u]; };
   // DNS: interno.example y rebind.nip.io apuntan a direcciones privadas
   const dns = { 'docs.example.com': ['93.184.215.14'], 'corto.example': ['93.184.215.15'], 'salto.example': ['93.184.215.16'], 'bucle.example': ['93.184.215.17'],
     'cuela.example': ['93.184.215.18'], 'interno.example': ['8.8.8.8', '10.0.0.5'], '127.0.0.1.nip.io': ['127.0.0.1'] };
@@ -1305,6 +1306,51 @@ test('móvil: webfetch con la red nativa, como el del escritorio, sin direccione
   assert.match(await MS.webfetch('https://no-existe.example/', fetchText, resolve), /no existe/);
   assert.match(await MS.webfetch('file:///etc/passwd', fetchText, resolve), /solo http/);
   assert.match(await MS.webfetch('https://x.example', null, resolve), /no está disponible/);
+  assert.match(await MS.webfetch('https://yo:clave@docs.example.com/x', fetchText, resolve), /usuario o contraseña/);
+  for (const h of ['ff02::1', '64:ff9b::a00:1', '2002:a00:1::1', '198.18.0.1', '192.0.0.8']) assert.equal(MS.isPrivateHost(h), true, h);
+  // DNS rebinding: el DNS responde una IP pública al comprobar y una privada después. La petición se conecta a la
+  // dirección COMPROBADA (no vuelve a resolver), así que la segunda respuesta nunca se usa.
+  let calls = 0;
+  const rebind = async () => (calls++ ? ['127.0.0.1'] : ['93.184.215.14']);
+  pinned.length = 0;
+  pages['https://rebind.example/'] = { status: 200, type: 'text/plain', text: 'pública' };
+  assert.equal(await MS.webfetch('https://rebind.example/', fetchText, rebind), '200 https://rebind.example/\n\npública');
+  assert.deepEqual(pinned, [['93.184.215.14']], 'la conexión va a la IP comprobada');
+  assert.equal(calls, 1, 'el nombre se resuelve una sola vez');
+  pinned.length = 0;
+  pages['https://8.8.8.8/'] = { status: 200, type: 'text/plain', text: 'ip' };
+  await MS.webfetch('https://8.8.8.8/', fetchText, resolve);
+  assert.deepEqual(pinned, [['8.8.8.8']], 'una IP escrita en la URL se fija a sí misma');
+  assert.match(await MS.webfetch('https://docs.example.com/x', async () => { throw new Error('certificado no válido'); }, resolve), /^ERROR: certificado no válido/);
+});
+
+test('escritorio: webfetch se conecta a la IP comprobada (sin DNS rebinding), sin seguir solo las redirecciones', async (t) => {
+  const http = require('node:http');
+  const zlib = require('node:zlib');
+  const seen = [];
+  const server = http.createServer((req, res) => {
+    seen.push(`${req.headers.host} ${req.url}`);
+    if (req.url === '/r') { res.writeHead(302, { Location: 'http://127.0.0.1/' }); return res.end(); }
+    res.writeHead(200, { 'Content-Type': 'text/html', 'Content-Encoding': 'gzip' });
+    res.end(zlib.gzipSync('<p>hola &amp; adiós</p>'));
+  });
+  await new Promise((r) => server.listen(0, '127.0.0.1', r));
+  t.after(() => server.close());
+  const port = server.address().port;
+  // rebind.invalid no existe en ningún DNS: si llega al servidor, es que la conexión usó la IP fijada
+  const r = await tools.pinnedGet(new URL(`http://rebind.invalid:${port}/p?q=1`), [{ address: '127.0.0.1', family: 4 }]);
+  assert.equal(r.status, 200);
+  assert.equal(r.text, '<p>hola &amp; adiós</p>', 'gzip descomprimido');
+  assert.deepEqual(seen, [`rebind.invalid:${port} /p?q=1`], 'Host con el nombre real, conexión a la IP fijada');
+  const red = await tools.pinnedGet(new URL(`http://rebind.invalid:${port}/r`), [{ address: '127.0.0.1', family: 4 }]);
+  assert.equal(red.status, 302);
+  assert.equal(red.location, 'http://127.0.0.1/', 'las redirecciones no se siguen solas');
+  // webfetch: un nombre que resuelve a una IP privada (o con UNA privada entre varias) no se abre
+  const lookup = async (h) => ({ 'interno.example': [{ address: '8.8.8.8', family: 4 }, { address: '10.0.0.5', family: 4 }] })[h] || [{ address: '127.0.0.1', family: 4 }];
+  await assert.rejects(tools.webfetch(`http://local.example:${port}/p`, { lookup }), /red local o privada/);
+  await assert.rejects(tools.webfetch('http://interno.example/', { lookup }), /red local o privada/);
+  await assert.rejects(tools.webfetch(`http://127.0.0.1:${port}/p`), /red local o privada/);
+  await assert.rejects(tools.webfetch('http://yo:clave@example.com/'), /usuario o contraseña/);
 });
 
 test('móvil: procesos en segundo plano (arrancar, salida, código de salida y parar el grupo)', async (t) => {
@@ -1336,6 +1382,26 @@ test('móvil: procesos en segundo plano (arrancar, salida, código de salida y p
   // DNS real a través del ayudante (webfetch comprueba cada dirección antes de pedir)
   assert.ok((await dev.resolve('localhost')).some((a) => a === '127.0.0.1' || a === '::1'));
   await assert.rejects(dev.resolve('no-existe.invalid'), /no se pudo resolver/);
+  // /fetch del ayudante: se conecta a la IP fijada (rebind.invalid no existe en el DNS) y no sigue redirecciones
+  const seen = [];
+  const web = require('node:http').createServer((req, res) => {
+    seen.push(`${req.headers.host} ${req.url}`);
+    if (req.url === '/r') { res.writeHead(302, { Location: 'http://10.0.0.1/' }); return res.end(); }
+    res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8', 'Content-Encoding': 'gzip' });
+    res.end(require('node:zlib').gzipSync('página fijada'));
+  });
+  await new Promise((r) => web.listen(0, '127.0.0.1', r));
+  t.after(() => web.close());
+  const wp = web.address().port;
+  const got = await dev.fetch(`http://rebind.invalid:${wp}/x?a=1`, ['127.0.0.1']);
+  assert.deepEqual([got.status, got.text, got.type], [200, 'página fijada', 'text/plain; charset=utf-8']);
+  assert.deepEqual(seen, [`rebind.invalid:${wp} /x?a=1`]);
+  const moved = await dev.fetch(`http://rebind.invalid:${wp}/r`, ['127.0.0.1']);
+  assert.deepEqual([moved.status, moved.location], [302, 'http://10.0.0.1/']);
+  await assert.rejects(dev.fetch(`http://rebind.invalid:${wp}/x`, ['localhost']), /dirección no válida/, 'solo IP, nunca nombres');
+  await assert.rejects(dev.fetch(`http://rebind.invalid:${wp}/x`, []), /sin direcciones/);
+  // el flujo completo: webfetch resuelve, comprueba y fija; localhost se rechaza antes de pedir
+  assert.match(await d.web.fetch(`http://localhost:${wp}/x`), /redes privadas/);
 });
 
 test('móvil: pantalla del iPhone (jeancode-hid y uiopen): coordenadas, escapes y apps', async () => {

@@ -9,17 +9,24 @@ que se genera la primera vez (lo pegas en la app: Móvil → Ayudante).
     POST /exec   { cmd, timeout (ms) }   → { "code", "out", "err" }
     POST /read   { path, maxBytes }      → { "b64" }
     POST /write  { path, b64 }           → { "ok": true }
+    POST /resolve { host }               → { "addresses": [IP…] }                 (DNS del iPhone, para webfetch)
+    POST /fetch  { url, addresses }      → { "status", "location", "type", "text" } GET conectando SOLO a esas IP
 
 Cabecera obligatoria: Authorization: Bearer <token>. Solo la biblioteca estándar de Python 3 (python3 de Procursus).
 """
 import base64
 import hmac
+import http.client
+import ipaddress
 import json
 import os
 import secrets
 import socket
+import ssl
 import subprocess
 import sys
+import urllib.parse
+import zlib
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 HOST = '127.0.0.1'
@@ -61,6 +68,61 @@ def run(cmd, timeout_ms):
     except subprocess.TimeoutExpired as e:
         out = (e.stdout or b'')[:MAX_OUT].decode('utf-8', 'replace')
         return {'code': -1, 'out': out, 'err': f'tiempo agotado ({int(timeout)} s)'}
+
+
+MAX_FETCH = 5 * 1024 * 1024
+
+
+def fetch(url, addresses):
+    """GET para webfetch conectando SOLO a las IP que la app ya comprobó: el nombre no se vuelve a resolver, así que
+    un DNS que cambie de respuesta (DNS rebinding) no puede colar una dirección privada. TLS verifica el certificado
+    con el nombre de la URL. No sigue redirecciones (las sigue la app, comprobando cada destino)."""
+    u = urllib.parse.urlsplit(str(url))
+    if u.scheme not in ('http', 'https') or not u.hostname:
+        return {'error': 'solo http y https'}
+    try:
+        ips = [str(ipaddress.ip_address(str(a))) for a in (addresses or [])]  # solo IP literales, nunca nombres
+    except ValueError as e:
+        return {'error': f'dirección no válida: {e}'}
+    if not ips:
+        return {'error': 'sin direcciones comprobadas'}
+    https = u.scheme == 'https'
+    port = u.port or (443 if https else 80)
+    sock, last = None, None
+    for ip in ips:
+        try:
+            sock = socket.create_connection((ip, port), timeout=15)
+            break
+        except OSError as e:
+            last = e
+    if sock is None:
+        return {'error': f'no se pudo conectar: {last}'}
+    try:
+        sock.settimeout(20)
+        if https:
+            ctx = ssl.create_default_context(cafile=os.environ.get('JEANCODE_HELPER_CAFILE') or None)
+            sock = ctx.wrap_socket(sock, server_hostname=u.hostname)
+            conn = http.client.HTTPSConnection(u.hostname, port, timeout=20, context=ctx)
+        else:
+            conn = http.client.HTTPConnection(u.hostname, port, timeout=20)
+        conn.sock = sock  # ya conectado a la IP fijada: http.client no vuelve a resolver
+        path = (u.path or '/') + (f'?{u.query}' if u.query else '')
+        conn.request('GET', path, headers={'User-Agent': 'JeanCode', 'Accept': '*/*', 'Accept-Encoding': 'gzip, deflate'})
+        res = conn.getresponse()
+        raw = res.read(MAX_FETCH)
+        enc = (res.getheader('Content-Encoding') or '').lower()
+        if enc in ('gzip', 'x-gzip', 'deflate'):
+            # como mucho 5 MB descomprimidos (una «bomba» no llena la memoria)
+            d = zlib.decompressobj(16 + zlib.MAX_WBITS if 'gzip' in enc else zlib.MAX_WBITS)
+            raw = d.decompress(raw, MAX_FETCH)
+        return {'status': res.status, 'location': res.getheader('Location') or '', 'type': res.getheader('Content-Type') or '',
+                'text': raw.decode('utf-8', 'replace')}
+    except ssl.SSLCertVerificationError as e:
+        return {'error': f'certificado no válido ({e.verify_message}); si falla con todas las páginas, instala ca-certificates'}
+    except (OSError, http.client.HTTPException, zlib.error) as e:
+        return {'error': f'no se pudo leer la página: {e}'}
+    finally:
+        sock.close()
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -110,6 +172,8 @@ class Handler(BaseHTTPRequestHandler):
                 except socket.gaierror as e:
                     return self.reply(200, {'error': f'no se pudo resolver: {e.strerror}'})
                 return self.reply(200, {'addresses': sorted({i[4][0] for i in infos})})
+            if self.path == '/fetch':
+                return self.reply(200, fetch(data.get('url', ''), data.get('addresses')))
             if self.path == '/read':
                 path = str(data.get('path', ''))
                 limit = min(int(data.get('maxBytes') or MAX_BODY), MAX_BODY)

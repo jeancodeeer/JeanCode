@@ -1,7 +1,7 @@
 // Mini agente del móvil: el agente de JeanCode trabajando DENTRO del teléfono (archivos, comandos y pantalla), con el
 // modelo que tengas conectado en la app. Mismo motor que el agente del PC (runAgent); el "escritorio" es el ayudante
 // del teléfono: Shizuku en Android (modo desarrollador) o jeancode_helper.py en un iPhone con jailbreak.
-import { deviceBackend, platformOf, nativeGetText } from './device.js';
+import { deviceBackend, platformOf } from './device.js';
 import { createPhoneDesktop, createPhoneScreen, createIosScreen } from './shim.js';
 
 const DEFAULT_ROOT = { android: '/sdcard/JeanCode', ios: '/var/mobile/JeanCode' };
@@ -111,7 +111,7 @@ export function initPhoneAgent(deps) {
     if (!m) { toast('CONECTA UNA API EN AJUSTES PARA USAR EL AGENTE'); return; }
     if (!(await check())) { toast('EL AYUDANTE DEL TELÉFONO NO ESTÁ LISTO'); return; }
     const dev = backend();
-    const d = createPhoneDesktop(dev, { fetchText: nativeGetText });
+    const d = createPhoneDesktop(dev);
     const ws = root();
     store.set('deviceRoot', ws);
     await d.shell.run(ws, 'true').catch(() => {}); // crea la carpeta de trabajo si no existe

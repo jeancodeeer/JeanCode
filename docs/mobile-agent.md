@@ -67,8 +67,13 @@ rechaza peticiones de páginas web. `sudo sh uninstall.sh` lo quita.
   JeanCode queda en segundo plano y, si necesita preguntarte algo, vuelve al frente.
 - **Procesos en segundo plano** (`start_process`, `process_output`, `stop_process`): servidores o *watchers* en su propio
   grupo de procesos (`setsid`), con la salida en `.jeancode-proc/` dentro de la carpeta de trabajo. Como mucho 4 a la vez.
-- **`webfetch`** con la red nativa de la app (sin CORS), igual que en el PC: pide permiso con la URL y no abre direcciones
-  locales ni de redes privadas.
+- **`webfetch`** igual que en el PC: pide permiso con la URL y no abre direcciones locales ni de redes privadas.
+  El nombre se resuelve con el DNS del teléfono, se rechaza si **alguna** dirección es privada y la petición se conecta
+  **solo** a las direcciones ya comprobadas (Android: OkHttp con un DNS fijo; iPhone: `/fetch` del ayudante, que abre el
+  socket a esa IP). Así un DNS que cambie de respuesta entre la comprobación y la petición (*DNS rebinding*) no cuela una
+  dirección privada. TLS sigue verificando el certificado con el nombre de la URL, y las redirecciones se siguen una a
+  una (hasta 5) repitiendo todas las comprobaciones. En el iPhone hace falta el paquete `ca-certificates` (Sileo) para
+  las páginas HTTPS; `install.sh` avisa si falta.
 
 ## Código
 
