@@ -10,7 +10,11 @@ JeanCode 1.0 reúne en una sola versión todo lo que se publicó por partes entr
 - iPhone: un ayudante en Python (`mobile/ios-helper`, se instala con `sudo sh install.sh`) que escucha solo en el propio iPhone y exige un token. Archivos y comandos; pantalla **experimental** con `jeancode-hid`, que se compila en el propio iPhone (capturas, toques, deslizar, teclas, abrir apps; necesita un modelo que vea imágenes).
 - Procesos en segundo plano y `webfetch` también en el móvil.
 - **Imagen y vídeo:** nueva pestaña Imagen con prompt libre o guiado, variantes, controles según el modelo, retoque con IA y máscara, ajustes, recorte y paso de imagen a vídeo. También se genera desde el chat (`/imagen`, `/video` o pidiéndolo) y desde el agente (`generate_image`, `generate_video`). Compatible con OpenAI, NVIDIA, OpenRouter, xAI, Together, SiliconFlow, Google, MiniMax, Hugging Face, Alibaba, Z.ai y cualquier API con el formato de OpenAI.
-- **Vídeo con HTML:** tu modelo de chat escribe una animación y JeanCode la exporta a MP4 en tu dispositivo, sin gastar créditos de vídeo. Formato compatible con HyperFrames.
+- **Vídeo con HTML:** crea vídeos a MP4 en tu dispositivo, sin gastar créditos de vídeo: seis estilos, música y efectos, y un modo libre compatible con HyperFrames.
+- **Modelos locales:** Ollama con contexto real, datos reales de Ollama y LM Studio, agente más ligero y generación de imágenes con Stable Diffusion WebUI, Forge y ComfyUI.
+- **30 proveedores nuevos**, entre ellos Vercel AI Gateway, Poe, Venice, fal.ai, Replicate, Black Forest Labs, Recraft y Luma.
+- **Mascota y pantalla de arranque.** La mascota reacciona a lo que hace la app y se puede ocultar en Ajustes.
+- Errores más claros, con reintento automático en fallos pasajeros, y arranque más rápido.
 - `webfetch` (PC y móvil) se conecta solo a las direcciones IP ya comprobadas: un DNS que cambie de respuesta (*DNS rebinding*) ya no puede llevarlo a la red local. También rechaza URL con usuario y contraseña, y en el móvil, más rangos privados de IPv6.
 - Los comandos peligrosos de los teléfonos (desinstalar o borrar datos de apps, reiniciar, ajustes de seguridad, bloqueo…) piden confirmación siempre.
 

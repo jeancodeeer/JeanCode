@@ -27,6 +27,7 @@
       <feTurbulence type="fractalNoise" baseFrequency="0.02 0.6" numOctaves="1" seed="3" result="w"/>
       <feDisplacementMap in="eaten" in2="w" scale="5" xChannelSelector="R" yChannelSelector="G"/>
     </filter>
+    <symbol id="i-clip" viewBox="0 0 24 24"><path d="M20 11.5l-8.5 8.5a5 5 0 0 1-7-7L13 4.500a3.300 3.300 0 0 1 4.700 4.700L9.200 17.700a1.600 1.600 0 0 1-2.300-2.300L14.500 7.800"/></symbol>
     <symbol id="i-play" viewBox="0 0 24 24"><path d="M7 4l13 8-13 8z"/></symbol>
     <symbol id="i-brush" viewBox="0 0 24 24"><path d="M14 4l6 6-9 9H5v-6z"/><path d="M12 6l6 6"/></symbol>
     <symbol id="i-film" viewBox="0 0 24 24"><path d="M3 5h18v14H3z"/><path d="M7 5v14M17 5v14M3 12h4M17 12h4"/></symbol>
@@ -388,8 +389,13 @@
     <form class="composer" id="composer">
       <ul class="popup" id="popup" role="listbox" hidden></ul>
       <div class="composer-box">
+        <ul class="att-list" id="att-list" aria-label="Imágenes adjuntas" hidden></ul>
         <textarea id="input" rows="1" placeholder="Escribe a Jean…" aria-label="Mensaje" aria-autocomplete="list" aria-controls="popup"></textarea>
         <div class="composer-row">
+          <label class="icon-btn att-btn" id="att-btn" title="Adjuntar imágenes" hidden>
+            <svg class="i" aria-hidden="true"><use href="#i-clip"/></svg><span class="sr">Adjuntar imágenes</span>
+            <input type="file" id="att-input" accept="image/png,image/jpeg,image/webp,image/gif" multiple>
+          </label>
           <!-- modo de razonamiento: solo lo que admite el modelo elegido (reasoning.js) -->
           <details class="menu up reason-menu" id="reason-menu">
             <summary class="toggle" id="think-btn" title="Cuánto razona el modelo antes de responder">Normal</summary>

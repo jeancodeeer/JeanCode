@@ -59,7 +59,7 @@ export function initStudio(deps) {
     esc, store, toast, chatText: deps.chatText, showError: (m) => showError(m),
     refresh: () => { renderControls(); renderStage(); },
     saveVideo: (blob, meta) => service.saveHtmlVideo(blob, meta),
-    showItem: async (id) => { html.leave(); st.kind = 'video'; store.set('media:kind', 'video'); st.items = await library.list(); renderControls(); select(id); },
+    showItem: async (id) => { html.leave(); st.kind = 'video'; store.set('media:kind', 'video'); st.items = await gallery(); renderControls(); select(id); },
   });
   html.attach({ go: $('#st-generate'), summary: $('#st-summary'), actions: $('#st-actions'), view: $('#st-view') });
 
@@ -307,7 +307,8 @@ export function initStudio(deps) {
       ${list.length ? `<div class="st-gal">${list.map((i) => `<button type="button" class="st-tile${i.id === st.current ? ' active' : ''}" data-open="${esc(i.id)}" title="${esc(i.prompt.slice(0, 120))}">${tile(i)}${i.kind === 'video' ? `<span class="st-badge">${icon('film')}</span>` : ''}</button>`).join('')}</div>${all.length > list.length ? `<button class="btn ghost sm" type="button" data-act="more">Ver ${Math.min(60, all.length - list.length)} más</button>` : ''}`
     : '<p class="note st-gal-none">Lo que generes se guarda aquí, solo en este dispositivo.</p>'}`;
   }
-  async function reload() { st.items = await library.list(); if (st.current && !currentItem()) st.current = null; renderGallery(); if (st.kind !== 'html') renderStage(); }
+  const gallery = async () => (await library.list()).filter((i) => i.kind !== 'attachment');
+  async function reload() { st.items = await gallery(); if (st.current && !currentItem()) st.current = null; renderGallery(); if (st.kind !== 'html') renderStage(); }
 
   /* ---------------------------------------------------------------- editor */
   async function openEditor(item) {

@@ -35,6 +35,8 @@ const FAMILIES = [
   { re: /^claude-/, caps: { chat: true, code: true, tools: true, vision: true, streaming: true } },
   { re: /^gemini-/, caps: { chat: true, code: true, tools: true, vision: true, streaming: true } },
   { re: /qwen2\.5-coder|qwen3.*coder|deepseek-coder|codestral|codellama|starcoder/, caps: { chat: true, code: true, streaming: true } },
+  // modelos abiertos que ven imágenes
+  { re: /llava|moondream|pixtral|internvl|minicpm-v|qwen[\d.]*-?vl|[-_]vl([-_:]|$)|vision|llama-?4|gemma-?[34]([-:]|$)|glm-[\d.]+v|[-_]omni[-_]/, caps: { chat: true, vision: true, streaming: true } },
   { re: /llama-?3|mistral|mixtral|qwen|deepseek|gemma|phi-?[34]/, caps: { chat: true, streaming: true } },
   // modelos que NO son de chat: se ocultan del selector
   { re: /embed|embedding|bge-|e5-|nomic-embed/, caps: { chat: false, embeddings: true } },

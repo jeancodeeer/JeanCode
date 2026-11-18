@@ -823,3 +823,21 @@ kbd { font: 600 11px/1 var(--mono); border: 1px solid var(--line-3); padding: 2p
   @keyframes m-walk { 0%, 100% { transform: translateX(0) scaleX(1); } 49% { transform: translateX(-36px) scaleX(1); } 50% { transform: translateX(-36px) scaleX(-1); } 99% { transform: translateX(0) scaleX(-1); } }
 }
 @media (prefers-reduced-motion: reduce) { .mascot, .m-sprite, .boot-col, .boot-sub { animation: none !important; } }
+
+/* ---------------------------------------------------------------- imágenes adjuntas */
+.att-btn { position: relative; cursor: pointer; flex: none; }
+.att-btn input { position: absolute; inset: 0; opacity: 0; cursor: pointer; min-height: 0; padding: 0; }
+.att-btn:focus-within { outline: 2px solid var(--ink); outline-offset: 2px; }
+.att-list { list-style: none; display: flex; flex-wrap: wrap; gap: var(--s2); margin: 0; padding: var(--s3) var(--s3) 0; }
+.att-list li { position: relative; width: 64px; height: 64px; border: 1px solid var(--line-2); }
+.att-list img { display: block; width: 100%; height: 100%; object-fit: cover; }
+.att-list button { position: absolute; top: -1px; right: -1px; display: grid; place-items: center; width: 24px; height: 24px; padding: 0; background: var(--bg); color: var(--ink); border: 1px solid var(--line-2); cursor: pointer; }
+.att-list button .i { width: 12px; height: 12px; }
+.att-list .att-warn { width: auto; height: auto; align-self: center; border: 0; color: var(--bad); font-size: 13px; }
+.composer-box.drop { border-color: var(--ink); }
+.msg-atts { display: flex; flex-wrap: wrap; gap: var(--s2); margin-top: var(--s2); }
+.msg-att { padding: 0; width: 120px; height: 120px; background: var(--raise); border: 1px solid var(--line-2); cursor: zoom-in; }
+.msg-att img { display: block; width: 100%; height: 100%; object-fit: cover; }
+.msg-att.big { width: min(100%, 560px); height: auto; cursor: zoom-out; }
+.msg-att.big img { height: auto; object-fit: contain; }
+@media (max-width: 860px) { .att-list button { width: 32px; height: 32px; } .msg-att { width: 96px; height: 96px; } }

@@ -1913,3 +1913,37 @@ test('vídeo dirigido: del guion a una composición válida, con cualquier model
   const second = text.indexOf('stco', text.indexOf('stco') + 4);
   assert.deepEqual([...file.subarray(view.getUint32(second + 12), view.getUint32(second + 12) + 3)], [9, 8, 7], 'el índice del sonido apunta a sus datos');
 });
+
+test('la app sin conexión: todo lo que guarda el service worker existe', () => {
+  const { readFileSync, existsSync } = require('node:fs');
+  const sw = readFileSync(new URL('../web/sw.js', import.meta.url), 'utf8');
+  const shell = sw.slice(sw.indexOf('const SHELL = ['), sw.indexOf('];', sw.indexOf('const SHELL = [')));
+  const files = [...shell.matchAll(/'([^']+)'/g)].map((m) => m[1]).filter((f) => f !== './');
+  assert.ok(files.length > 50);
+  for (const f of files) assert.ok(existsSync(new URL(`../web/${f}`, import.meta.url)), f);
+  for (const f of ['media/engine', 'media/service', 'media/studio', 'media/edit', 'media/htmlvideo', 'media/htmlrender', 'media/htmlstudio', 'media/htmlscenes', 'media/htmlaudio', 'media/mp4', 'mascot']) assert.ok(files.includes(`js/${f}.js`), f);
+});
+
+test('adjuntos: qué se acepta y qué viaja al modelo', async () => {
+  const T = await import('../web/js/attachments.js');
+  const file = (type, size = 1000) => ({ type, size });
+  assert.equal(T.rejectReason(file('image/png'), 0), '');
+  assert.match(T.rejectReason(file('application/pdf'), 0), /Solo se pueden/);
+  assert.match(T.rejectReason(file('image/svg+xml'), 0), /Solo se pueden/, 'un SVG puede llevar código');
+  assert.match(T.rejectReason(file('image/png', 21 * 1024 * 1024), 0), /20 MB/);
+  assert.match(T.rejectReason(file('image/png'), T.MAX_ATTACHMENTS), /hasta 6/);
+  assert.deepEqual(T.fitSide(4000, 2000), { width: 1568, height: 784 });
+  assert.deepEqual(T.fitSide(800, 600), { width: 800, height: 600 }, 'nunca se amplía');
+  const load = async (id) => (id === 'perdida' ? null : `data:image/png;base64,${id}`);
+  const msgs = [...Array.from({ length: 5 }, (_, i) => ({ role: 'user', content: `m${i}`, attachments: [`a${i}`] })), { role: 'assistant', content: 'ok', media: ['x'] }, { role: 'user', content: 'sin', attachments: ['perdida'] }];
+  const out = await T.withImages(msgs, load);
+  assert.match(out[0].content, /^m0\n\(el usuario adjuntó una imagen\)$/, 'las antiguas quedan como texto');
+  assert.equal(out[1].content, 'm1\n(el usuario adjuntó una imagen)');
+  assert.deepEqual(out[4].content, [{ type: 'text', text: 'm4' }, { type: 'image_url', image_url: { url: 'data:image/png;base64,a4' } }]);
+  assert.deepEqual(out[5], { role: 'assistant', content: 'ok' }, 'al modelo solo le llega rol y contenido');
+  assert.equal(out[6].content, 'sin', 'una imagen que ya no existe no rompe el mensaje');
+  const ep = { id: 'v', url: 'http://localhost:9/v1', provider: 'custom' };
+  for (const id of ['llava:13b', 'qwen2.5-vl:7b', 'nvidia/nemotron-3.5-super-vl-120b-a12b', 'meta/llama-4-maverick', 'google/gemma-4-31b-it', 'gpt-5', 'claude-sonnet']) assert.equal(CAP.capsOf(ep, id).vision, true, id);
+  assert.equal(CAP.capsOf(ep, 'jean-marvel').vision, false);
+  assert.equal(CAP.capsOf(ep, 'modelo-raro').vision, null, 'lo desconocido no se da por hecho');
+});

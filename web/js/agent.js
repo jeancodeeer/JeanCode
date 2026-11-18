@@ -549,7 +549,7 @@ ${r}` : '';
   let stopBlocks = 0;
   const recent = []; // firmas de las últimas llamadas, para detectar bucles
   let loopWarnings = 0;
-  const firstTask = messages.find((m) => m.role === 'user' && typeof m.content === 'string')?.content || '';
+  const firstTask = messages.filter((m) => m.role === 'user').map((m) => (typeof m.content === 'string' ? m.content : m.content.find?.((p) => p.type === 'text')?.text || ''))[0] || '';
   for (let step = 0; step < limit; step++) {
     if (ctx.signal?.aborted) throw new DOMException('aborted', 'AbortError');
     pruneImages(messages);
@@ -668,7 +668,8 @@ function pruneImages(messages) {
   for (let i = messages.length - 1; i >= 0; i--) {
     const m = messages[i];
     if (!Array.isArray(m.content) || !m.content.some((p) => p.type === 'image_url')) continue;
-    if (seen) messages[i] = { role: m.role, content: '(captura anterior omitida)' };
+    // lo que el usuario escribió se conserva: solo se retira la imagen
+    if (seen) messages[i] = { role: m.role, content: `${m.content.filter((p) => p.type === 'text').map((p) => p.text).join('\n')}\n(imagen anterior omitida)`.trim() };
     seen = true;
   }
 }

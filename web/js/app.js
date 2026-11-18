@@ -27,6 +27,7 @@ import { initAutomations, parseInterval, validateTask, taskSummary, runSummary, 
 import { createMediaService, library as mediaLibrary, blobToDataUrl, extOf, slugOf } from './media/service.js';
 import { detectMediaIntent } from './media/engine.js';
 import { createMascot } from './mascot.js';
+import { MAX_ATTACHMENTS, prepareImage, rejectReason, withImages } from './attachments.js';
 import { SKILL_CATALOG, SKILL_CATEGORIES } from './skills-catalog.js';
 import { PLUGIN_CATALOG, pluginUrl } from './plugins-catalog.js';
 
@@ -57,15 +58,13 @@ mediaService.subscribe((what) => { if (what === 'jobs') { if (mediaService.jobs(
 let studio = null;
 /** El estudio y el vídeo HTML se cargan al usarlos por primera vez: el arranque no paga por lo que no se abre. */
 const htmlTools = () => import('./media/htmlrender.js');
-async function openStudio() {
-  if (!studio) {
-    const { initStudio } = await import('./media/studio.js');
-    studio = initStudio({
-      $, esc, store, toast, confirmDialog, downloadBlob, service: mediaService,
-      endpoints: getEndpoints, providerName: (ep) => providerOf(ep).name, openSettings: () => openPanel('settings'),
-      chatText: mediaChatText,
-    });
-  }
+function openStudio() {
+  // una sola promesa: dos clics seguidos no deben montar el estudio dos veces
+  studio ||= import('./media/studio.js').then(({ initStudio }) => initStudio({
+    $, esc, store, toast, confirmDialog, downloadBlob, service: mediaService,
+    endpoints: getEndpoints, providerName: (ep) => providerOf(ep).name, openSettings: () => openPanel('settings'),
+    chatText: mediaChatText,
+  }));
   return studio;
 }
 /** Pregunta al modelo de chat del usuario (mejorar prompts y escribir composiciones). */
@@ -415,7 +414,66 @@ function noticeModelChanges(eps, results) {
 function needFor() {
   const t = thread();
   const msgs = (state.mode === 'agent' ? t?.agentMessages : t?.messages) || [];
-  return { tokens: estimateTokens(msgs) + 1500, tools: state.mode === 'agent' };
+  const vision = attached.length > 0 || !!t?.messages?.slice(-8).some((m) => m.attachments?.length);
+  return { tokens: estimateTokens(msgs) + 1500, tools: state.mode === 'agent', ...(vision ? { vision: true } : {}) };
+}
+
+/* ---------------------------------------------------------------- imágenes adjuntas */
+let attached = []; // { id, url, name } del mensaje que se está escribiendo
+const attachUrls = new Map();
+const attachUrl = (id, blob) => { if (!attachUrls.has(id)) attachUrls.set(id, URL.createObjectURL(blob)); return attachUrls.get(id); };
+const loadAttachment = async (id) => { const i = await mediaLibrary.get(id); return i?.blob ? blobToDataUrl(i.blob) : null; };
+
+/** ¿Puede adjuntar imágenes el modelo que atendería este mensaje? */
+function canAttach() {
+  const d = decide(routeFor(state.mode), { models: state.visible || [], mode: state.mode, endpoints: getEndpoints(), need: { vision: true, tools: state.mode === 'agent' } });
+  return !!d.model && capsOf(d.model.ep, d.model.id).vision !== false;
+}
+function renderAttachments() {
+  const can = canAttach();
+  $('#att-btn').hidden = !can && !attached.length;
+  const list = $('#att-list');
+  list.hidden = !attached.length;
+  list.innerHTML = attached.map((a) => `<li><img src="${esc(a.url)}" alt="${esc(a.name)}"><button type="button" data-att-del="${esc(a.id)}" aria-label="Quitar ${esc(a.name)}"><svg class="i" aria-hidden="true"><use href="#i-close"/></svg></button></li>`).join('')
+    + (attached.length && !can ? '<li class="att-warn">Este modelo no ve imágenes: elige otro o quítalas.</li>' : '');
+}
+async function addAttachments(files) {
+  if (!canAttach()) { toast('ESTE MODELO NO ACEPTA IMÁGENES'); return; }
+  for (const file of files) {
+    const why = rejectReason(file, attached.length);
+    if (why) { toast(why.toUpperCase()); continue; }
+    try {
+      const { blob, mime } = await prepareImage(file);
+      const id = crypto.randomUUID();
+      await mediaLibrary.put({ id, kind: 'attachment', blob, mime, prompt: '', createdAt: Date.now() });
+      attached.push({ id, url: attachUrl(id, blob), name: file.name || 'imagen' });
+    } catch { toast('NO SE PUDO LEER LA IMAGEN'); }
+  }
+  renderAttachments();
+}
+/** Miniaturas bajo el mensaje del usuario. Al pulsar una se amplía. */
+async function showAttachments(row, ids) {
+  if (!ids?.length || $('.msg-atts', row)) return;
+  const box = document.createElement('div');
+  box.className = 'msg-atts';
+  $('.bubble', row).after(box);
+  for (const id of ids) {
+    const item = await mediaLibrary.get(id);
+    if (!item?.blob) continue;
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'msg-att';
+    b.setAttribute('aria-label', 'Ampliar imagen adjunta');
+    b.innerHTML = `<img src="${esc(attachUrl(id, item.blob))}" alt="Imagen adjunta">`;
+    b.addEventListener('click', () => b.classList.toggle('big'));
+    box.appendChild(b);
+  }
+}
+/** Borra las imágenes adjuntas de conversaciones que ya no existen. */
+async function pruneAttachments() {
+  const used = new Set(state.threads.flatMap((t) => (t.messages || []).flatMap((m) => m.attachments || [])));
+  const day = Date.now() - 86400000;
+  for (const i of await mediaLibrary.list()) if (i.kind === 'attachment' && !used.has(i.id) && i.createdAt < day) await mediaLibrary.remove(i.id);
 }
 
 /** Decisión del enrutador para el modo actual (con motivos). */
@@ -425,6 +483,7 @@ function currentDecision() {
 
 /** Refleja en el selector el enrutado guardado para este modo y actualiza AUTO y la tarjeta de ruta. */
 function applyRoute() {
+  queueMicrotask(renderAttachments); // el botón de adjuntar depende del modelo elegido
   const sel = $('#model-select');
   const r = routeFor(state.mode);
   const visible = state.visible || [];
@@ -611,6 +670,7 @@ const KIND_HINT = {
 };
 function showError(err) {
   mascot.fail();
+  renderAttachments(); // pudo aprenderse que este modelo no ve imágenes
   const kind = err.kind && KIND_LABEL[err.kind] ? KIND_LABEL[err.kind].toUpperCase() + ' · ' : '';
   const row = addMessage('error', `${kind}${err.message || String(err)}${KIND_HINT[err.kind] ? `\n${KIND_HINT[err.kind]}` : ''}`);
   if (err.trace) attachTrace(row, err.trace);
@@ -743,6 +803,7 @@ function openThread(id, { keepTop = false } = {}) {
       const m = t.messages[i];
       const row = addMessage(m.role, m.content, { reasoning: m.reasoning, turn: m.turn, model: m.model });
       if (m.media?.length) showMedia(row, m.media);
+      if (m.attachments?.length) showAttachments(row, m.attachments);
       if (m.usage) setUsage(row, m.usage);
       if (m.role === 'assistant') decorateAssistant(row, t, i);
     }
@@ -1250,10 +1311,31 @@ function busy(on) {
   remoteHost?.pushState();
 }
 
+$('#model-select').addEventListener('change', () => setTimeout(renderAttachments));
+$('#att-input').addEventListener('change', (e) => { addAttachments([...e.target.files]); e.target.value = ''; });
+$('#att-list').addEventListener('click', (e) => {
+  const b = e.target.closest('[data-att-del]');
+  if (!b) return;
+  attached = attached.filter((a) => a.id !== b.dataset.attDel);
+  mediaLibrary.remove(b.dataset.attDel);
+  renderAttachments();
+});
+input.addEventListener('paste', (e) => {
+  const files = [...(e.clipboardData?.files || [])].filter((f) => f.type.startsWith('image/'));
+  if (files.length) { e.preventDefault(); addAttachments(files); }
+});
+$('#composer').addEventListener('dragover', (e) => { if ([...(e.dataTransfer?.types || [])].includes('Files')) { e.preventDefault(); $('.composer-box').classList.add('drop'); } });
+$('#composer').addEventListener('dragleave', () => $('.composer-box').classList.remove('drop'));
+$('#composer').addEventListener('drop', (e) => {
+  $('.composer-box').classList.remove('drop');
+  const files = [...(e.dataTransfer?.files || [])].filter((f) => f.type.startsWith('image/'));
+  if (files.length) { e.preventDefault(); addAttachments(files); }
+});
+
 $('#composer').addEventListener('submit', async (e) => {
   e.preventDefault();
   let text = input.value.trim();
-  if (!text || state.abort) return;
+  if ((!text && !attached.length) || state.abort) return;
 
   const cmd = parseCommand(text);
   if (cmd) {
@@ -1316,7 +1398,6 @@ async function sendHtmlVideo(t, intent, chatModel) {
   busy(true);
   say('escribiendo la composición…');
   try {
-    if (!chatModel) throw new Error('Conecta un modelo de chat para crear vídeos con HTML.');
     const ratio = /vertical|9:16|reel|tiktok|short/i.test(intent.prompt) ? '9:16' : /cuadrad|1:1/i.test(intent.prompt) ? '1:1' : '16:9';
     const duration = Math.min(30, Number(intent.prompt.match(/(\d+)\s*(?:s\b|seg)/i)?.[1]) || 10);
     const signal = state.abort.signal;
@@ -1345,8 +1426,11 @@ async function sendMedia(intent, text) {
   const noun = intent.kind === 'video' ? 'vídeo' : 'imagen';
   if (!t.messages.length) { t.title = text.replace(/\s+/g, ' ').slice(0, 60).toUpperCase(); $('#crumb-title').textContent = t.title; }
   input.value = ''; autosize();
-  t.messages.push({ role: 'user', content: text });
-  addMessage('user', text);
+  const attachments = attached.map((a) => a.id);
+  attached = [];
+  renderAttachments();
+  t.messages.push({ role: 'user', content: text, ...(attachments.length ? { attachments } : {}) });
+  showAttachments(addMessage('user', text), attachments);
   // sin modelo de vídeo, el vídeo se hace con HTML y el modelo de chat
   const chatModel = decide(routeFor('chat'), { models: state.visible || [], mode: 'chat', endpoints: getEndpoints(), need: {} }).model;
   if (intent.kind === 'html' || (intent.kind === 'video' && !mediaService.pick('video') && chatModel)) return sendHtmlVideo(t, intent, chatModel);
@@ -1380,6 +1464,12 @@ async function sendMedia(intent, text) {
         else req.prompt = `${last.prompt}. ${intent.prompt}`; // el modelo no acepta imágenes: se rehace con el cambio
       }
     }
+    // una imagen adjunta sirve de referencia o de primer fotograma, si el modelo lo admite
+    if (attachments.length) {
+      const urls = (await Promise.all(attachments.map(loadAttachment))).filter(Boolean);
+      if (intent.kind === 'video' && controls.start) req.start = urls[0];
+      else if (intent.kind === 'image' && controls.refs) req.refs = urls.slice(0, controls.refs);
+    }
     const items = await mediaService.generate(req, { source: 'chat', parent, signal: state.abort.signal });
     clearInterval(tick);
     const content = `${intent.kind === 'video' ? 'Vídeo generado' : 'Imagen generada'} con \`${m.id}\`.\n\nPrompt: ${req.prompt}`;
@@ -1401,12 +1491,14 @@ async function sendMedia(intent, text) {
 }
 
 async function send(text) {
+  if (!text && attached.length) text = '¿Qué ves en esta imagen?';
   // «genera una imagen de…» en el chat: va directo al modelo de imagen, sin pasar por el de texto
   if (state.mode === 'chat') {
     const intent = detectMediaIntent(text, { last: await lastMediaOf(thread()) });
     if (intent) return sendMedia(intent, text);
   }
   const decision = currentDecision();
+  if (attached.length && decision.model && capsOf(decision.model.ep, decision.model.id).vision === false) { toast(`${decision.model.id.toUpperCase()} NO VE IMÁGENES: ELIGE OTRO MODELO`); return; }
   const m = decision.model;
   if (!m) { toast(decision.reasons[0] ? decision.reasons[0].toUpperCase() : 'SIN API CONECTADA — REVISA AJUSTES'); return; }
   state.decision = decision;
@@ -1439,8 +1531,12 @@ async function send(text) {
   }
   input.value = ''; autosize();
   const turn = state.mode === 'agent' ? Date.now() : null;
-  t.messages.push({ role: 'user', content: text, turn });
-  addMessage('user', text, { turn });
+  const attachments = attached.map((a) => a.id);
+  attached = [];
+  renderAttachments();
+  t.messages.push({ role: 'user', content: text, turn, ...(attachments.length ? { attachments } : {}) });
+  const userRow = addMessage('user', text, { turn });
+  showAttachments(userRow, attachments);
   t.updated = Date.now(); saveThreads(); renderThreads();
 
   state.abort = new AbortController();
@@ -2049,7 +2145,7 @@ function agentSys({ os, skills, memory }) {
 async function sendChat(t, m, { regen = null } = {}) {
   const sys = chatSystem(t) + (regen?.instruction ? `\n\nPARA ESTA RESPUESTA: reescribe tu respuesta anterior a la última pregunta. ${regen.instruction}` : '');
   const upto = regen ? t.messages.slice(0, regen.index) : t.messages;
-  const history = upto.slice(-24).map(({ role, content }) => ({ role, content }));
+  const history = await withImages(upto.slice(-24), loadAttachment);
   const row = regen ? regen.row : addMessage('assistant', '', { streaming: true, model: m.id });
   if (regen) { $('.msg-actions', row)?.remove(); $('.who', row).textContent = `JEAN · ${m.id.toUpperCase()}`; updateMessage(row, '', '', true); }
   let answeredBy = m.id;
@@ -2580,7 +2676,9 @@ async function sendAgent(t, m, text, turn) {
     const w = await actComputer('list_windows', {}, computer.vision);
     if (!String(w).startsWith('ERROR')) observed = `\n\n[OBSERVACIÓN INICIAL · ventanas abiertas]\n${w}`;
   }
-  t.agentMessages.push({ role: 'user', content: (await expandMentions(text)) + observed + (hookContext ? `\n\n[CONTEXTO DE UN HOOK]\n${hookContext}` : '') });
+  const fullText = (await expandMentions(text)) + observed + (hookContext ? `\n\n[CONTEXTO DE UN HOOK]\n${hookContext}` : '');
+  const [firstTurn] = await withImages([{ role: 'user', content: fullText, attachments: userMsg.attachments }], loadAttachment);
+  t.agentMessages.push(firstTurn);
 
   let row = null;
   const ctx = {
@@ -3572,6 +3670,7 @@ function hideBoot() {
   if (wantsRemote) setMode('remote');
   placeMascot();
   hideBoot();
+  setTimeout(() => pruneAttachments().catch(() => {}), 8000);
   $('#splash-remote')?.addEventListener('click', async () => { await enterApp(); setMode('remote'); });
   setTimeout(() => checkUpdate(), 1500); // escritorio y móvil, también antes de conectar una API
 })();

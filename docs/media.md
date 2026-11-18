@@ -35,15 +35,29 @@ mismo servicio (`web/js/media/service.js`), así que todo termina en la misma ga
 | SiliconFlow | `/images/generations` | `/video/submit` |
 | Google Gemini | Interactions API | Veo (`predictLongRunning`) |
 | MiniMax | `/image_generation` | `/v2/video_generation` |
+| fal.ai | Cola de `queue.fal.run` | Cola de `queue.fal.run` (añade el modelo a mano) |
+| Replicate | Predicciones | Predicciones (añade el modelo a mano) |
+| Black Forest Labs | FLUX.2 | No |
+| Recraft | `/images/generations` | No |
+| Luma | Photon | Ray |
+| Stable Diffusion WebUI y Forge, en tu PC | `txt2img` e `img2img` con tus checkpoints | No |
+| ComfyUI, en tu PC | Flujo estándar con tus checkpoints | No |
 | Cualquier otra API compatible con OpenAI (DeepInfra, Nebius, LiteLLM, servidor propio…) | `/images/generations` | `/videos` (crear, consultar, descargar) |
 
 Un modelo que no aparezca en la lista se añade con «Escribir otro modelo…» en el selector del estudio.
 
 ## Vídeo con HTML
 
-La pestaña **HTML** del estudio crea vídeo sin un modelo de vídeo: tu modelo de chat escribe una composición animada y
-este dispositivo la convierte en MP4 fotograma a fotograma. También funciona con `/videohtml`, pidiéndolo en el chat, con
-la herramienta `render_html_video` del agente y, si no tienes ningún modelo de vídeo, al pedir un vídeo en el chat.
+La pestaña **HTML** del estudio crea vídeo sin un modelo de vídeo y este dispositivo lo convierte en MP4 fotograma a
+fotograma. También funciona con `/videohtml`, pidiéndolo en el chat, con la herramienta `render_html_video` del agente y,
+si no tienes ningún modelo de vídeo, al pedir un vídeo en el chat.
+
+- **Dirigido (por defecto):** el modelo solo escribe el guion en JSON y JeanCode lo monta con una de sus seis direcciones
+  de arte (Impacto, Editorial, Tecno, Pop, Cálido y Minimal). Funciona bien con modelos pequeños o locales, y si el modelo
+  falla, el vídeo sale igualmente a partir de tu pedido. Cambiar estilo, formato o duración no gasta otra llamada.
+- **Libre:** el modelo escribe toda la animación. La app revisa cómo queda (texto que se sale, se pisa o no se lee) y le
+  pide corregirlo una vez.
+- **Sonido:** música y efectos sintetizados en el dispositivo, sin muestras de terceros, con los cortes sobre el pulso.
 
 - **Formato:** el de [HyperFrames](https://github.com/heygen-com/hyperframes) (HeyGen, Apache-2.0): raíz con
   `data-composition-id`, clips con `data-start` y `data-duration`, y una línea `gsap.timeline({ paused: true })` registrada
@@ -51,8 +65,18 @@ la herramienta `render_html_video` del agente y, si no tienes ningún modelo de 
 - **Motor propio:** JeanCode no descarga GSAP ni Chrome. `jcHvRuntime` trae un reloj virtual y la parte de la API de
   timeline que usan estas composiciones. El mismo instante da siempre el mismo fotograma.
 - **Aislamiento:** la composición corre en un iframe sin origen y sin red. No ve tus claves ni tu historial.
-- **Límites:** sale sin sonido, hasta 120 s, y no puede incluir vídeos dentro. Safari no permite leer este tipo de dibujo:
-  en iPhone se puede previsualizar, pero hay que exportar desde el escritorio, Android, Chrome o Edge.
+- **Tipografías:** Anton, Bebas Neue, Archivo Black, Playfair Display, DM Serif Display y Space Grotesk (SIL OFL), incluidas
+  en la app.
+- **Límites:** hasta 120 s y sin vídeos dentro de la composición. Safari no permite leer este tipo de dibujo: en iPhone se
+  puede previsualizar, pero hay que exportar desde el escritorio, Android, Chrome o Edge.
+
+## Modelos locales
+
+- **Ollama** va por su API propia (`/api/chat`): JeanCode pide el contexto que necesita la conversación, por escalones y sin
+  pasar del máximo del modelo. Por la API compatible con OpenAI se quedaría en 4096 tokens en la mayoría de equipos.
+- **Ollama y LM Studio** informan del contexto real, las herramientas y la visión de cada modelo.
+- **Agente:** con un modelo local usa menos herramientas e instrucciones más cortas, y los subagentes van de uno en uno.
+- **Detectar modelos de esta PC** también encuentra Stable Diffusion WebUI, Forge y ComfyUI.
 
 ## Seguridad
 
@@ -68,5 +92,6 @@ la herramienta `render_html_video` del agente y, si no tienes ningún modelo de 
 - `web/js/media/engine.js`: qué modelos sirven, qué admite cada uno, formato de cada proveedor y detección en el chat.
 - `web/js/media/service.js`: biblioteca (IndexedDB), trabajos y vídeos en curso.
 - `web/js/media/studio.js` y `edit.js`: la pestaña Imagen y el retoque local.
-- `web/js/media/htmlvideo.js`, `htmlrender.js`, `htmlstudio.js` y `mp4.js`: el vídeo con HTML.
+- `web/js/media/htmlscenes.js`: guion, plantillas y direcciones de arte. `htmlaudio.js`: banda sonora.
+- `web/js/media/htmlvideo.js`, `htmlrender.js`, `htmlstudio.js` y `mp4.js`: motor, exportación y pestaña HTML.
 - Pruebas: bloque «imagen y vídeo» de `tests/unit.test.mjs`.

@@ -500,6 +500,11 @@ export async function chatStream(opts) {
       if (e.ollamaLegacy) { ollamaLegacy.add(ep.id); continue; }
       // 400 que nombra un parámetro opcional: se quita y se repite (solo si aún no salió texto)
       const why = `${e.detail || ''} ${e.message || ''}`;
+      // un modelo que no ve imágenes: se recuerda y se explica, en vez de un 400 incomprensible
+      if ([400, 422].includes(e.status) && opts.messages?.some((m) => Array.isArray(m.content)) && /image|vision|multi-?modal|image_url|content.*(array|list|string)/i.test(why)) {
+        learnCap(ep, model, { vision: false });
+        throw new ApiError(`${model} no acepta imágenes. Elige un modelo con visión o quita la imagen adjunta.`, e.status, e.detail, 'request');
+      }
       if (e.status === 400 && opts.tools?.length && /tool|function/i.test(why)) learnCap(ep, model, { tools: false });
       const drop = e.status === 400 && !streamed && tries < DROPPABLE.length
         && DROPPABLE.find((d) => d.re.test(why) && !dropped.get(key)?.has(d.key));
