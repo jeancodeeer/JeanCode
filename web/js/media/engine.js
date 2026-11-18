@@ -37,7 +37,8 @@ export function mediaKindOf(ep, id) {
 const KNOWN = {
   openai: [['gpt-image-2.6-sunburst', 'image'], ['gpt-image-2.6-flare', 'image'], ['gpt-image-2', 'image']],
   // integrate.api.nvidia.com/v1/models no lista los modelos visuales: viven en ai.api.nvidia.com
-  nvidia: [['black-forest-labs/flux.1-dev', 'image'], ['black-forest-labs/flux.1-schnell', 'image'], ['black-forest-labs/flux.2-klein-4b', 'image'], ['black-forest-labs/flux-3-image-klein', 'image'], ['black-forest-labs/flux.1-kontext-dev', 'image'], ['stabilityai/stable-diffusion-3.5-large', 'image'], ['qwen/qwen-image', 'image']],
+  // comprobados contra la API real (18-11-2026); Kontext no se ofrece porque la API hospedada solo acepta sus imágenes de ejemplo
+  nvidia: [['black-forest-labs/flux-3-image-klein', 'image'], ['black-forest-labs/flux.1-dev', 'image'], ['black-forest-labs/flux.1-schnell', 'image'], ['black-forest-labs/flux.2-klein-4b', 'image']],
   huggingface: [['black-forest-labs/FLUX.1-schnell', 'image'], ['stabilityai/stable-diffusion-3-medium-diffusers', 'image']],
   dashscope: [['qwen-image-2.0-pro', 'image'], ['wan2.7-t2v', 'video']],
   zai: [['glm-image', 'image'], ['cogvideox-3', 'video']],
@@ -82,10 +83,8 @@ export function controlsFor(ep, id, kind) {
         return { ...base, ratios: free ? [...R_COMMON, '21:9'] : ['1:1', '3:2', '2:3'], resolutions: free ? ['1K', '2K'] : [], qualities: free ? ['auto', 'low', 'medium', 'high', 'xhigh', 'max'] : ['auto', 'low', 'medium', 'high'],
           count: /dall-e-3/.test(id) ? 1 : 10, refs: /dall-e/.test(id) ? 0 : 16, background: !/dall-e/.test(id), mask: !/dall-e/.test(id) };
       }
-      case 'nvidia': {
-        const klein = /klein/.test(id), kontext = /kontext/.test(id);
-        return { ...base, refs: klein || kontext ? 1 : 0, steps: !/schnell/.test(id), guidance: !klein, seed: !/flux\.1|flux\.2/.test(id) };
-      }
+      // la API hospedada no admite semilla ni imágenes propias; pasos y fidelidad solo en los modelos que los regulan
+      case 'nvidia': { const tunable = /flux\.1-dev|flux-3/.test(id); return { ...base, steps: tunable, guidance: tunable }; }
       case 'hf': return { ...base, negative: true, seed: true, steps: true, guidance: true };
       case 'dashscope': return { ...base, ratios: ['1:1', '16:9', '9:16', '4:3', '3:4'], count: 6, negative: true, seed: true };
       case 'zai': return { ...base, ratios: ['1:1', '3:2', '2:3', '4:3', '3:4', '16:9', '9:16'], qualities: ['hd', 'standard'] };
@@ -189,11 +188,10 @@ const IMAGE = {
   },
   /** NVIDIA: cada modelo tiene su URL en ai.api.nvidia.com y rechaza cualquier campo que no conozca. */
   async nvidia(r, net) {
-    const kontext = /kontext/.test(r.model), klein = /klein/.test(r.model);
-    if (kontext && !r.refs?.length) throw new MediaError('Este modelo edita una imagen: añade una imagen de referencia.', { kind: 'request' });
-    const body = clean({ prompt: r.prompt, ...(kontext ? { aspect_ratio: r.ratio || 'match_input_image' } : nvidiaSize(r.ratio)), steps: num(r.steps), cfg_scale: num(r.guidance), seed: num(r.seed), image: r.refs?.[0],
-      mode: klein && r.refs?.length ? 'Image Editing' : undefined });
-    const json = await tolerant(body, ['seed', 'steps', 'cfg_scale', 'width', 'height', 'aspect_ratio'], (b) => net.call(`/${r.model}`, { method: 'POST', base: 'https://ai.api.nvidia.com/v1/genai', body: b }));
+    const dev = /flux\.1-dev/.test(r.model);
+    const range = (v, lo, hi) => (num(v) === undefined ? undefined : Math.min(hi, Math.max(lo, num(v))));
+    const body = clean({ prompt: r.prompt, ...nvidiaSize(r.ratio), steps: range(r.steps, dev ? 5 : 1, dev ? 100 : 50), cfg_scale: range(r.guidance, dev ? 1.1 : 0, dev ? 9 : 20) });
+    const json = await tolerant(body, ['steps', 'cfg_scale', 'width', 'height'], (b) => net.call(`/${r.model}`, { method: 'POST', base: 'https://ai.api.nvidia.com/v1/genai', body: b }));
     if (json.artifacts?.some((a) => a.finishReason === 'CONTENT_FILTERED')) throw new MediaError('El filtro de contenido de NVIDIA bloqueó esta imagen: cambia el prompt.', { kind: 'empty' });
     return need(parseImages(json, 'image/jpeg'));
   },

@@ -1666,14 +1666,19 @@ test('imagen: NVIDIA, Hugging Face, Alibaba, Z.ai y la familia nueva de OpenAI',
   assert.deepEqual(r.call.body, { prompt: 'gato', width: 1344, height: 768, steps: 30, cfg_scale: 4 });
   assert.deepEqual(r.items[0], { b64: 'QUJD', mime: 'image/jpeg' });
   await assert.rejects(run('nvidia', { model: 'x/flux.1-dev' }, { artifacts: [{ base64: '', finishReason: 'CONTENT_FILTERED' }] }), /filtro de contenido/);
-  await assert.rejects(run('nvidia', { model: 'x/flux.1-kontext-dev' }, {}), /imagen de referencia/);
-  r = await run('nvidia', { model: 'x/flux.2-klein-4b', refs: ['data:image/png;base64,AA'] }, { artifacts: [{ base64: 'QUJD' }] });
-  assert.equal(r.call.body.mode, 'Image Editing');
+  r = await run('nvidia', { model: 'x/flux.1-dev', steps: '500', guidance: '50' }, { artifacts: [{ base64: 'QUJD' }] });
+  assert.deepEqual([r.call.body.steps, r.call.body.cfg_scale], [100, 9], 'dentro de los límites del modelo');
+  for (const id of ['flux.1-dev', 'flux.1-schnell', 'flux.2-klein-4b', 'flux-3-image-klein']) {
+    const c = ME.controlsFor(nv, `black-forest-labs/${id}`, 'image');
+    assert.deepEqual([c.seed, c.refs], [false, 0], `${id}: la API hospedada no los admite`);
+  }
+  assert.equal(ME.controlsFor(nv, 'black-forest-labs/flux.1-schnell', 'image').steps, false);
+  assert.equal(ME.knownModels(nv).some((m) => /kontext|stable-diffusion|qwen/.test(m.id)), false, 'solo los que responden de verdad');
   // NVIDIA rechaza con 422 los campos que no conoce: se repite sin ellos
   const seen = [];
-  await ME.generateImage({ kind: 'image', model: 'x/nuevo', prompt: 'p', ratio: '1:1', seed: '5' }, { ep: nv, call: async (_p, o) => {
+  await ME.generateImage({ kind: 'image', model: 'x/nuevo', prompt: 'p', ratio: '1:1', steps: '5' }, { ep: nv, call: async (_p, o) => {
     seen.push(o.body);
-    if ('seed' in o.body) throw Object.assign(new Error('extra field seed not permitted'), { status: 422 });
+    if ('steps' in o.body) throw Object.assign(new Error('extra field steps not permitted'), { status: 422 });
     return { artifacts: [{ base64: 'QUJD' }] };
   } });
   assert.equal(seen.length, 2);

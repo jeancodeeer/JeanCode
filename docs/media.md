@@ -25,7 +25,7 @@ mismo servicio (`web/js/media/service.js`), así que todo termina en la misma ga
 | Proveedor | Imagen | Vídeo |
 |---|---|---|
 | OpenAI | `/images/generations`, `/images/edits` con máscara (familia gpt-image) | `/videos`: la API oficial cerró el 24-09-2026, pero el formato sigue activo para pasarelas compatibles |
-| NVIDIA (build.nvidia.com) | `ai.api.nvidia.com/v1/genai/<modelo>`: FLUX.1 dev, schnell y Kontext, FLUX.2 klein, FLUX.3, Stable Diffusion 3.5, Qwen-Image | No: sus modelos hospedados de vídeo no tienen una API pública documentada |
+| NVIDIA (build.nvidia.com) | `ai.api.nvidia.com/v1/genai/<modelo>`: FLUX.3 klein, FLUX.1 dev, FLUX.1 schnell y FLUX.2 klein, comprobados con la API real. No admite semilla ni editar imágenes propias | No: ninguna ruta de vídeo responde |
 | Hugging Face | `hf-inference/models/<modelo>` | No |
 | Alibaba (DashScope) | Qwen-Image | Wan |
 | Z.ai | GLM-Image | CogVideoX |
@@ -58,8 +58,8 @@ la herramienta `render_html_video` del agente y, si no tienes ningún modelo de 
 
 - La clave solo se envía al origen de la API. Una URL de descarga en otro dominio nunca la recibe.
 - Un proveedor remoto no puede hacer que la app lea tu red local (`fetchMediaBlob` en `web/js/api.js`). En el escritorio y en
-  Android se comprueba el DNS de cada salto y la conexión va a esa IP. En la web y en iPhone, las URL ajenas se piden como
-  cualquier página: el navegador impide leer una red privada, y el destino final también se comprueba.
+  Android se comprueba el DNS de cada salto y la conexión va a esa IP. En la web y en iPhone, una URL ajena no sigue
+  redirecciones: si la tiene, el resultado se muestra por su enlace sin que la app lea la respuesta.
 - El agente pide permiso en cada generación, con el modelo y el prompt a la vista; en PLAN no puede generar.
 - `writeBinary` no sale de la carpeta de trabajo y nunca pisa un archivo que ya exista.
 

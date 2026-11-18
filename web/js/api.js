@@ -334,8 +334,8 @@ export async function fetchMediaBlob(ep, url, { auth = false, mime = '', signal 
   }
   // iPhone: una URL ajena se pide como en la web (el navegador no deja leer una red privada); solo la API propia va por la red nativa
   if (native && !auth) {
-    const res = await fetch(url, { signal });
-    if (res.url) refuse(new URL(res.url));
+    // sin seguir redirecciones: si la hay, el archivo se muestra por su enlace, sin que la app lea la respuesta
+    const res = await fetch(url, { signal, redirect: 'error' });
     if (!res.ok) throw new ApiError(`No se pudo descargar el resultado (${res.status}).`, res.status);
     return res.blob();
   }
@@ -357,8 +357,9 @@ export async function fetchMediaBlob(ep, url, { auth = false, mime = '', signal 
     if (r.status >= 400) throw new ApiError(`No se pudo descargar el resultado (${r.status}).`, r.status);
     return fromB64(String(r.data).replace(/\s/g, ''), r.headers?.['Content-Type'] || r.headers?.['content-type']);
   }
-  const res = await fetch(url, { headers, signal });
-  if (res.url) refuse(new URL(res.url)); // el navegador sigue las redirecciones solo: su destino final tampoco se acepta
+  // una URL ajena no sigue redirecciones (el navegador no deja comprobarlas antes); la de tu API sí, y se revisa su destino
+  const res = await fetch(url, { headers, signal, redirect: auth ? 'follow' : 'error' });
+  if (res.url) refuse(new URL(res.url));
   if (!res.ok) throw new ApiError(`No se pudo descargar el resultado (${res.status}).`, res.status);
   return res.blob();
 }
