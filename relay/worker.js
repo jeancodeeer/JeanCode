@@ -15,14 +15,15 @@ router.huggingface.co api.deepseek.com api.mistral.ai api.x.ai api.together.xyz 
 api.cerebras.ai integrate.api.nvidia.com ai.api.nvidia.com api.sambanova.ai api.deepinfra.com api.hyperbolic.xyz
 api.novita.ai api.tokenfactory.nebius.com api.studio.nebius.com llm.chutes.ai api.siliconflow.com
 api.inference.net api.moonshot.ai api.z.ai dashscope-intl.aliyuncs.com api.minimax.io api.cohere.ai
-api.scaleway.ai openai.inference.de-txl.ionos.com
+api.scaleway.ai openai.inference.de-txl.ionos.com api.friendli.ai api.stepfun.ai open.bigmodel.cn
+queue.fal.run api.replicate.com api.bfl.ai external.api.recraft.ai api.lumalabs.ai
 `.split(/\s+/).filter(Boolean));
-const FORWARD = ['authorization', 'content-type', 'accept', 'x-title', 'http-referer', 'anthropic-version', 'x-api-key'];
+const FORWARD = ['authorization', 'content-type', 'accept', 'x-title', 'http-referer', 'anthropic-version', 'x-api-key', 'x-key', 'prefer'];
 
 const cors = (origin) => ({
   'Access-Control-Allow-Origin': origin || '*',
   Vary: 'Origin',
-  'Access-Control-Allow-Headers': 'authorization, content-type, x-jean-key, x-title, http-referer, anthropic-version',
+  'Access-Control-Allow-Headers': 'authorization, content-type, x-jean-key, x-title, http-referer, anthropic-version, x-key, prefer',
   'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
 });
 const fail = (status, message, origin) => new Response(JSON.stringify({ error: { message, type: 'jean_relay_error' } }), {

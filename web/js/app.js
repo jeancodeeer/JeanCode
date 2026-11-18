@@ -23,14 +23,10 @@ import { loadThreads, saveThreadsSoon, saveThreadsNow, wipeThreads } from './his
 import { createHooks, permissionMode, HOOK_EVENTS } from './hooks.js';
 import { createRemoteHost } from './remote/host.js';
 import { initRemotePhone } from './remote/phone.js';
-import { initPhoneAgent } from './mobile/agent-ui.js';
 import { initAutomations, parseInterval, validateTask, taskSummary, runSummary, describeTaskSchedule, fmtWhen } from './automations.js';
 import { createMediaService, library as mediaLibrary, blobToDataUrl, extOf, slugOf } from './media/service.js';
 import { detectMediaIntent } from './media/engine.js';
 import { createMascot } from './mascot.js';
-import { initStudio } from './media/studio.js';
-import { lintComposition } from './media/htmlvideo.js';
-import { exportHtmlVideo, writeComposition } from './media/htmlrender.js';
 import { SKILL_CATALOG, SKILL_CATEGORIES } from './skills-catalog.js';
 import { PLUGIN_CATALOG, pluginUrl } from './plugins-catalog.js';
 
@@ -59,6 +55,19 @@ function placeMascot(mode = state.mode) {
 const mediaService = createMediaService({ models: () => state.models });
 mediaService.subscribe((what) => { if (what === 'jobs') { if (mediaService.jobs().length) mascot.work('media'); else mascot.done(); } });
 let studio = null;
+/** El estudio y el vídeo HTML se cargan al usarlos por primera vez: el arranque no paga por lo que no se abre. */
+const htmlTools = () => import('./media/htmlrender.js');
+async function openStudio() {
+  if (!studio) {
+    const { initStudio } = await import('./media/studio.js');
+    studio = initStudio({
+      $, esc, store, toast, confirmDialog, downloadBlob, service: mediaService,
+      endpoints: getEndpoints, providerName: (ep) => providerOf(ep).name, openSettings: () => openPanel('settings'),
+      chatText: mediaChatText,
+    });
+  }
+  return studio;
+}
 /** Pregunta al modelo de chat del usuario (mejorar prompts y escribir composiciones). */
 async function mediaChatText(system, user, signal) {
   const m = decide(routeFor('chat'), { models: state.visible || [], mode: 'chat', endpoints: getEndpoints(), need: {} }).model;
@@ -74,8 +83,9 @@ async function saveToWorkspace(item, wanted, d, workspace) {
 
 /** Lo que el agente puede pedir: modelo disponible y generar guardando el archivo en su carpeta de trabajo. */
 const agentMedia = {
-  lintHtml: lintComposition,
+  lintHtml: async (html) => (await import('./media/htmlvideo.js')).lintComposition(html),
   async renderHtml(args, { signal, workspace, desktop: d }) {
+    const { exportHtmlVideo } = await htmlTools();
     const ratio = ['16:9', '9:16', '1:1', '4:5'].includes(args.ratio) ? args.ratio : '16:9';
     const duration = Math.min(120, Math.max(1, Number(args.duration) || 10));
     const blob = await exportHtmlVideo(String(args.html), { ratio, duration, signal });
@@ -689,7 +699,7 @@ function setMode(mode) {
   for (const el of [$('#crumb-title')?.previousElementSibling, $('#crumb-title')]) if (el) el.hidden = mode === 'remote';
   $('#crumb-mode').textContent = mode === 'agent' ? `AGENT · ${state.agent.toUpperCase()}` : mode === 'remote' ? 'CONTROLAR MI PC' : mode === 'device' ? 'AGENTE DEL MÓVIL' : mode === 'image' ? 'IMAGEN' : mode.toUpperCase();
   placeMascot(mode);
-  if (mode === 'image') { $('#crumb-title').textContent = 'ESTUDIO DE IMAGEN Y VÍDEO'; showRailFor(mode); studio.show(); return; }
+  if (mode === 'image') { $('#crumb-title').textContent = 'ESTUDIO DE IMAGEN Y VÍDEO'; showRailFor(mode); openStudio().then((s) => { placeMascot('image'); return s.show(); }); return; }
   if (mode === 'remote') { renderThreads(); remotePhone?.autoconnect(); return; }
   if (mode === 'device') { renderThreads(); phoneAgent.check(); return; }
   updateHint();
@@ -1289,7 +1299,8 @@ document.addEventListener('click', async (e) => {
   const act = b.dataset.mediaAct;
   if (act === 'download') { const i = await mediaLibrary.get(id); if (i?.blob) downloadBlob(i.blob, `${slugOf(i.prompt)}.${extOf(i.mime)}`); return; }
   setMode('image');
-  if (act === 'open') await studio.open(id); else await studio.animate(id);
+  const s = await openStudio();
+  if (act === 'open') await s.open(id); else await s.animate(id);
 });
 
 /** El último resultado de la conversación (para «hazla más azul» o «anímala»). */
@@ -1309,10 +1320,11 @@ async function sendHtmlVideo(t, intent, chatModel) {
     const ratio = /vertical|9:16|reel|tiktok|short/i.test(intent.prompt) ? '9:16' : /cuadrad|1:1/i.test(intent.prompt) ? '1:1' : '16:9';
     const duration = Math.min(30, Number(intent.prompt.match(/(\d+)\s*(?:s\b|seg)/i)?.[1]) || 10);
     const signal = state.abort.signal;
-    const { html } = await writeComposition({ brief: intent.prompt, ratio, duration, chatText: mediaChatText, signal, onStatus: say });
+    const { exportHtmlVideo, directComposition } = await htmlTools();
+    const { html } = await directComposition({ brief: intent.prompt, ratio, duration, chatText: mediaChatText, signal, onStatus: say });
     const blob = await exportHtmlVideo(html, { ratio, duration, signal, onProgress: (p) => say(`exportando… ${Math.round(p * 100)} %`) });
     const item = await mediaService.saveHtmlVideo(blob, { prompt: intent.prompt, html, ratio, duration, source: 'chat' });
-    const content = `Vídeo creado con HTML (${ratio}, ${duration} s, sin sonido). Puedes seguir editándolo en la pestaña Imagen.`;
+    const content = `Vídeo creado con HTML (${ratio}, ${duration} s). Puedes seguir editándolo en la pestaña Imagen.`;
     t.messages.push({ role: 'assistant', content, media: [item.id], model: chatModel.id, at: Date.now() });
     updateMessage(row, content, '', false);
     await showMedia(row, [item.id]);
@@ -2543,6 +2555,8 @@ async function sendAgent(t, m, text, turn) {
     hookContext = up.context;
   }
   const sys = agentSys({ os, skills, memory });
+  // con un modelo local, instrucciones y herramientas más cortas: cada token cuenta
+  sys.lean = capsOf(m.ep, m.id).local === true && (capsOf(m.ep, m.id).context ?? 0) <= 32768;
   if (t.sessionContext) sys.rules = `${sys.rules || ''}\n\nCONTEXTO DE INICIO (hooks SessionStart):\n${t.sessionContext}`;
   if (state.loop?.dynamic && state.loop.thread === t.id) {
     sys.rules = `${sys.rules || ''}\n\nESTÁS EN UN /loop SIN INTERVALO: haz la tarea y, si hay que volver a mirarla más tarde, llama a schedule_wakeup {"delaySeconds": 60-3600, "reason": "qué esperas"} eligiendo el plazo según lo rápido que cambia lo que vigilas. Si la tarea terminó, no lo llames: el bucle acaba.`;
@@ -3541,17 +3555,14 @@ function hideBoot() {
   state.threads = await loadThreads(() => { if (!warned) { warned = true; toast('NO SE PUDO GUARDAR EL HISTORIAL: REVISA EL ESPACIO DEL DISCO'); } });
   window.addEventListener('pagehide', () => { saveThreadsNow(state.threads.slice(0, 200)); });
   if (isNativeApp()) {
+    const { initPhoneAgent } = await import('./mobile/agent-ui.js');
     phoneAgent = initPhoneAgent({
       $, esc, store, toast, renderMarkdown, confirmDialog, agentSystem, runAgent, stripToolBlocks, capsOf, media: agentMedia,
       model: () => currentModel(),
       chat: (m, o) => routedChat(m, o, { models: state.routable || state.models, mode: 'agent', endpoints: getEndpoints(), need: { tools: true } }).then((r) => r.text),
     });
   }
-  studio = initStudio({
-    $, esc, store, toast, confirmDialog, downloadBlob, service: mediaService,
-    endpoints: getEndpoints, providerName: (ep) => providerOf(ep).name, openSettings: () => openPanel('settings'),
-    chatText: mediaChatText,
-  });
+  window.addEventListener('jc:media-full', () => toast('SIN ESPACIO: ESTE RESULTADO NO SE GUARDARÁ AL CERRAR. BORRA ALGO DE LA GALERÍA'));
   if (!desktop) remotePhone = initRemotePhone({ $, esc, store, toast, renderMarkdown, platform: isNativeApp() ? 'app' : 'web' });
   if (desktop?.remote) initRemoteHostUi().catch((e) => console.warn('control remoto', e));
   // controlar un PC no necesita API propia: un enlace de emparejamiento o un PC ya emparejado entran directos

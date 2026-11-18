@@ -1,7 +1,7 @@
 // Modo IMAGEN: el estudio donde se escribe el prompt con calma, se ajusta cada parámetro que admite el modelo y se
 // edita el resultado. El chat y el agente generan con el mismo servicio; aquí está el control fino.
 import { GUIDE_FIELDS, composePrompt, expandPrompt, improveInstruction } from './engine.js';
-import { library, extOf, slugOf } from './service.js';
+import { library, extOf, makeThumb, slugOf } from './service.js';
 import { createHtmlPanel } from './htmlstudio.js';
 import { applyAdjust, adjusted, canvasBlob, canvasFromBlob, canvasOf, cropRect, cropped, flipped, maskFrom, referenceDataUrl, rotated } from './edit.js';
 
@@ -45,7 +45,7 @@ export function initStudio(deps) {
       <div class="st-scroll" id="st-controls"></div>
       <div class="st-go">
         <p class="fine st-summary" id="st-summary" aria-live="polite"></p>
-        <p class="st-error" id="st-error" role="alert" hidden></p>
+        <div class="st-fail" id="st-fail" hidden><p class="st-error" id="st-error" role="alert"></p><button class="btn sm" type="button" id="st-fix" hidden></button></div>
         <button class="btn primary st-generate" id="st-generate" type="submit">Generar</button>
       </div>
     </form>
@@ -170,7 +170,17 @@ export function initStudio(deps) {
     const comp = $('#st-compiled');
     if (comp) comp.textContent = composePrompt(f.guide) || 'El prompt se escribe solo mientras rellenas los campos.';
   }
-  function showError(msg) { if (msg) window.dispatchEvent(new CustomEvent('jc:mascot', { detail: { fail: true } })); st.error = msg; $('#st-error').hidden = !msg; $('#st-error').textContent = msg || ''; }
+  /** Error visible con la salida que tiene: reintentar o ir a Ajustes. */
+  function showError(msg, action = '') {
+    if (msg) window.dispatchEvent(new CustomEvent('jc:mascot', { detail: { fail: true } }));
+    st.error = msg;
+    $('#st-fail').hidden = !msg;
+    $('#st-error').textContent = msg || '';
+    const fix = $('#st-fix');
+    fix.hidden = !msg || !action;
+    fix.dataset.fix = action;
+    fix.textContent = action === 'settings' ? 'Abrir Ajustes' : 'Reintentar';
+  }
 
   /* ---------------------------------------------------------------- generar */
   function requestOf(prompt) {
@@ -199,7 +209,7 @@ export function initStudio(deps) {
     const results = await Promise.allSettled(reqs.map((r) => service.generate(r, { source: 'studio', batch, ...opts })));
     const items = results.flatMap((r) => (r.status === 'fulfilled' ? r.value : []));
     const bad = results.find((r) => r.status === 'rejected' && r.reason?.name !== 'AbortError');
-    if (bad) showError(bad.reason.message);
+    if (bad) { st.lastRun = () => launch(reqs, opts); showError(bad.reason.message, bad.reason.action || ''); }
     await reload();
     if (items.length) select(items[0].id);
     return items;
@@ -231,15 +241,16 @@ export function initStudio(deps) {
   /** Misma tanda y misma familia de ediciones que el resultado abierto. */
   function lineage(item) {
     if (!item) return [];
-    const ids = new Set([item.id]);
-    for (let grew = true; grew;) {
-      grew = false;
-      for (const i of st.items) {
-        if (ids.has(i.id)) continue;
-        const near = (i.parent && ids.has(i.parent)) || [...ids].some((x) => { const o = st.items.find((y) => y.id === x); return o?.parent === i.id || (o?.batch && o.batch === i.batch); });
-        if (near) { ids.add(i.id); grew = true; }
-      }
+    const byId = new Map(st.items.map((i) => [i.id, i]));
+    const links = new Map(); // quién está unido a quién: padres, hijos y misma tanda
+    const join = (a, b) => { links.set(a, [...(links.get(a) || []), b]); links.set(b, [...(links.get(b) || []), a]); };
+    const batches = new Map();
+    for (const i of st.items) {
+      if (i.parent && byId.has(i.parent)) join(i.id, i.parent);
+      if (i.batch) { if (batches.has(i.batch)) join(i.id, batches.get(i.batch)); else batches.set(i.batch, i.id); }
     }
+    const ids = new Set([item.id]);
+    for (const id of ids) for (const next of links.get(id) || []) ids.add(next); // un Set admite crecer mientras se recorre
     return st.items.filter((i) => ids.has(i.id)).reverse();
   }
   function renderStrip() {
@@ -250,7 +261,9 @@ export function initStudio(deps) {
     strip.innerHTML = jobs.map((j) => `<div class="st-job" data-job="${esc(j.id)}"><span class="st-job-t mono" data-started="${j.startedAt}">${clock(Date.now() - j.startedAt)}</span><span class="fine st-job-p">${esc(j.prompt)}</span><button type="button" class="st-thumb-x" data-cancel="${esc(j.id)}" aria-label="Cancelar">${icon('close')}</button></div>`).join('')
       + (versions.length > 1 ? versions.map((i) => `<button type="button" class="st-ver${i.id === st.current ? ' active' : ''}" data-open="${esc(i.id)}" aria-label="Abrir versión">${tile(i)}</button>`).join('') : '');
   }
-  const tile = (i) => (i.kind === 'video' ? `<video src="${esc(urlOf(i))}#t=0.1" muted preload="metadata" playsinline></video>` : `<img src="${esc(urlOf(i))}" alt="" loading="lazy">`);
+  const thumbOf = (i) => { const k = `t:${i.id}`; if (!st.urls.has(k)) st.urls.set(k, URL.createObjectURL(i.thumb)); return st.urls.get(k); };
+  const forget = (id) => { for (const k of [id, `t:${id}`]) if (st.urls.has(k)) { URL.revokeObjectURL(st.urls.get(k)); st.urls.delete(k); } };
+  const tile = (i) => (i.thumb ? `<img src="${esc(thumbOf(i))}" alt="" loading="lazy">` : i.kind === 'video' ? `<video src="${esc(urlOf(i))}#t=0.1" muted preload="metadata" playsinline></video>` : `<img src="${esc(urlOf(i))}" alt="" loading="lazy">`);
   const bar = (b) => `<button class="btn ghost sm" type="button" data-act="${b[0]}"${b[3] ? ` title="${esc(b[3])}"` : ''}>${icon(b[1])}${b[2]}</button>`;
 
   function renderStage() {
@@ -288,9 +301,10 @@ export function initStudio(deps) {
 
   function renderGallery() {
     if (!rail) return;
-    const list = st.items.filter((i) => st.filter === 'all' || i.kind === st.filter);
+    const all = st.items.filter((i) => st.filter === 'all' || i.kind === st.filter);
+    const list = all.slice(0, st.shown || 60);
     rail.innerHTML = `<div class="st-gal-head">${seg('filter', ['all', 'image', 'video'], st.filter, (v) => ({ all: 'Todo', image: 'Imagen', video: 'Vídeo' }[v]))}</div>
-      ${list.length ? `<div class="st-gal">${list.map((i) => `<button type="button" class="st-tile${i.id === st.current ? ' active' : ''}" data-open="${esc(i.id)}" title="${esc(i.prompt.slice(0, 120))}">${tile(i)}${i.kind === 'video' ? `<span class="st-badge">${icon('film')}</span>` : ''}</button>`).join('')}</div>`
+      ${list.length ? `<div class="st-gal">${list.map((i) => `<button type="button" class="st-tile${i.id === st.current ? ' active' : ''}" data-open="${esc(i.id)}" title="${esc(i.prompt.slice(0, 120))}">${tile(i)}${i.kind === 'video' ? `<span class="st-badge">${icon('film')}</span>` : ''}</button>`).join('')}</div>${all.length > list.length ? `<button class="btn ghost sm" type="button" data-act="more">Ver ${Math.min(60, all.length - list.length)} más</button>` : ''}`
     : '<p class="note st-gal-none">Lo que generes se guarda aquí, solo en este dispositivo.</p>'}`;
   }
   async function reload() { st.items = await library.list(); if (st.current && !currentItem()) st.current = null; renderGallery(); if (st.kind !== 'html') renderStage(); }
@@ -364,7 +378,8 @@ export function initStudio(deps) {
   function resetPaint() { const e = edit(); e.paint = canvasOf(e.base.width, e.base.height); e.painted = false; e.crop = null; }
   async function saveEdit(blob, extra = {}) {
     const e = edit();
-    const it = await library.put({ ...e.item, id: crypto.randomUUID(), createdAt: Date.now(), blob, mime: blob.type, remoteUrl: '', parent: e.item.id, source: 'edit', batch: null, ...extra });
+    const thumb = await makeThumb(blob, 'image').catch(() => null);
+    const it = await library.put({ ...e.item, id: crypto.randomUUID(), createdAt: Date.now(), blob, thumb, mime: blob.type, remoteUrl: '', parent: e.item.id, source: 'edit', batch: null, ...extra });
     service.changed();
     st.editor = null;
     st.current = it.id;
@@ -476,6 +491,7 @@ export function initStudio(deps) {
 
   const actions = {
     settings: () => deps.openSettings(),
+    more: () => { st.shown = (st.shown || 60) + 60; renderGallery(); },
     'manual-add': () => {
       const id = $('#st-manual-id').value.trim();
       if (!id) { $('#st-manual-id').focus(); return; }
@@ -518,6 +534,7 @@ export function initStudio(deps) {
       const i = currentItem();
       if (!i || !(await confirmDialog({ title: 'BORRAR DE LA GALERÍA', command: 'Se borrará de este dispositivo y no se puede recuperar.' }))) return;
       await library.remove(i.id);
+      forget(i.id);
       st.current = null;
       await reload();
     },
@@ -537,6 +554,8 @@ export function initStudio(deps) {
   /* ---------------------------------------------------------------- eventos */
   async function onClick(e) {
     const t = e.target;
+    const fix = t.closest('#st-fix');
+    if (fix) { if (fix.dataset.fix === 'settings') deps.openSettings(); else st.lastRun?.(); return; }
     if (st.kind === 'html' && html.onClick(t)) return;
     const open = t.closest('[data-open]');
     if (open) { select(open.dataset.open); document.querySelector('#rail')?.classList.remove('open'); return; }
@@ -603,10 +622,15 @@ export function initStudio(deps) {
   view.addEventListener('paste', (e) => { const s = inputSlot(); const files = [...(e.clipboardData?.files || [])]; if (s && files.length) { e.preventDefault(); addFiles(s, files); } });
 
   // reloj de los trabajos en curso
-  setInterval(() => { for (const el of view.querySelectorAll('[data-started]')) el.textContent = clock(Date.now() - Number(el.dataset.started)); }, 1000);
+  let ticking = 0; // el reloj solo corre mientras hay algo en marcha
+  const tick = () => { for (const el of view.querySelectorAll('[data-started]')) el.textContent = clock(Date.now() - Number(el.dataset.started)); };
   service.subscribe((what) => {
     if (what === 'catalog') renderControls();
-    if (what === 'jobs') renderStrip();
+    if (what === 'jobs') {
+      renderStrip();
+      if (service.jobs().length && !ticking) ticking = setInterval(tick, 1000);
+      if (!service.jobs().length && ticking) { clearInterval(ticking); ticking = 0; }
+    }
     if (what === 'library') reload();
   });
 

@@ -16,11 +16,13 @@ FORMATO (obligatorio)
 - Raíz: <div id="stage" data-composition-id="main" data-start="0" data-duration="${duration}" data-width="${width}" data-height="${height}">. Todo va dentro, con position:absolute y medidas en px para ${width}×${height}.
 - Cada escena o elemento temporal: class="clip" data-start="segundos" data-duration="segundos" data-track-index="0". Fuera de su intervalo no se ve. El orden de pintado lo decide z-index.
 - Animación: const tl = gsap.timeline({ paused: true }); añade los tweens; al final window.__timelines["main"] = tl; El tiempo de la línea es el tiempo del vídeo.
+- Ayudas: HV.split(selector, "words"|"chars") parte el texto en <span class="hv-w"> para animarlo; HV.onFrame(function (t) { ... }) ejecuta código en cada fotograma según el tiempo t (contadores, gráficos).
+- Música opcional: añade a la raíz data-music="drive|tech|bounce|elegant|warm" y data-cues con los segundos de cada cambio de escena separados por comas.
 - API disponible, ya cargada: gsap.timeline, tl.to, tl.from, tl.fromTo, tl.set, tl.addLabel, posiciones (número, "+=0.2", "-=0.2", "<", ">", etiqueta), stagger, repeat finito, yoyo, eases power1-4, sine, expo, circ, back, elastic, bounce (.in, .out, .inOut). Propiedades: x, y, xPercent, yPercent, scale, scaleX, scaleY, rotation, skewX, skewY, opacity, autoAlpha, colores, filter, clipPath y cualquier CSS numérico.
 
 REGLAS PARA QUE EL RENDER SEA EXACTO
 - Todo lo visible depende solo del tiempo de la línea. Prohibido: Date.now, Math.random sin semilla, setTimeout, setInterval, requestAnimationFrame, fetch, repeat: -1, autoplay, <video> y <audio>.
-- Sin recursos externos: nada de CDN, <link>, <script src> ni imágenes remotas. Usa CSS, SVG en línea, degradados y data: URI. Fuentes del sistema: Arial, Georgia, Impact, "Courier New", system-ui.
+- Sin recursos externos: nada de CDN, <link>, <script src> ni imágenes remotas. Usa CSS, SVG en línea, degradados y data: URI. Fuentes incluidas: "Anton", "Bebas Neue", "Archivo Black", "Playfair Display", "DM Serif Display", "Space Grotesk", "IBM Plex Sans", "IBM Plex Mono".
 - No animes display ni visibility de un .clip: anima un hijo. No combines transform de CSS con transformaciones animadas en el mismo elemento.
 - Anima transform y opacity antes que left, top, width o height.
 - No uses backdrop-filter, mix-blend-mode sobre el fondo ni <iframe>.
@@ -303,6 +305,28 @@ export function jcHvRuntime(cfg) {
     utils: { toArray: targetsOf, clamp: (a, b, v) => Math.min(b, Math.max(a, v)), random: (a, b) => a + Math.random() * (b - a), wrap: (a, b, v) => a + ((((v - a) % (b - a)) + (b - a)) % (b - a)) },
   };
 
+  const frameFns = [];
+  W.HV = {
+    onFrame: (fn) => { frameFns.push(fn); },
+    split(selector, by = 'words') {
+      const out = [];
+      for (const el of targetsOf(selector)) {
+        const text = el.textContent;
+        el.textContent = '';
+        for (const part of by === 'chars' ? [...text] : text.split(/(\s+)/)) {
+          if (/^\s+$/.test(part)) { el.appendChild(document.createTextNode(part === ' ' && by === 'chars' ? '\u00a0' : ' ')); continue; }
+          const s = document.createElement('span');
+          s.className = 'hv-w';
+          s.style.display = 'inline-block';
+          s.textContent = part;
+          el.appendChild(s);
+          out.push(s);
+        }
+      }
+      return out;
+    },
+  };
+
   /* ---- saltar a un instante ---- */
   function seek(t) {
     T = t;
@@ -319,6 +343,7 @@ export function jcHvRuntime(cfg) {
     }
     root.seek(T);
     Object.values(W.__timelines).forEach((tl) => tl?.seek?.(T));
+    frameFns.forEach((fn) => fn(T));
     for (const a of document.getAnimations()) { a.pause(); a.currentTime = T * 1000; }
   }
 
@@ -327,6 +352,15 @@ export function jcHvRuntime(cfg) {
   canvas.width = cfg.width; canvas.height = cfg.height;
   const ctx = canvas.getContext('2d', { willReadFrequently: false });
   const XHTML = 'http://www.w3.org/1999/xhtml';
+  let headXml = null; // estilos y fuentes no cambian entre fotogramas: se preparan una vez
+  function prepareHead() {
+    const css = [...document.querySelectorAll('style')].map((s) => s.textContent).join('\n').replace(/:root/g, 'html');
+    const style = document.createElementNS(XHTML, 'style');
+    style.textContent = `${css}\n*,*::before,*::after{animation:none!important;transition:none!important}`;
+    const head = document.createElementNS(XHTML, 'head');
+    head.appendChild(style);
+    return encodeURIComponent(new XMLSerializer().serializeToString(head));
+  }
   function snapshot() {
     const body = document.body.cloneNode(true);
     const a = [document.body, ...document.body.querySelectorAll('*')];
@@ -347,20 +381,46 @@ export function jcHvRuntime(cfg) {
       }
     });
     body.querySelectorAll('script').forEach((s) => s.remove());
-    const css = [...document.querySelectorAll('style')].map((s) => s.textContent).join('\n').replace(/:root/g, 'html');
-    const style = document.createElementNS(XHTML, 'style');
-    style.textContent = `${css}\n*,*::before,*::after{animation:none!important;transition:none!important}`;
-    const html = document.createElementNS(XHTML, 'html');
-    const head = document.createElementNS(XHTML, 'head');
-    head.appendChild(style);
-    html.append(head, body);
-    const xml = new XMLSerializer().serializeToString(html);
-    return `<svg xmlns="http://www.w3.org/2000/svg" width="${cfg.width}" height="${cfg.height}"><foreignObject x="0" y="0" width="100%" height="100%">${xml}</foreignObject></svg>`;
+    headXml ||= prepareHead();
+    const open = `<svg xmlns="http://www.w3.org/2000/svg" width="${cfg.width}" height="${cfg.height}"><foreignObject x="0" y="0" width="100%" height="100%"><html xmlns="${XHTML}">`;
+    return `${encodeURIComponent(open)}${headXml}${encodeURIComponent(`${new XMLSerializer().serializeToString(body)}</html></foreignObject></svg>`)}`;
+  }
+
+  /* ---- revisión automática: lo que se vería mal en pantalla ---- */
+  function audit(times) {
+    const issues = new Map();
+    const outside = new Map(); // lo que entra deslizándose está fuera un momento: solo cuenta si sigue fuera en la siguiente muestra
+    const note = (code, message) => { if (!issues.has(code)) issues.set(code, { code, message }); };
+    const shown = (el) => { for (let n = el; n && n !== document.body; n = n.parentElement) { const c = getComputedStyle(n); if (c.visibility === 'hidden' || c.display === 'none' || Number(c.opacity) < 0.05) return false; } return true; };
+    for (const t of times) {
+      seek(t);
+      const boxes = [];
+      for (const el of document.querySelectorAll('[data-composition-id] *')) {
+        if (![...el.childNodes].some((n) => n.nodeType === 3 && n.textContent.trim()) || !shown(el)) continue;
+        const r = el.getBoundingClientRect();
+        if (r.width < 2 || r.height < 2) continue;
+        boxes.push({ r, el });
+        const text = el.textContent.trim().slice(0, 30);
+        const off = r.left < -2 || r.top < -2 || r.right > cfg.width + 2 || r.bottom > cfg.height + 2;
+        const times_off = off ? (outside.get(el) || 0) + 1 : 0;
+        outside.set(el, times_off);
+        if (times_off >= 2) note('overflow', `El texto «${text}» se sale del encuadre en el segundo ${t.toFixed(1)}.`);
+        if (parseFloat(getComputedStyle(el).fontSize) < Math.min(cfg.width, cfg.height) * 0.024) note('small', `El texto «${text}» es demasiado pequeño para leerse.`);
+      }
+      for (let i = 0; i < boxes.length; i++) for (let k = i + 1; k < boxes.length; k++) {
+        const a = boxes[i], b = boxes[k];
+        if (a.el.contains(b.el) || b.el.contains(a.el)) continue;
+        const w = Math.min(a.r.right, b.r.right) - Math.max(a.r.left, b.r.left), h = Math.min(a.r.bottom, b.r.bottom) - Math.max(a.r.top, b.r.top);
+        if (w > 0 && h > 0 && w * h > 0.18 * Math.min(a.r.width * a.r.height, b.r.width * b.r.height)) note('overlap', `«${a.el.textContent.trim().slice(0, 24)}» y «${b.el.textContent.trim().slice(0, 24)}» se pisan en el segundo ${t.toFixed(1)}.`);
+      }
+      if (!boxes.length && !document.querySelector('[data-composition-id] svg, [data-composition-id] canvas')) note('empty', `No se ve nada en el segundo ${t.toFixed(1)}.`);
+    }
+    return [...issues.values()];
   }
   async function capture(i, t) {
     seek(t);
     const img = new Image();
-    img.src = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(snapshot())}`;
+    img.src = `data:image/svg+xml;charset=utf-8,${snapshot()}`;
     await img.decode();
     ctx.fillStyle = '#000';
     ctx.fillRect(0, 0, cfg.width, cfg.height);
@@ -374,10 +434,12 @@ export function jcHvRuntime(cfg) {
     if (e.source !== parent || m?.token !== cfg.token) return;
     if (m.cmd === 'seek') seek(Number(m.t) || 0);
     if (m.cmd === 'capture') capture(m.i, m.t).catch((err) => post({ type: 'capture-error', message: String(err?.message || err) }));
+    if (m.cmd === 'audit') { try { post({ type: 'audit', issues: audit(m.times || []) }); } catch (err) { post({ type: 'audit', issues: [{ code: 'script', message: String(err?.message || err) }] }); } }
   });
   W.__jcHvReady = () => {
     const stage = document.querySelector('[data-composition-id]');
     if (stage) { stage.style.width ||= `${cfg.width}px`; stage.style.height ||= `${cfg.height}px`; stage.style.position ||= 'relative'; stage.style.overflow ||= 'hidden'; }
-    realTimeout(() => { try { seek(0); } catch (e) { post({ type: 'error', message: String(e.message) }); } post({ type: 'ready', duration: Number(stage?.dataset.duration) || cfg.duration }); }, 0);
+    const fonts = Promise.all([...document.fonts].map((f) => f.load().catch(() => null)));
+    fonts.then(() => realTimeout(() => { try { seek(0); } catch (e) { post({ type: 'error', message: String(e.message) }); } post({ type: 'ready', duration: Number(stage?.dataset.duration) || cfg.duration }); }, 0));
   };
 }

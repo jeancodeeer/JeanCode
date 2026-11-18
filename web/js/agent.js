@@ -98,7 +98,18 @@ export const STYLES = {
 };
 
 /** Herramientas nativas para este agente: las de siempre + procesos/archivos + (si está activado) el control del equipo. */
-export function toolSchemasFor({ computer = null, mcp = [] } = {}) {
+// Con un modelo local cada token cuenta: solo las herramientas del trabajo diario
+const LEAN_TOOLS = new Set(['list_dir', 'glob', 'read_file', 'search', 'write_file', 'edit_file', 'run_command', 'todo_write', 'diagnostics']);
+const LEAN_DOCS = `HERRAMIENTAS. Escribe un bloque por llamada:
+\`\`\`tool
+{"tool": "nombre", "args": { ... }}
+\`\`\`
+- list_dir {"path": "."} · glob {"pattern": "src/**/*.ts"} · read_file {"path": "a.js"} · search {"pattern": "regex"}
+- write_file {"path": "a.js", "content": "..."} · edit_file {"path": "a.js", "old": "texto exacto", "new": "reemplazo"}
+- run_command {"command": "npm test"} · todo_write {"todos": [{"content": "paso", "status": "pending"}]}
+Tras cada bloque recibirás "RESULTADO". Cuando termines, responde sin bloques tool.`;
+export function toolSchemasFor({ computer = null, mcp = [], lean = false } = {}) {
+  if (lean && !computer) return [...TOOL_SCHEMAS.filter((t) => LEAN_TOOLS.has(t.function.name)), ...mcpSchemas(mcp)];
   return [...TOOL_SCHEMAS, ...DEV_SCHEMAS, ...(computer ? COMPUTER_SCHEMAS : []), ...mcpSchemas(mcp)];
 }
 
@@ -136,8 +147,8 @@ export function catalogLines(items, kind) {
   return own.join('\n');
 }
 
-export function agentSystem({ workspace, os, skills, mode, agent = 'build', memory = '', sub, native = true, agents = [], style = 'normal', rules = '', computer = null, mcp = [], quality = '' }) {
-  const skillList = skills.length ? catalogLines(skills, 'skills') : '(ninguna instalada)';
+export function agentSystem({ workspace, os, skills, mode, agent = 'build', memory = '', sub, native = true, agents = [], style = 'normal', rules = '', computer = null, mcp = [], quality = '', lean = false }) {
+  const skillList = skills.length ? catalogLines(lean ? skills.slice(0, 8) : skills, 'skills') : '(ninguna instalada)';
   const role = agent === 'plan'
     ? 'Estás en modo PLAN: analiza, investiga y propone un plan numerado. NO modifiques archivos ni ejecutes comandos.'
     : 'Estás en modo BUILD: implementa los cambios, verifícalos y explica el resultado.';
@@ -159,7 +170,7 @@ Forma de trabajar:
 - Si el usuario rechaza una acción, no la repitas: propone otra o pregunta.
 - Respuestas concisas; código en bloques con lenguaje.
 
-${native ? NATIVE_DOCS : `${TOOL_DOCS}\n${DEV_DOCS}`}
+${native ? NATIVE_DOCS : lean && !computer ? LEAN_DOCS : `${TOOL_DOCS}\n${DEV_DOCS}`}
 ${computer && !sub ? `\n${computerDocs({ native, vision: computer.vision, screen: computer.screen })}\n` : ''}${mcpDocs(mcp, native)}
 SKILLS INSTALADAS (usa load_skill cuando una aplique):
 ${skillList}
@@ -348,7 +359,7 @@ ${r}` : '';
     if (tool === 'render_html_video') {
       if (readOnly || (sub && !ctx.subWrite)) return 'DENEGADO: modo de solo lectura.';
       if (!ctx.media?.renderHtml) return 'ERROR: el vídeo HTML no está disponible aquí.';
-      const problems = ctx.media.lintHtml(String(args.html ?? ''));
+      const problems = await ctx.media.lintHtml(String(args.html ?? ''));
       if (problems.length) return `ERROR: corrige la composición antes de renderizar:\n${problems.map((x) => `- ${x.message}`).join('\n')}`;
       if (!(await ask({ title: 'RENDERIZAR VÍDEO HTML', command: `Se guardará en: ${args.path ? String(args.path) : 'generated/ (nombre automático)'}\n${args.ratio || '16:9'} · ${Number(args.duration) || 10} s` }))) return 'RECHAZADO por el usuario.';
       try {
@@ -549,7 +560,7 @@ ${r}` : '';
     // ctx.chat = enrutador de la interfaz (respaldo y registro); sin él, llamada directa
     const stream = () => (ctx.chat || chatStream)({
       ep: ctx.ep, model: ctx.model, messages, signal: ctx.signal, think: ctx.think, reasoning: ctx.reasoning,
-      tools: ctx.native !== false ? toolSchemasFor({ computer: ctx.computer && !sub ? ctx.computer : null, mcp: ctx.mcp }) : undefined,
+      tools: ctx.native !== false ? toolSchemasFor({ computer: ctx.computer && !sub ? ctx.computer : null, mcp: ctx.mcp, lean: ctx.sys?.lean }) : undefined,
       onDelta: (t) => { text += t; ctx.onEvent({ type: 'assistant-delta', text, reasoning, sub }); },
       onReasoning: (t) => { reasoning += t; ctx.onEvent({ type: 'assistant-delta', text, reasoning, sub }); },
       onToolCalls: (c) => { nativeCalls = c; },
@@ -603,7 +614,9 @@ ${r}` : '';
     // subagentes del mismo mensaje en paralelo; el resto en orden
     const results = new Array(calls.length);
     const subIdx = calls.map((c, i) => (c.tool === 'spawn_subagent' ? i : -1)).filter((i) => i >= 0);
-    await Promise.all(subIdx.map(async (i) => { results[i] = await execHooked(calls[i]); }));
+    // un modelo local atiende de uno en uno: en paralelo solo se estorbarían
+    if (ctx.sys?.lean) for (const i of subIdx) results[i] = await execHooked(calls[i]);
+    else await Promise.all(subIdx.map(async (i) => { results[i] = await execHooked(calls[i]); }));
     for (let i = 0; i < calls.length; i++) {
       if (results[i] !== undefined) continue;
       ctx.onEvent({ type: 'tool-start', call: calls[i], sub });

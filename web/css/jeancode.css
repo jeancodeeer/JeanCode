@@ -684,6 +684,7 @@ kbd { font: 600 11px/1 var(--mono); border: 1px solid var(--line-3); padding: 2p
 .st-h { margin: 0; font: 700 24px/1.05 var(--display); text-transform: uppercase; letter-spacing: .01em; text-wrap: balance; }
 .st-go { display: grid; gap: var(--s2); padding: var(--s3) var(--s4) var(--s4); border-top: 1px solid var(--line); background: var(--bg); }
 .st-summary { margin: 0; min-height: 18px; font-variant-numeric: tabular-nums; }
+.st-fail { display: grid; gap: var(--s2); justify-items: start; }
 .st-error { margin: 0; color: var(--bad); font-size: 13px; line-height: 1.45; overflow-wrap: anywhere; max-height: 96px; overflow-y: auto; }
 .st-generate { width: 100%; justify-content: center; }
 .studio.editing .st-generate { background: transparent; color: var(--ink); box-shadow: none; border-color: var(--line-2); }

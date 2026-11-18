@@ -5,7 +5,7 @@ import { store } from '../store.js';
 import { mediaCall, mediaBytes, fetchMediaBlob, getEndpoints } from '../api.js';
 import { providerOf } from '../providers.js';
 import { billingOf } from '../capabilities.js';
-import { mediaKindOf, knownModels, discoverModels, generateImage, submitVideo, pollVideo, controlsFor, MediaError } from './engine.js';
+import { mediaKindOf, knownModels, discoverModels, generateImage, submitVideo, pollVideo, controlsFor, friendlyMediaError, isTransient, MediaError } from './engine.js';
 
 /* ---------------------------------------------------------------- biblioteca */
 const DB = 'jeancode-media';
@@ -37,7 +37,12 @@ const tx = async (mode, fn) => {
 };
 
 export const library = {
-  async put(item) { memory.set(item.id, item); await tx('readwrite', (s) => s.put(item)).catch(() => {}); return item; },
+  async put(item) {
+    memory.set(item.id, item);
+    // sin espacio el resultado sigue visible en esta sesión, y se avisa para que nadie lo dé por guardado
+    await tx('readwrite', (s) => s.put(item)).catch((e) => { if (e?.name === 'QuotaExceededError') window.dispatchEvent(new CustomEvent('jc:media-full')); });
+    return item;
+  },
   async get(id) { return memory.get(id) || (await tx('readonly', (s) => s.get(id)).catch(() => null)) || null; },
   async list() {
     const saved = (await tx('readonly', (s) => s.getAll()).catch(() => null)) || [];
@@ -83,6 +88,33 @@ const sleep = (ms, signal) => new Promise((resolve, reject) => {
   signal?.addEventListener('abort', () => { clearTimeout(t); reject(new DOMException('aborted', 'AbortError')); }, { once: true });
 });
 
+/** Miniatura para la galería: mostrar decenas de vídeos e imágenes enteros la volvería lenta. */
+export async function makeThumb(blob, kind, size = 240) {
+  if (typeof document === 'undefined' || !blob) return null;
+  const draw = (src, w, h) => {
+    const k = size / Math.min(w, h);
+    const c = document.createElement('canvas');
+    c.width = c.height = size;
+    c.getContext('2d').drawImage(src, (size - w * k) / 2, (size - h * k) / 2, w * k, h * k);
+    return new Promise((resolve) => { c.toBlob(resolve, 'image/jpeg', 0.78); });
+  };
+  const url = URL.createObjectURL(blob);
+  try {
+    if (kind === 'video') {
+      const v = document.createElement('video');
+      v.muted = true; v.playsInline = true; v.preload = 'auto'; v.src = url;
+      await new Promise((resolve, reject) => { v.onloadeddata = resolve; v.onerror = reject; setTimeout(reject, 5000); });
+      v.currentTime = Math.min(0.8, (v.duration || 1) / 3);
+      await new Promise((resolve) => { v.onseeked = resolve; setTimeout(resolve, 2000); });
+      return await draw(v, v.videoWidth, v.videoHeight);
+    }
+    const img = new Image();
+    img.src = url;
+    await img.decode();
+    return await draw(img, img.naturalWidth, img.naturalHeight);
+  } catch { return null; } finally { URL.revokeObjectURL(url); }
+}
+
 /* ---------------------------------------------------------------- servicio */
 /** models() → los modelos de todas las conexiones: [{ id, ep }]. */
 export function createMediaService({ models }) {
@@ -90,7 +122,7 @@ export function createMediaService({ models }) {
   const live = new Map();       // trabajos en curso: id → { id, kind, prompt, model, startedAt, status, ctl }
   const discovered = new Map(); // ep.id → [{ id, kind }]
   const emit = (what) => listeners.forEach((fn) => fn(what));
-  const netFor = (ep, signal) => ({ ep, call: (path, opts = {}) => mediaCall(ep, path, { ...opts, signal }), bytes: (path, opts = {}) => mediaBytes(ep, path, { ...opts, signal }) });
+  const netFor = (ep, signal) => ({ ep, signal, call: (path, opts = {}) => mediaCall(ep, path, { ...opts, signal }), bytes: (path, opts = {}) => mediaBytes(ep, path, { ...opts, signal }) });
 
   const customList = () => store.get('media:custom', []);
 
@@ -137,13 +169,14 @@ export function createMediaService({ models }) {
     if (raw.blob) blob = raw.blob;
     else if (raw.b64) blob = b64ToBlob(raw.b64, raw.mime || 'image/png');
     else {
-      try { blob = await fetchMediaBlob(ep, raw.url, { auth: raw.auth, mime: raw.mime, signal }); } catch (e) {
+      try { blob = await fetchMediaBlob(ep, raw.url, { auth: raw.auth, authHost: raw.authHost, mime: raw.mime, signal }); } catch (e) {
         if (e.name === 'AbortError' || raw.auth || e.kind === 'forbidden' || !/^https?:\/\//i.test(raw.url)) throw e;
         remoteUrl = raw.url; // la web no puede leerlo (CORS), pero sí mostrarlo mientras la URL siga viva
       }
     }
     const mime = blob?.type || raw.mime || (meta.kind === 'video' ? 'video/mp4' : 'image/png');
-    return library.put({ id: crypto.randomUUID(), createdAt: Date.now(), blob, mime, remoteUrl, ...meta });
+    const thumb = await makeThumb(blob, meta.kind).catch(() => null);
+    return library.put({ id: crypto.randomUUID(), createdAt: Date.now(), blob, thumb, mime, remoteUrl, ...meta });
   }
 
   const metaOf = (req, m, opts) => ({
@@ -151,6 +184,19 @@ export function createMediaService({ models }) {
     params: { ratio: req.ratio, resolution: req.resolution, seed: req.seed, steps: req.steps, guidance: req.guidance, quality: req.quality, duration: req.duration, audio: req.audio, background: req.background, count: req.count },
     parent: opts.parent || null, batch: opts.batch || null, source: opts.source || 'studio',
   });
+
+  const humane = (e, m) => friendlyMediaError(e, { provider: providerOf(m.ep).name, model: m.id, local: billingOf(m.ep, m.id) === 'local' });
+  /** Repite lo que falla por algo pasajero (límite, servidor ocupado, red) antes de molestar al usuario. */
+  async function patient(fn, job, signal) {
+    for (let tries = 0; ; tries++) {
+      try { return await fn(); } catch (e) {
+        if (tries >= 2 || !isTransient(e) || signal.aborted) throw e;
+        job.status = 'reintentando';
+        emit('jobs');
+        await sleep(tries ? 6000 : 2000, signal);
+      }
+    }
+  }
 
   function track(job) { live.set(job.id, job); emit('jobs'); return job; }
   function untrack(id) { live.delete(id); emit('jobs'); }
@@ -200,20 +246,20 @@ export function createMediaService({ models }) {
     const meta = metaOf(full, m, opts);
     if (req.kind === 'image') {
       try {
-        const raws = await generateImage(full, netFor(m.ep, ctl.signal));
+        const raws = await patient(() => generateImage(full, netFor(m.ep, ctl.signal)), job, ctl.signal);
         const items = [];
         for (const raw of raws) items.push(await persist(raw, meta, m.ep, ctl.signal));
         emit('library');
         return items;
-      } finally { untrack(job.id); }
+      } catch (e) { throw humane(e, m); } finally { untrack(job.id); }
     }
     let ref;
-    try { ref = await submitVideo(full, netFor(m.ep, ctl.signal)); } catch (e) { untrack(job.id); throw e; }
+    try { ref = await patient(() => submitVideo(full, netFor(m.ep, ctl.signal)), job, ctl.signal); } catch (e) { untrack(job.id); throw humane(e, m); }
     if (!ref?.id) { untrack(job.id); throw new MediaError('El proveedor no devolvió un trabajo de vídeo.'); }
     // se recuerda (sin imágenes ni claves) para retomarlo si cierras la app mientras el proveedor trabaja
     const saved = { id: job.id, key: m.key, ref, meta, startedAt: job.startedAt };
     store.set(JOBS_KEY, [...store.get(JOBS_KEY, []), saved]);
-    return watch(saved, m, job);
+    return watch(saved, m, job).catch((e) => { throw humane(e, m); });
   }
 
   /** Al abrir la app: sigue los vídeos que quedaron en marcha. onDone(items) / onFail(error, job). */
@@ -229,7 +275,8 @@ export function createMediaService({ models }) {
 
   /** Guarda un vídeo exportado desde HTML junto con su composición, para poder seguir editándola. */
   async function saveHtmlVideo(blob, { prompt, html, ratio, duration, source = 'html' }) {
-    const item = await library.put({ id: crypto.randomUUID(), createdAt: Date.now(), kind: 'video', blob, mime: blob.type || 'video/mp4', remoteUrl: '', prompt, negative: '', model: 'Composición HTML', html, params: { ratio, duration }, parent: null, batch: null, source });
+    const thumb = await makeThumb(blob, 'video').catch(() => null);
+    const item = await library.put({ id: crypto.randomUUID(), createdAt: Date.now(), kind: 'video', blob, thumb, mime: blob.type || 'video/mp4', remoteUrl: '', prompt, negative: '', model: 'Composición HTML', html, params: { ratio, duration }, parent: null, batch: null, source });
     emit('library');
     return item;
   }

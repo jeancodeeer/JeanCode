@@ -283,7 +283,7 @@ export async function mediaBytes(ep, path, { body, base, timeout = 300000, signa
  * Descarga un resultado → Blob. La clave solo viaja si el archivo está en el MISMO origen que la API: las URL las
  * escribe el proveedor y una ajena no debe recibirla nunca. auth: true (Bearer) u { cabecera: true } (clave en esa cabecera).
  */
-export async function fetchMediaBlob(ep, url, { auth = false, mime = '', signal } = {}) {
+export async function fetchMediaBlob(ep, url, { auth = false, authHost = '', mime = '', signal } = {}) {
   let u;
   try { u = new URL(url); } catch { throw new ApiError('El proveedor devolvió una URL de descarga no válida.', -1, '', 'format'); }
   // un proveedor remoto no puede hacer que la app lea tu red local; se repite en cada redirección
@@ -293,7 +293,7 @@ export async function fetchMediaBlob(ep, url, { auth = false, mime = '', signal 
     if (remoteApi && isPrivateTarget(x)) throw new ApiError('El proveedor devolvió una dirección de tu red local: no se descarga.', -1, '', 'forbidden');
   };
   refuse(u);
-  const same = u.origin === new URL(ep.url).origin;
+  const same = u.origin === new URL(ep.url).origin || (authHost && (u.hostname === authHost || u.hostname.endsWith(`.${authHost}`)));
   const headers = !auth || !same ? {} : auth === true ? { Authorization: `Bearer ${ep.key}` } : Object.fromEntries(Object.keys(auth).map((k) => [k, ep.key]));
   const fromB64 = (b64, type) => {
     const bin = atob(b64);
@@ -364,8 +364,18 @@ export async function fetchMediaBlob(ep, url, { auth = false, mime = '', signal 
   return res.blob();
 }
 
+/** Servidores solo de imagen: sus modelos instalados (locales) o los que publica el proveedor. */
+async function mediaOnlyModels(ep, prov) {
+  const timeout = ep.timeout ?? MODELS_TIMEOUT;
+  if (prov.id === 'a1111') return (await request(ep, '/sdapi/v1/sd-models', { timeout })).map((m) => m.title || m.model_name).filter(Boolean);
+  if (prov.id === 'comfyui') return (await request(ep, '/object_info/CheckpointLoaderSimple', { timeout }))?.CheckpointLoaderSimple?.input?.required?.ckpt_name?.[0] || [];
+  return (prov.media || []).map(([id]) => id);
+}
+
 /** Modelos de un endpoint y, si es el router de Jean-API-Generator, qué puertos no están disponibles y por qué. */
 export async function listModelsDetailed(ep) {
+  const prov = providerOf(ep);
+  if (prov.mediaOnly) return { ids: await mediaOnlyModels(ep, prov), router: false, unavailable: [] };
   const data = await request(ep, '/models', { timeout: ep.timeout ?? MODELS_TIMEOUT });
   if (!data || typeof data !== 'object' || !(Array.isArray(data) || Array.isArray(data.data) || Array.isArray(data.models))) {
     throw new ApiError(`${providerOf(ep).name} respondió, pero /models no trae una lista de modelos: no parece una API OpenAI-compatible.`, -1, '', 'format');
@@ -373,6 +383,7 @@ export async function listModelsDetailed(ep) {
   const ids = adapterOf(ep).models(data, ep);
   // llama-server (un puerto de Jean o uno local) informa en /props el contexto CONFIGURADO real
   // En segundo plano: la lista de modelos no espera (un servidor sin /props costaría segundos en cada recarga).
+  learnLocalModels(ep, ids);
   if (!data.jean?.router && (providerOf(ep).id === 'jean' || /llama/i.test(data.data?.[0]?.owned_by || ''))) {
     request({ ...ep, url: ep.url.replace(/\/v1$/, '') }, '/props', { timeout: 5000 }).then((props) => {
       const n = props?.default_generation_settings?.n_ctx || props?.n_ctx;
@@ -384,6 +395,61 @@ export async function listModelsDetailed(ep) {
     router: !!data.jean?.router,
     unavailable: Array.isArray(data.jean?.unavailable) ? data.jean.unavailable : [],
   };
+}
+
+/**
+ * Lo que un servidor local sabe de sus modelos (contexto real, herramientas, visión). En segundo plano: la lista no espera.
+ */
+function learnLocalModels(ep, ids) {
+  const prov = providerOf(ep);
+  const root = { ...ep, url: ep.url.replace(/\/v1\/?$/, '') };
+  if (prov.id === 'ollama') {
+    for (const model of ids.slice(0, 40)) {
+      request(root, '/api/show', { method: 'POST', body: JSON.stringify({ model }), timeout: 5000 }).then((j) => {
+        const caps = Array.isArray(j.capabilities) ? j.capabilities : null;
+        const max = Object.entries(j.model_info || {}).find(([k]) => k.endsWith('.context_length'))?.[1];
+        reportCaps(ep, model, { ...(Number(max) ? { context: Number(max) } : {}), ...(caps ? { tools: caps.includes('tools'), vision: caps.includes('vision'), reasoning: caps.includes('thinking'), chat: caps.includes('completion'), embeddings: caps.includes('embedding') } : {}) });
+      }).catch(() => { /* versión antigua de Ollama: se queda lo que se sabía */ });
+    }
+  }
+  if (prov.id === 'lmstudio') {
+    request(root, '/api/v0/models', { timeout: 5000 }).then((j) => {
+      for (const m of j.data || []) reportCaps(ep, m.id, { context: m.loaded_context_length || m.max_context_length || null, vision: m.type === 'vlm', chat: m.type !== 'embeddings', embeddings: m.type === 'embeddings', tools: Array.isArray(m.capabilities) ? m.capabilities.includes('tool_use') : null });
+    }).catch(() => { /* LM Studio sin la API v0 */ });
+  }
+}
+
+/* ------------------------------------------------ Ollama por su API propia
+ * Por /v1 no se puede elegir el tamaño del contexto: con menos de 24 GB de VRAM queda en 4096 y recorta las conversaciones
+ * sin avisar. Por /api/chat se pide el que hace falta, en escalones para no recargar el modelo en cada mensaje. */
+const CTX_STEPS = [8192, 16384, 32768, 65536, 131072];
+const ctxUsed = new Map();
+export function ollamaContext(ep, model, tokens, max = null) {
+  const key = `${ep.id}|${model}`;
+  const want = CTX_STEPS.find((n) => n >= tokens * 1.35 + 2048) || CTX_STEPS[CTX_STEPS.length - 1];
+  const size = Math.max(ctxUsed.get(key) || 0, want);
+  const out = max ? Math.min(size, max) : size;
+  ctxUsed.set(key, out);
+  return out;
+}
+/** Petición OpenAI → /api/chat de Ollama. */
+export function toOllamaChat(payload, { numCtx, thinking = null } = {}) {
+  const messages = payload.messages.map((m) => {
+    const out = { role: m.role, content: typeof m.content === 'string' ? m.content : (m.content || []).filter((p) => p.type === 'text').map((p) => p.text).join('\n') };
+    const images = Array.isArray(m.content) ? m.content.filter((p) => p.type === 'image_url').map((p) => String(p.image_url?.url || '').replace(/^data:[^,]*,/, '')) : [];
+    if (images.length) out.images = images;
+    if (m.tool_calls?.length) out.tool_calls = m.tool_calls.map((c) => { let args = {}; try { args = JSON.parse(c.function?.arguments || '{}'); } catch { /* se envía vacío */ } return { function: { name: c.function?.name, arguments: args } }; });
+    return out;
+  });
+  return { model: payload.model, messages, stream: true, keep_alive: '30m', options: { num_ctx: numCtx, ...(payload.temperature != null ? { temperature: payload.temperature } : {}) }, ...(payload.tools?.length ? { tools: payload.tools } : {}), ...(thinking === null ? {} : { think: thinking }) };
+}
+/** Línea de /api/chat → el mismo trozo que da la API de OpenAI. */
+export function fromOllamaChunk(j) {
+  if (j.error) return { error: j.error };
+  const m = j.message || {};
+  const delta = { ...(m.content ? { content: m.content } : {}), ...(m.thinking ? { reasoning_content: m.thinking } : {}) };
+  if (m.tool_calls?.length) delta.tool_calls = m.tool_calls.map((c, index) => ({ index, id: `call_${index}`, function: { name: c.function?.name, arguments: JSON.stringify(c.function?.arguments ?? {}) } }));
+  return { choices: [{ delta }], ...(j.done ? { usage: { prompt_tokens: j.prompt_eval_count || 0, completion_tokens: j.eval_count || 0 } } : {}) };
 }
 
 export async function listModels(ep) {
@@ -431,6 +497,7 @@ export async function chatStream(opts) {
     try {
       return await chatOnce({ ...opts, onDelta: mark(opts.onDelta), onReasoning: mark(opts.onReasoning) }, dropped.get(key));
     } catch (e) {
+      if (e.ollamaLegacy) { ollamaLegacy.add(ep.id); continue; }
       // 400 que nombra un parámetro opcional: se quita y se repite (solo si aún no salió texto)
       const why = `${e.detail || ''} ${e.message || ''}`;
       if (e.status === 400 && opts.tools?.length && /tool|function/i.test(why)) learnCap(ep, model, { tools: false });
@@ -447,6 +514,7 @@ export async function chatStream(opts) {
 /** Espera máxima hasta que el servidor responde (cabeceras). En CPU (Jean, local) leer un contexto largo tarda. */
 export const firstByteTimeout = (ep) => (providerOf(ep).id === 'jean' || providerOf(ep).local || /localhost|127\.0\.0\.1/.test(ep.url) ? 900000 : 120000);
 
+const ollamaLegacy = new Set(); // servidores detrás de un proxy que solo expone /v1
 async function chatOnce({ ep, model, messages, signal, onDelta, onReasoning, onToolCalls, onUsage, temperature, think, reasoning, tools, firstByteMs }, skip = new Set()) {
   const waitFirst = firstByteMs || firstByteTimeout(ep); // un trabajo largo (escribir una composición) puede pedir más margen
   let payload = { model, messages, stream: true, temperature: temperature ?? 0.2 };
@@ -459,7 +527,14 @@ async function chatOnce({ ep, model, messages, signal, onDelta, onReasoning, onT
   if (wantsStreamUsage(ep)) payload.stream_options = { include_usage: true };
   for (const k of skip) delete payload[k];
   payload = adapterOf(ep).request(payload, ep);
-  const body = JSON.stringify(payload);
+  // Ollama: API propia para poder elegir el contexto (en el móvil, la red nativa sigue por /v1)
+  const useOllama = providerOf(ep).id === 'ollama' && !nativeHttp() && !ollamaLegacy.has(ep.id);
+  const caps = useOllama ? capsOf(ep, model) : null;
+  const tokensNow = useOllama ? Math.round(JSON.stringify(messages).length / 3.6) + Math.round(JSON.stringify(tools || []).length / 3.6) : 0;
+  const body = useOllama
+    ? JSON.stringify(toOllamaChat(payload, { numCtx: ollamaContext(ep, model, tokensNow, caps.context), thinking: caps.reasoning === true ? (typeof think === 'boolean' ? think : !!(reasoning && reasoning !== 'normal')) : null }))
+    : JSON.stringify(payload);
+  const chatUrl = useOllama ? `${ep.url.replace(/\/v1\/?$/, '')}/api/chat` : `${ep.url}/chat/completions`;
   let chunks = 0; // trozos con formato OpenAI recibidos (0 al final = respuesta inválida)
   const b = bridge();
   let full = '';
@@ -468,7 +543,8 @@ async function chatOnce({ ep, model, messages, signal, onDelta, onReasoning, onT
   // detección de un proxy que almacena el streaming: los trozos llegan todos juntos al final
   const t0 = Date.now();
   const arrivals = [];
-  const handleChunk = (json) => {
+  const handleChunk = (raw) => {
+    const json = useOllama ? fromOllamaChunk(raw) : raw;
     const now = Date.now();
     if (!arrivals.length || now - arrivals[arrivals.length - 1] > 50) arrivals.push(now);
     // consumo: estándar OpenAI (usage) o llama-server (timings), normalmente en el último trozo
@@ -510,11 +586,11 @@ async function chatOnce({ ep, model, messages, signal, onDelta, onReasoning, onT
   if (b?.stream) {
     await new Promise((resolve, reject) => {
       const id = b.stream(
-        { url: ep.url + '/chat/completions', headers: headersFor(ep), body, timeout: waitFirst },
+        { url: chatUrl, headers: headersFor(ep), body, timeout: waitFirst, ndjson: useOllama },
         {
           onEvent: (json) => { try { handleChunk(json); } catch (e) { b.abort(id); reject(e); } },
           onDone: resolve,
-          onError: (err) => reject(err.status
+          onError: (err) => reject(useOllama && err.status === 404 && !/model/i.test(err.body || '') ? Object.assign(new Error('sin /api/chat'), { ollamaLegacy: true }) : err.status
             ? new ApiError(explain(err.status, err.body, ep), err.status, serverMessage(err.body))
             : err.timeout ? new ApiError(`${providerOf(ep).name} no empezó a responder a tiempo.`, 0, '', 'timeout')
               : new ApiError(networkHint(ep) + (err.message ? ` (${err.message})` : ''), 0)),
@@ -534,7 +610,7 @@ async function chatOnce({ ep, model, messages, signal, onDelta, onReasoning, onT
     handleChunk(await Promise.race([job, stop]));
     return finish();
   };
-  let rt = routeOf(ep, '/chat/completions');
+  let rt = useOllama ? { url: chatUrl, headers: headersFor(ep), via: 'direct' } : routeOf(ep, '/chat/completions');
   if (rt.via === 'native') return chatNative(rt);
   let res;
   const ctl = new AbortController();
@@ -560,7 +636,11 @@ async function chatOnce({ ep, model, messages, signal, onDelta, onReasoning, onT
   } finally {
     clearTimeout(timer);
   }
-  if (!res.ok) { const text = await res.text().catch(() => ''); throw new ApiError(explain(res.status, text, ep), res.status, serverMessage(text)); }
+  if (!res.ok) {
+    const text = await res.text().catch(() => '');
+    if (useOllama && res.status === 404 && !/model/i.test(text)) throw Object.assign(new Error('sin /api/chat'), { ollamaLegacy: true });
+    throw new ApiError(explain(res.status, text, ep), res.status, serverMessage(text));
+  }
   if (/text\/html/i.test(res.headers.get('content-type') || '')) throw notApi(ep, '<html>');
 
   const reader = res.body.getReader();
@@ -574,6 +654,7 @@ async function chatOnce({ ep, model, messages, signal, onDelta, onReasoning, onT
     while ((nl = buf.indexOf('\n')) >= 0) {
       const line = buf.slice(0, nl).trim();
       buf = buf.slice(nl + 1);
+      if (useOllama) { if (line) { let row = null; try { row = JSON.parse(line); } catch { /* línea parcial */ } if (row) handleChunk(row); } continue; }
       if (!line.startsWith('data:')) continue;
       const data = line.slice(5).trim();
       if (data === '[DONE]') return finish();
@@ -650,7 +731,7 @@ export function sameServer(a, b) {
 export async function detectLocal(candidates) {
   return Promise.all(candidates.map(async (c) => {
     try {
-      const models = await listModels({ url: c.url, key: 'local', timeout: 2500 });
+      const models = await listModels({ id: `detect:${c.url}`, url: c.url, key: 'local', provider: c.provider, timeout: 2500 });
       return { ...c, models };
     } catch (e) {
       return { ...c, models: null, error: e.message };

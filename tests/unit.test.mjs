@@ -1788,3 +1788,128 @@ test('mascota: qué expresión toca en cada momento', async () => {
   const png = readFileSync(new URL('../web/icons/mascot.png', import.meta.url));
   assert.deepEqual([png.readUInt32BE(16), png.readUInt32BE(20), png[25]], [1152, 208, 6], 'hoja RGBA de 9 × 2 celdas');
 });
+
+test('proveedores: catálogo sin repetidos y solo con conexiones seguras', () => {
+  const ids = P.PROVIDERS.map((x) => x.id);
+  assert.equal(new Set(ids).size, ids.length);
+  assert.ok(ids.length >= 60);
+  for (const x of P.PROVIDERS) {
+    if (x.url && !x.local) assert.match(x.url, /^https:\/\//, x.id);
+    assert.ok(x.keyHint, x.id);
+  }
+  for (const id of ['fal', 'replicate', 'bfl', 'recraft', 'luma', 'a1111', 'comfyui']) assert.equal(P.providerById(id).mediaOnly, true, id);
+  const ep = (provider) => ({ id: provider, url: 'https://x.example/v1', key: 'k', provider });
+  assert.equal(ME.mediaKindOf(ep('luma'), 'ray-2'), 'video');
+  assert.equal(ME.mediaKindOf(ep('a1111'), 'mi-modelo-propio.safetensors'), 'image', 'en un servidor de imagen, todo checkpoint genera imágenes');
+  assert.deepEqual(R.visibleModels([{ id: 'photon-1', ep: ep('luma') }, { id: 'gpt-5', ep: ep('openai') }]).map((m) => m.id), ['gpt-5'], 'no van al selector de chat');
+});
+
+test('imagen: fal, Replicate, BFL, Luma y servidores locales', async () => {
+  const flow = async (provider, url, replies, req = {}) => {
+    const calls = [];
+    const net = { fast: true, ep: { id: 'e', url, key: 'K', provider }, call: async (path, o = {}) => { calls.push({ path, ...o }); return replies[Math.min(calls.length - 1, replies.length - 1)]; } };
+    return { items: await ME.generateImage({ kind: 'image', model: 'org/m', prompt: 'gato', ratio: '1:1', count: 1, ...req }, net), calls };
+  };
+  let f = await flow('fal', 'https://queue.fal.run', [{ request_id: 'r', status_url: 'https://queue.fal.run/org/m/requests/r/status', response_url: 'https://queue.fal.run/org/m/requests/r' }, { status: 'IN_QUEUE' }, { status: 'COMPLETED' }, { images: [{ url: 'https://v3.fal.media/a.png' }] }]);
+  assert.deepEqual(f.calls[0].auth, { Authorization: 'Key K' });
+  assert.equal(f.calls[0].base, 'https://queue.fal.run');
+  assert.equal(f.items[0].url, 'https://v3.fal.media/a.png');
+  await assert.rejects(flow('fal', 'https://queue.fal.run', [{ request_id: 'r', status_url: 'https://mal.example/robar', response_url: 'https://mal.example/x' }]), /dirección inesperada/, 'la clave no va a otro dominio');
+  f = await flow('replicate', 'https://api.replicate.com/v1', [{ id: 'p', status: 'processing' }, { id: 'p', status: 'succeeded', output: ['https://replicate.delivery/a.webp'] }]);
+  assert.equal(f.calls[0].path, '/models/org/m/predictions');
+  assert.deepEqual(f.calls[0].headers, { Prefer: 'wait=55' });
+  assert.deepEqual([f.items[0].authHost, f.items[0].auth], ['replicate.delivery', true]);
+  f = await flow('bfl', 'https://api.bfl.ai/v1', [{ id: 'b', polling_url: 'https://api.eu.bfl.ai/v1/get_result?id=b' }, { status: 'Pending' }, { status: 'Ready', result: { sample: 'https://delivery.bfl.ai/a.jpg' } }]);
+  assert.deepEqual(f.calls[0].auth, { 'x-key': 'K' });
+  assert.equal(f.calls[1].base, 'https://api.eu.bfl.ai');
+  assert.equal(f.items[0].url, 'https://delivery.bfl.ai/a.jpg');
+  await assert.rejects(flow('bfl', 'https://api.bfl.ai/v1', [{ id: 'b', polling_url: 'https://api.bfl.ai/x' }, { status: 'Content Moderated' }]), /filtro de contenido/);
+  f = await flow('luma', 'https://api.lumalabs.ai/dream-machine/v1', [{ id: 'l', state: 'queued' }, { id: 'l', state: 'completed', assets: { image: 'https://cdn.luma/a.jpg' } }]);
+  assert.equal(f.calls[0].path, '/generations/image');
+  assert.equal(f.items[0].url, 'https://cdn.luma/a.jpg');
+  f = await flow('a1111', 'http://127.0.0.1:7860', [{ images: ['QUJD'] }], { model: 'sdxl.safetensors', negative: 'n', steps: '20', refs: ['data:image/png;base64,REVG'] });
+  assert.equal(f.calls[0].path, '/sdapi/v1/img2img');
+  assert.deepEqual([f.calls[0].body.init_images, f.calls[0].body.override_settings.sd_model_checkpoint, f.calls[0].body.steps], [['REVG'], 'sdxl.safetensors', 20]);
+  assert.equal(f.items[0].b64, 'QUJD');
+  f = await flow('comfyui', 'http://127.0.0.1:8188', [{ prompt_id: 'c1' }, {}, { c1: { outputs: { 7: { images: [{ filename: 'a b.png', subfolder: '', type: 'output' }] } } } }], { model: 'sd15.ckpt', seed: '9' });
+  const wf = f.calls[0].body.prompt;
+  assert.deepEqual([wf[1].inputs.ckpt_name, wf[5].inputs.seed, wf[7].class_type], ['sd15.ckpt', 9, 'SaveImage']);
+  assert.match(f.items[0].url, /\/view\?filename=a\+b\.png/);
+});
+
+test('errores: cada fallo dice qué pasó y qué hacer', () => {
+  const say = (e, o = {}) => ME.friendlyMediaError(e, { provider: 'NVIDIA', model: 'flux', ...o });
+  assert.deepEqual([say({ status: 401 }).action, /clave/.test(say({ status: 401 }).message)], ['settings', true]);
+  assert.match(say({ status: 402 }).message, /saldo/);
+  assert.match(say({ status: 400, detail: 'Insufficient credits' }).message, /saldo/);
+  assert.match(say({ status: 403 }).message, /acceso a flux/);
+  assert.equal(say({ status: 429 }).action, 'retry');
+  assert.equal(say({ status: 503 }).action, 'retry');
+  assert.match(say({ status: 400, detail: 'blocked by safety system' }).message, /filtro de contenido/);
+  assert.match(say({ status: 0, kind: 'network' }, { local: true }).message, /abierto en esta PC/);
+  const abort = new DOMException('aborted', 'AbortError');
+  assert.equal(say(abort), abort, 'cancelar no es un error');
+  assert.equal(ME.isTransient({ status: 429 }), true);
+  assert.equal(ME.isTransient({ status: 400 }), false);
+  assert.equal(ME.isTransient(abort), false);
+});
+
+test('modelos locales: Ollama con el contexto que hace falta', () => {
+  const ep = { id: 'o1', url: 'http://localhost:11434/v1', provider: 'ollama' };
+  assert.equal(API.ollamaContext(ep, 'm', 1000), 8192);
+  assert.equal(API.ollamaContext(ep, 'm', 10000), 16384);
+  assert.equal(API.ollamaContext(ep, 'm', 500), 16384, 'no baja: cambiarlo recargaría el modelo');
+  assert.equal(API.ollamaContext(ep, 'chico', 90000, 32768), 32768, 'nunca más de lo que admite el modelo');
+  const body = API.toOllamaChat({ model: 'q', temperature: 0.2, tools: [{ type: 'function', function: { name: 'x' } }], messages: [
+    { role: 'user', content: [{ type: 'text', text: 'mira' }, { type: 'image_url', image_url: { url: 'data:image/png;base64,QUJD' } }] },
+    { role: 'assistant', content: '', tool_calls: [{ id: 'c', function: { name: 'read', arguments: '{"path":"a"}' } }] },
+    { role: 'tool', tool_call_id: 'c', content: 'hola' },
+  ] }, { numCtx: 16384, thinking: false });
+  assert.deepEqual(body.options, { num_ctx: 16384, temperature: 0.2 });
+  assert.deepEqual([body.messages[0].content, body.messages[0].images], ['mira', ['QUJD']]);
+  assert.deepEqual(body.messages[1].tool_calls[0].function.arguments, { path: 'a' });
+  assert.equal(body.think, false);
+  assert.equal('think' in API.toOllamaChat({ model: 'q', messages: [] }, { numCtx: 8192 }), false, 'un modelo sin razonamiento rechazaría el campo');
+  const c = API.fromOllamaChunk({ message: { content: 'ho', thinking: 'mmm', tool_calls: [{ function: { name: 'read', arguments: { path: 'a' } } }] } });
+  assert.deepEqual(c.choices[0].delta, { content: 'ho', reasoning_content: 'mmm', tool_calls: [{ index: 0, id: 'call_0', function: { name: 'read', arguments: '{"path":"a"}' } }] });
+  assert.deepEqual(API.fromOllamaChunk({ done: true, message: {}, prompt_eval_count: 5, eval_count: 7 }).usage, { prompt_tokens: 5, completion_tokens: 7 });
+  const lean = AG.toolSchemasFor({ lean: true }).map((t) => t.function.name);
+  assert.ok(lean.length <= 9 && lean.includes('edit_file') && !lean.includes('schedule_task'));
+  assert.ok(AG.toolSchemasFor({}).length > lean.length * 2);
+});
+
+test('vídeo dirigido: del guion a una composición válida, con cualquier modelo', async () => {
+  const S = await import('../web/js/media/htmlscenes.js');
+  const HV = await import('../web/js/media/htmlvideo.js');
+  const A = await import('../web/js/media/htmlaudio.js');
+  assert.equal(S.parseStoryboard('Claro:\n```json\n{"mood":"pop","scenes":[{"type":"hook","headline":"Hola",},]}\n```').mood, 'pop', 'tolera texto y comas de más');
+  assert.equal(S.parseStoryboard('no hay guion'), null);
+  const board = S.normalizeBoard({ mood: 'tecno', accent: 'rojo', scenes: [{ type: 'stat', value: 'muchos' }, { type: 'list', items: ['a', 'b', 'c', 'd', 'e', 'f'] }, { type: 'nada' }, { type: 'hook', headline: 'x'.repeat(200) }] }, { duration: 10, brief: 'Café "Altura": rico' });
+  assert.equal(board.scenes.at(-1).type, 'cta', 'siempre hay cierre');
+  assert.equal(board.scenes.find((x) => x.type === 'list').items.length, 4);
+  assert.equal(board.scenes.some((x) => x.type === 'stat'), false, 'sin una cifra real no hay escena de cifra');
+  assert.equal(board.accent, '', 'un color no válido se ignora');
+  const empty = S.normalizeBoard(null, { duration: 6, brief: 'Tienda "Sol". Abrimos hoy. Envíos gratis' });
+  assert.deepEqual([empty.scenes[0].type, empty.scenes.at(-1).headline], ['hook', 'Sol'], 'un modelo que falla no deja sin vídeo');
+  const times = S.sceneTimes(board.scenes, 10);
+  assert.equal(times.at(-1).end, 10);
+  times.forEach((t, i) => { if (i) assert.equal(t.start, times[i - 1].end); });
+  const fit = S.fitText('el café que te despierta de verdad', { width: 1500, height: 500, max: 200, charWidth: 0.5 });
+  assert.ok(fit.size * Math.max(...fit.lines.map((l) => l.length)) * 0.5 <= 1500 && fit.lines.length > 1);
+  for (const theme of Object.keys(S.THEMES)) for (const ratio of ['16:9', '9:16', '1:1', '4:5']) {
+    const html = S.buildComposition(S.normalizeBoard({ scenes: [{ type: 'hook', headline: 'Hola <mundo>' }, { type: 'words', words: ['Uno', 'Dos'] }, { type: 'stat', value: '1.200', label: 'x' }, { type: 'quote', text: 'Una frase' }, { type: 'compare', left: { title: 'A', text: 'a' }, right: { title: 'B', text: 'b' } }, { type: 'cta', headline: 'Fin' }] }, { duration: 12 }), { ratio, duration: 12, theme });
+    assert.deepEqual(HV.lintComposition(html), [], `${theme} ${ratio}`);
+    assert.ok(!html.includes('<mundo>'), 'el texto del modelo va escapado');
+  }
+  const html = S.buildComposition(board, { duration: 10, sound: true });
+  assert.equal(A.soundOf(html).music, S.THEMES.tecno.music);
+  assert.ok(A.soundOf(html).cues.length >= 1);
+  assert.equal(A.soundOf(S.buildComposition(board, { duration: 10, sound: false })), null);
+  const { muxMp4 } = await import('../web/js/media/mp4.js');
+  const file = muxMp4({ codec: 'avc1', width: 640, height: 360, fps: 30, description: new Uint8Array([1, 100, 0, 40]), samples: [{ data: new Uint8Array([1, 2]), key: true }], audio: { codec: 'mp4a', sampleRate: 48000, channels: 2, description: new Uint8Array([0x11, 0x90]), samples: [{ data: new Uint8Array([9, 8, 7]), key: true, duration: 1024 }] } });
+  const text = Buffer.from(file).toString('latin1');
+  for (const b of ['mp4a', 'esds', 'smhd', 'soun', 'vide']) assert.ok(text.includes(b), b);
+  const view = new DataView(file.buffer);
+  const second = text.indexOf('stco', text.indexOf('stco') + 4);
+  assert.deepEqual([...file.subarray(view.getUint32(second + 12), view.getUint32(second + 12) + 3)], [9, 8, 7], 'el índice del sonido apunta a sus datos');
+});

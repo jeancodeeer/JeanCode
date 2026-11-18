@@ -138,9 +138,10 @@ ipcMain.on('stream:start', async (e, id, req) => {
       while ((nl = buf.indexOf('\n')) >= 0) {
         const line = buf.slice(0, nl).trim();
         buf = buf.slice(nl + 1);
-        if (!line.startsWith('data:')) continue;
-        const payload = line.slice(5).trim();
-        if (payload === '[DONE]') continue;
+        // Ollama responde una línea JSON por trozo, sin el prefijo data:
+        if (!req.ndjson && !line.startsWith('data:')) continue;
+        const payload = req.ndjson ? line : line.slice(5).trim();
+        if (!payload || payload === '[DONE]') continue;
         if (wc.isDestroyed()) { ctrl.abort(); break; }
         try { wc.send('stream:event', id, JSON.parse(payload)); } catch { /* parcial */ }
       }

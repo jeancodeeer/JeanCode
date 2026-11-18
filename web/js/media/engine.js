@@ -16,8 +16,8 @@ export class MediaError extends Error {
 // Proveedores que solo sirven texto: aunque un nombre se parezca, nunca se les pide imagen ni vídeo
 const TEXT_ONLY = new Set(['anthropic', 'groq', 'cerebras', 'deepseek', 'cohere', 'moonshot', 'sambanova', 'hyperbolic']);
 // El resto de proveedores usa el formato de OpenAI (/images/generations y /videos): lo que aquí no aparece, se intenta así.
-const VIDEO_PROTOCOL = { openai: 'openai', openrouter: 'openrouter', gemini: 'veo', minimax: 'minimax', xai: 'xai', together: 'together', siliconflow: 'siliconflow', dashscope: 'dashscope', zai: 'zai' };
-const IMAGE_PROTOCOL = { openai: 'openai', openrouter: 'openrouter', gemini: 'gemini', minimax: 'minimax', xai: 'xai', together: 'together', siliconflow: 'siliconflow', nvidia: 'nvidia', huggingface: 'hf', dashscope: 'dashscope', zai: 'zai' };
+const VIDEO_PROTOCOL = { fal: 'fal', replicate: 'replicate', luma: 'luma', openai: 'openai', openrouter: 'openrouter', gemini: 'veo', minimax: 'minimax', xai: 'xai', together: 'together', siliconflow: 'siliconflow', dashscope: 'dashscope', zai: 'zai' };
+const IMAGE_PROTOCOL = { fal: 'fal', replicate: 'replicate', bfl: 'bfl', luma: 'luma', a1111: 'a1111', comfyui: 'comfy', openai: 'openai', openrouter: 'openrouter', gemini: 'gemini', minimax: 'minimax', xai: 'xai', together: 'together', siliconflow: 'siliconflow', nvidia: 'nvidia', huggingface: 'hf', dashscope: 'dashscope', zai: 'zai' };
 
 /** Formato de la API de este proveedor para ese tipo de contenido, o null si no lo ofrece. */
 export function protocolOf(ep, kind) {
@@ -28,6 +28,8 @@ export function protocolOf(ep, kind) {
 
 /** 'image', 'video' o null: lo que informa el proveedor y, si no, el nombre del modelo. */
 export function mediaKindOf(ep, id) {
+  const p = providerOf(ep);
+  if (p.mediaOnly) return p.media?.find(([m]) => m === id)?.[1] || 'image';
   const c = capsOf(ep, id);
   const kind = c.video === true ? 'video' : c.image === true ? 'image' : VIDEO_MODEL.test(id) ? 'video' : IMAGE_MODEL.test(id) ? 'image' : null;
   return kind && protocolOf(ep, kind) ? kind : null;
@@ -45,7 +47,7 @@ const KNOWN = {
   minimax: [['image-01', 'image'], ['MiniMax-H3', 'video'], ['MiniMax-H3-Lite', 'video'], ['MiniMax-H3-Highspeed', 'video'], ['MiniMax-H3-Max', 'video']],
   xai: [['grok-imagine-image-2.0', 'image'], ['grok-imagine-video-1.5', 'video'], ['grok-imagine-video-1.5-lite', 'video'], ['grok-imagine-video', 'video']],
 };
-export const knownModels = (ep) => (KNOWN[providerOf(ep).id] || []).map(([id, kind]) => ({ id, kind, ep }));
+export const knownModels = (ep) => [...(KNOWN[providerOf(ep).id] || []), ...(providerOf(ep).media || [])].map(([id, kind]) => ({ id, kind, ep }));
 
 const videoInfo = new Map(); // `${ep.id}|${modelo}` → lo que OpenRouter informa de cada modelo de vídeo
 
@@ -85,6 +87,12 @@ export function controlsFor(ep, id, kind) {
       }
       // la API hospedada no admite semilla ni imágenes propias; pasos y fidelidad solo en los modelos que los regulan
       case 'nvidia': { const tunable = /flux\.1-dev|flux-3/.test(id); return { ...base, steps: tunable, guidance: tunable }; }
+      case 'fal': return { ...base, count: 4, seed: true, steps: true, guidance: true };
+      case 'replicate': return { ...base, seed: true };
+      case 'bfl': return { ...base, seed: true };
+      case 'luma': return { ...base, ratios: [...R_COMMON, '21:9', '9:21'] };
+      case 'a1111': return { ...base, count: 4, refs: 1, negative: true, seed: true, steps: true, guidance: true };
+      case 'comfy': return { ...base, negative: true, seed: true, steps: true, guidance: true };
       case 'hf': return { ...base, negative: true, seed: true, steps: true, guidance: true };
       case 'dashscope': return { ...base, ratios: ['1:1', '16:9', '9:16', '4:3', '3:4'], count: 6, negative: true, seed: true };
       case 'zai': return { ...base, ratios: ['1:1', '3:2', '2:3', '4:3', '3:4', '16:9', '9:16'], qualities: ['hd', 'standard'] };
@@ -104,6 +112,9 @@ export function controlsFor(ep, id, kind) {
         durations: (info.supported_durations || [4, 6, 8]).filter((d) => d > 0), seed: true, audio: true, start: true, end: true, refs: 4 };
     }
     case 'xai': return { ...base, ratios: ['16:9', '9:16', '1:1', '4:3', '3:4', '3:2', '2:3', '21:9', '5:2'], resolutions: /1\.5/.test(id) ? ['480p', '720p', '1080p'] : ['480p', '720p'], durations: [4, 6, 8, 10, 12, 15], start: true };
+    case 'fal': return { ...base, durations: [5, 8, 10], seed: true, start: true };
+    case 'replicate': return { ...base, durations: [5, 8, 10], seed: true, start: true };
+    case 'luma': return { ...base, ratios: ['16:9', '9:16', '1:1', '4:3', '3:4', '21:9'], resolutions: ['540p', '720p', '1080p'], durations: [5, 9] };
     case 'dashscope': return { ...base, resolutions: ['720P', '1080P'], durations: [5, 8, 10, 15], negative: true, seed: true };
     case 'zai': return { ...base, ratios: ['16:9', '9:16', '1:1'], durations: [5, 10], audio: true, start: true, end: true };
     case 'openai': return { ...base, ratios: ['16:9', '9:16'], durations: [4, 8, 12] };
@@ -171,8 +182,104 @@ async function tolerant(body, optional, send) {
   throw new MediaError('El proveedor rechazó la petición.');
 }
 
+/** Espera entre consultas a un trabajo en curso, cancelable. */
+const pause = (ms, signal) => new Promise((resolve, reject) => {
+  if (signal?.aborted) { reject(new DOMException('aborted', 'AbortError')); return; }
+  const t = setTimeout(resolve, ms);
+  signal?.addEventListener('abort', () => { clearTimeout(t); reject(new DOMException('aborted', 'AbortError')); }, { once: true });
+});
+/** Consulta hasta que check() devuelva algo. net.fast acorta la espera en las pruebas. */
+async function waitResult(net, check, maxMs = 600000) {
+  const t0 = Date.now();
+  for (let wait = net.fast ? 0 : 1200; ; wait = Math.min(wait * 1.3, 6000)) {
+    const out = await check();
+    if (out !== undefined) return out;
+    if (Date.now() - t0 > maxMs) throw new MediaError('El proveedor tardó demasiado en responder.', { kind: 'timeout' });
+    await pause(wait, net.signal);
+  }
+}
+/** Llama a una URL que dio el proveedor, solo si está en su dominio: la clave no se envía a ningún otro. */
+function callAt(net, url, host, opts = {}) {
+  const u = new URL(url);
+  if (u.protocol !== 'https:' || !(u.hostname === host || u.hostname.endsWith(`.${host}`))) throw new MediaError('El proveedor devolvió una dirección inesperada: no se consulta.', { kind: 'provider' });
+  return net.call(`${u.pathname}${u.search}`, { ...opts, base: u.origin });
+}
+const FAL_AUTH = (net) => ({ Authorization: `Key ${net.ep.key}` });
+const falSubmit = (model, body, net) => net.call(`/${model}`, { method: 'POST', base: 'https://queue.fal.run', auth: FAL_AUTH(net), body });
+const falStatus = (ref, net) => callAt(net, ref.status, 'fal.run', { auth: FAL_AUTH(net) });
+const falResult = (ref, net) => callAt(net, ref.result, 'fal.run', { auth: FAL_AUTH(net) });
+const falRef = (j) => ({ id: j.request_id, status: j.status_url, result: j.response_url });
+const REPLICATE_FILES = 'replicate.delivery';
+const replicateItems = (output, mime) => need((Array.isArray(output) ? output : [output]).filter((x) => typeof x === 'string').map((url) => ({ url, auth: true, authHost: REPLICATE_FILES, mime })));
+const COMFY_WORKFLOW = (r, ckpt, width, height) => ({
+  1: { class_type: 'CheckpointLoaderSimple', inputs: { ckpt_name: ckpt } },
+  2: { class_type: 'CLIPTextEncode', inputs: { text: r.prompt, clip: ['1', 1] } },
+  3: { class_type: 'CLIPTextEncode', inputs: { text: r.negative || '', clip: ['1', 1] } },
+  4: { class_type: 'EmptyLatentImage', inputs: { width, height, batch_size: 1 } },
+  5: { class_type: 'KSampler', inputs: { model: ['1', 0], positive: ['2', 0], negative: ['3', 0], latent_image: ['4', 0], seed: num(r.seed) ?? Math.floor(Math.random() * 2 ** 32), steps: num(r.steps) ?? 25, cfg: num(r.guidance) ?? 7, sampler_name: 'euler', scheduler: 'normal', denoise: 1 } },
+  6: { class_type: 'VAEDecode', inputs: { samples: ['5', 0], vae: ['1', 2] } },
+  7: { class_type: 'SaveImage', inputs: { images: ['6', 0], filename_prefix: 'JeanCode' } },
+});
+
 /* ---------------------------------------------------------------- imagen */
 const IMAGE = {
+  async fal(r, net) {
+    const { width, height } = sizeFor(r.ratio);
+    const ref = falRef(await falSubmit(r.model, clean({ prompt: r.prompt, image_size: { width, height }, num_images: r.count > 1 ? r.count : undefined, seed: num(r.seed), guidance_scale: num(r.guidance), num_inference_steps: num(r.steps) }), net));
+    await waitResult(net, async () => { const s = await falStatus(ref, net); if (s.error) throw new MediaError(String(s.error)); return s.status === 'COMPLETED' ? true : undefined; });
+    return need(parseImages(await falResult(ref, net)));
+  },
+  async replicate(r, net) {
+    const input = clean({ prompt: r.prompt, aspect_ratio: r.ratio, seed: num(r.seed) });
+    let j = await tolerant(input, ['aspect_ratio', 'seed'], (b) => net.call(`/models/${r.model}/predictions`, { method: 'POST', headers: { Prefer: 'wait=55' }, body: { input: b } }));
+    j = await waitResult(net, async () => {
+      if (j.status === 'succeeded') return j;
+      if (['failed', 'canceled'].includes(j.status)) throw new MediaError(String(j.error || 'Replicate no pudo generar la imagen.'));
+      j = await net.call(`/predictions/${encodeURIComponent(j.id)}`);
+      return undefined;
+    });
+    return replicateItems(j.output, 'image/webp');
+  },
+  async bfl(r, net) {
+    const { width, height } = sizeFor(r.ratio, 1024, 16);
+    const auth = { 'x-key': net.ep.key };
+    const j = await net.call(`/${r.model}`, { method: 'POST', auth, body: clean({ prompt: r.prompt, width, height, seed: num(r.seed) }) });
+    const done = await waitResult(net, async () => {
+      const s = await callAt(net, j.polling_url, 'bfl.ai', { auth });
+      if (s.status === 'Ready') return s;
+      if (['Error', 'Failed'].includes(s.status)) throw new MediaError(String(s.details?.message || s.status));
+      if (/moderated/i.test(s.status || '')) throw new MediaError('El filtro de contenido de Black Forest Labs bloqueó esta imagen: cambia el prompt.', { kind: 'empty' });
+      return undefined;
+    });
+    return need(done.result?.sample ? [{ url: done.result.sample }] : []);
+  },
+  async luma(r, net) {
+    let j = await net.call('/generations/image', { method: 'POST', body: clean({ model: r.model, prompt: r.prompt, aspect_ratio: r.ratio }) });
+    j = await waitResult(net, async () => {
+      if (j.state === 'completed') return j;
+      if (j.state === 'failed') throw new MediaError(String(j.failure_reason || 'Luma no pudo generar la imagen.'));
+      j = await net.call(`/generations/${encodeURIComponent(j.id)}`);
+      return undefined;
+    });
+    return need(j.assets?.image ? [{ url: j.assets.image }] : []);
+  },
+  /** Stable Diffusion WebUI y Forge en tu PC. */
+  async a1111(r, net) {
+    const { width, height } = sizeFor(r.ratio, 768, 8);
+    const init = r.refs?.[0];
+    const body = clean({ prompt: r.prompt, negative_prompt: r.negative, width, height, steps: num(r.steps), cfg_scale: num(r.guidance), seed: num(r.seed), batch_size: r.count > 1 ? r.count : undefined,
+      init_images: init ? [b64Of(init)] : undefined, override_settings: { sd_model_checkpoint: r.model } });
+    return need(parseImages(await net.call(init ? '/sdapi/v1/img2img' : '/sdapi/v1/txt2img', { method: 'POST', body, timeout: 1800000 })));
+  },
+  /** ComfyUI en tu PC: un flujo estándar de texto a imagen con el checkpoint elegido. */
+  async comfy(r, net) {
+    const { width, height } = sizeFor(r.ratio, 768, 8);
+    const j = await net.call('/prompt', { method: 'POST', body: { prompt: COMFY_WORKFLOW(r, r.model, width, height), client_id: 'jeancode' } });
+    if (j.error) throw new MediaError(`ComfyUI rechazó el flujo: ${j.error.message || j.error}`);
+    const entry = await waitResult(net, async () => (await net.call(`/history/${encodeURIComponent(j.prompt_id)}`))[j.prompt_id], 1800000);
+    const images = Object.values(entry.outputs || {}).flatMap((o) => o.images || []);
+    return need(images.map((x) => ({ url: `${net.ep.url}/view?${new URLSearchParams({ filename: x.filename, subfolder: x.subfolder || '', type: x.type || 'output' })}`, mime: 'image/png' })));
+  },
   async openai(r, net) {
     const free = /gpt-image-[2-9]/.test(r.model);
     const side = r.resolution === '2K' ? 2048 : 1024;
@@ -270,6 +377,43 @@ function minimaxOk(json) {
 const pending = { done: false };
 const failed = (error) => ({ done: true, error: String(error || 'El proveedor no pudo generar el vídeo.') });
 const VIDEO = {
+  fal: {
+    async submit(r, net) {
+      return falRef(await falSubmit(r.model, clean({ prompt: r.prompt, aspect_ratio: r.ratio, duration: r.duration ? String(r.duration) : undefined, seed: num(r.seed), image_url: r.start }), net));
+    },
+    async poll(ref, net) {
+      const s = await falStatus(ref, net);
+      if (s.error) return failed(s.error);
+      if (s.status !== 'COMPLETED') return pending;
+      const j = await falResult(ref, net);
+      return { done: true, items: need(j.video?.url ? [{ url: j.video.url, mime: 'video/mp4' }] : (j.videos || []).map((v) => ({ url: v.url, mime: 'video/mp4' }))) };
+    },
+  },
+  replicate: {
+    async submit(r, net) {
+      const input = clean({ prompt: r.prompt, aspect_ratio: r.ratio, duration: num(r.duration), seed: num(r.seed), image: r.start });
+      const j = await tolerant(input, ['aspect_ratio', 'duration', 'seed'], (b) => net.call(`/models/${r.model}/predictions`, { method: 'POST', body: { input: b } }));
+      return { id: j.id };
+    },
+    async poll(ref, net) {
+      const j = await net.call(`/predictions/${encodeURIComponent(ref.id)}`);
+      if (j.status === 'succeeded') return { done: true, items: replicateItems(j.output, 'video/mp4') };
+      if (['failed', 'canceled'].includes(j.status)) return failed(j.error);
+      return pending;
+    },
+  },
+  luma: {
+    async submit(r, net) {
+      const j = await net.call('/generations/video', { method: 'POST', body: clean({ model: r.model, prompt: r.prompt, aspect_ratio: r.ratio, resolution: r.resolution, duration: r.duration ? `${r.duration}s` : undefined }) });
+      return { id: j.id };
+    },
+    async poll(ref, net) {
+      const j = await net.call(`/generations/${encodeURIComponent(ref.id)}`);
+      if (j.state === 'completed') return { done: true, items: need(j.assets?.video ? [{ url: j.assets.video, mime: 'video/mp4' }] : []) };
+      if (j.state === 'failed') return failed(j.failure_reason);
+      return pending;
+    },
+  },
   openrouter: {
     async submit(r, net) {
       const frames = [r.start && { type: 'image_url', image_url: { url: r.start }, frame_type: 'first_frame' }, r.end && { type: 'image_url', image_url: { url: r.end }, frame_type: 'last_frame' }].filter(Boolean);
@@ -410,6 +554,30 @@ const VIDEO = {
 };
 
 /** Genera imágenes. net = { ep, call(path, { method, body, base, auth, timeout }) }. */
+/**
+ * Convierte un fallo técnico en un mensaje que dice qué pasó y qué hacer. action: 'settings' si hay que revisar la conexión,
+ * 'retry' si volver a intentarlo puede funcionar.
+ */
+export function friendlyMediaError(e, { provider = 'El proveedor', model = '', local = false } = {}) {
+  if (e?.name === 'AbortError') return e;
+  const detail = `${e?.detail || ''} ${e?.message || ''}`;
+  const out = (message, action = '', kind = e?.kind) => Object.assign(new MediaError(message, { kind: kind || 'provider', status: e?.status || 0 }), { action, cause: e });
+  if (/safety|nsfw|moderat|content.?(policy|filter)|sensitive|inappropriate|prohibited/i.test(detail)) return out(`El filtro de contenido de ${provider} rechazó este pedido. Cambia el prompt y prueba otra vez.`, '', 'empty');
+  if (e?.status === 402 || /insufficient|out of credit|no credit|quota|balance|billing|exhausted/i.test(detail)) return out(`Te quedaste sin saldo o sin cuota en ${provider}. Recarga tu cuenta o elige otro modelo.`, 'settings');
+  if (e?.status === 401 || e?.kind === 'auth') return out(`${provider} rechazó tu clave. Revísala en Ajustes → Conexiones.`, 'settings', 'auth');
+  if (e?.status === 403 || e?.kind === 'forbidden') return out(`Tu cuenta de ${provider} no tiene acceso a ${model || 'este modelo'}.`, 'settings', 'forbidden');
+  if (e?.status === 404 || e?.kind === 'model') return out(`${provider} no encuentra ${model || 'ese modelo'}. Elige otro de la lista.`, '', 'model');
+  if (e?.status === 413) return out('La imagen o el pedido pesan demasiado para este proveedor. Usa una imagen más pequeña.');
+  if (e?.status === 429 || e?.kind === 'rate') return out(`${provider} está limitando tus peticiones. Espera un momento y reinténtalo.`, 'retry', 'rate');
+  if (e?.status >= 500 || e?.kind === 'down') return out(`${provider} tuvo un problema temporal. Reinténtalo en un momento.`, 'retry', 'down');
+  if (e?.kind === 'timeout') return out(`${provider} tardó demasiado en responder. Reinténtalo o elige un modelo más rápido.`, 'retry', 'timeout');
+  if (e?.status === 0 || e?.kind === 'network') return out(local ? `No hay conexión con ${provider}. Comprueba que esté abierto en esta PC.` : `No se pudo conectar con ${provider}. Revisa tu conexión a internet.`, 'retry', 'network');
+  if ((e?.status === 400 || e?.status === 422) && e?.detail) return out(`${provider} no aceptó el pedido: ${String(e.detail).slice(0, 220)}`);
+  return e;
+}
+/** ¿Tiene sentido repetir automáticamente? Solo con fallos pasajeros, nunca con los que dependen del pedido. */
+export const isTransient = (e) => e?.name !== 'AbortError' && ([0, 408, 429, 500, 502, 503, 504].includes(e?.status) || ['network', 'rate', 'down', 'timeout'].includes(e?.kind));
+
 /** Un 404 en el formato de OpenAI casi siempre significa que ese proveedor no tiene esa API: se dice claro. */
 const explainMissing = (ep, what) => (e) => {
   if (e.status === 404 && !e.detail) throw new MediaError(`${providerOf(ep).name} no tiene una API de ${what} compatible en esta URL, o ese modelo no existe.`, { kind: 'unsupported', status: 404 });
