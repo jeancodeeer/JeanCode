@@ -17,7 +17,7 @@ FORMATO (obligatorio)
 - Cada escena o elemento temporal: class="clip" data-start="segundos" data-duration="segundos" data-track-index="0". Fuera de su intervalo no se ve. El orden de pintado lo decide z-index.
 - Animación: const tl = gsap.timeline({ paused: true }); añade los tweens; al final window.__timelines["main"] = tl; El tiempo de la línea es el tiempo del vídeo.
 - Ayudas: HV.split(selector, "words"|"chars") parte el texto en <span class="hv-w"> para animarlo; HV.onFrame(function (t) { ... }) ejecuta código en cada fotograma según el tiempo t (contadores, gráficos).
-- Música opcional: añade a la raíz data-music="drive|tech|bounce|elegant|warm" y data-cues con los segundos de cada cambio de escena separados por comas.
+- Música opcional: añade a la raíz data-music="drive|tech|bounce|elegant|warm|opium" y data-cues con los segundos de cada cambio de escena separados por comas.
 - API disponible, ya cargada: gsap.timeline, tl.to, tl.from, tl.fromTo, tl.set, tl.addLabel, posiciones (número, "+=0.2", "-=0.2", "<", ">", etiqueta), stagger, repeat finito, yoyo, eases power1-4, sine, expo, circ, back, elastic, bounce (.in, .out, .inOut). Propiedades: x, y, xPercent, yPercent, scale, scaleX, scaleY, rotation, skewX, skewY, opacity, autoAlpha, colores, filter, clipPath y cualquier CSS numérico.
 
 REGLAS PARA QUE EL RENDER SEA EXACTO
@@ -381,6 +381,8 @@ export function jcHvRuntime(cfg) {
       }
     });
     body.querySelectorAll('script').forEach((s) => s.remove());
+    // lo que no está en pantalla no se dibuja: una pieza con muchas imágenes exporta mucho más rápido
+    body.querySelectorAll('[data-start]:not([data-composition-id])').forEach((el) => { if (el.style.visibility === 'hidden') el.remove(); });
     headXml ||= prepareHead();
     const open = `<svg xmlns="http://www.w3.org/2000/svg" width="${cfg.width}" height="${cfg.height}"><foreignObject x="0" y="0" width="100%" height="100%"><html xmlns="${XHTML}">`;
     return `${encodeURIComponent(open)}${headXml}${encodeURIComponent(`${new XMLSerializer().serializeToString(body)}</html></foreignObject></svg>`)}`;

@@ -7,7 +7,7 @@ import { encodeSoundtrack, renderSoundtrack, soundOf } from './htmlaudio.js';
 // Tipografías libres (SIL OFL) que puede usar una composición; se incrustan solo las que aparecen en ella
 const FONT_FILES = {
   Anton: ['video/anton', 400], 'Bebas Neue': ['video/bebas-neue', 400], 'Archivo Black': ['video/archivo-black', 400], 'Playfair Display': ['video/playfair-800', 800],
-  'DM Serif Display': ['video/dm-serif', 400], 'Space Grotesk': ['video/space-grotesk-700', 700], 'IBM Plex Sans': ['IBMPlexSans-500', 500], 'IBM Plex Mono': ['IBMPlexMono-500', 500],
+  'DM Serif Display': ['video/dm-serif', 400], 'Space Grotesk': ['video/space-grotesk-700', 700], 'IBM Plex Sans Condensed': ['IBMPlexSansCondensed-700', 700], 'IBM Plex Sans': ['IBMPlexSans-500', 500], 'IBM Plex Mono': ['IBMPlexMono-500', 500],
 };
 const fontCache = new Map();
 async function fontFace(family, [file, weight]) {
@@ -21,7 +21,7 @@ async function fontFace(family, [file, weight]) {
 }
 /** La composición con sus fuentes dentro: el iframe no tiene red. */
 export async function withFonts(html) {
-  const used = Object.entries(FONT_FILES).filter(([family]) => html.includes(family));
+  const used = Object.entries(FONT_FILES).filter(([family]) => new RegExp(`${family}(?! Condensed)`).test(html));
   if (!used.length) return html;
   const faces = await Promise.all(used.map(([family, file]) => fontFace(family, file).catch(() => '')));
   return `<style>${faces.join('')}</style>${html}`;

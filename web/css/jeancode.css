@@ -792,6 +792,7 @@ kbd { font: 600 11px/1 var(--mono); border: 1px solid var(--line-3); padding: 2p
 /* en pantallas anchas, de pie junto a la caja: no tapa el texto */
 @media (min-width: 1500px) { .composer-box > .mascot { right: -128px; bottom: -8px; } }
 .st-stage > .mascot { right: 10px; bottom: 2px; }
+.st-stage .st-cap { padding-right: 132px; } /* la mascota no tapa el prompt */
 .stream { scroll-padding-bottom: 96px; }
 .mascot[data-state="idle"] .m-body { animation: m-bob 1.8s steps(2, jump-none) infinite; }
 .mascot[data-state="coffee"] .m-body { animation: m-bob 2.6s steps(2, jump-none) infinite; }
@@ -817,6 +818,7 @@ kbd { font: 600 11px/1 var(--mono); border: 1px solid var(--line-3); padding: 2p
 @keyframes m-walk { 0%, 100% { transform: translateX(0) scaleX(1); } 49% { transform: translateX(-72px) scaleX(1); } 50% { transform: translateX(-72px) scaleX(-1); } 99% { transform: translateX(0) scaleX(-1); } }
 @media (max-width: 860px) {
   .mascot { width: 64px; height: 52px; right: 4px; bottom: calc(100% - 3px); }
+  .st-stage .st-cap { padding-right: 68px; }
   .m-sprite { background-size: 576px 104px; image-rendering: auto; }
   .m-body { background-position: calc(var(--m-col, 0) * -64px) 0; }
   .m-marks { background-position: calc(var(--m-col, 0) * -64px) -52px; }

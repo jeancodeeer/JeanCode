@@ -180,6 +180,11 @@ async function enterApp() {
   $('#repo-link').href = CONFIG.repoUrl;
   $('#app-version').textContent = `JeanCode ${VERSION}${desktop ? ' · escritorio' : ' · web'}`;
   if (desktop) $$('.desktop-only').forEach((el) => { el.hidden = false; });
+  // la interfaz no espera a la red: con una API lenta, las conversaciones ya se pueden leer mientras cargan los modelos
+  renderThreads();
+  openThread(state.threads.find((t) => t.mode === state.mode)?.id || null);
+  placeMascot();
+  hideBoot();
   if (!store.get('siblingsChecked', false)) {
     // conexiones anteriores a v0.2.1 solo guardaban un puerto: se buscan los otros modelos una vez
     for (const ep of getEndpoints()) await discoverSiblings(ep.url, ep.key);
@@ -187,7 +192,6 @@ async function enterApp() {
   }
   await refreshModels();
   renderThreads();
-  openThread(state.threads.find((t) => t.mode === state.mode)?.id || null);
   // imagen y vídeo: catálogos aparte y los vídeos que quedaron en marcha al cerrar la app
   mediaService.refresh().finally(() => mediaService.resume({
     onDone: () => toast('TU VÍDEO ESTÁ LISTO EN LA PESTAÑA IMAGEN'),
@@ -783,6 +787,7 @@ function streamEl() {
 const reentryOffered = new Set(); // solo una vez por sesión
 const PAGE = 60; // mensajes que se pintan al abrir; los anteriores, bajo demanda (páginas largas y RAM)
 function openThread(id, { keepTop = false } = {}) {
+  if (!streamEl()) return; // Imagen, PC y Móvil no muestran conversaciones
   if (openedThread && openedThread !== id) endSession(openedThread, 'other');
   const t = state.threads.find((x) => x.id === id && x.mode === state.mode) || null;
   state.current = t?.id || null;
