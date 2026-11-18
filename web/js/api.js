@@ -228,6 +228,9 @@ async function request(ep, path, init = {}) {
   try { return JSON.parse(text); } catch { throw notApi(ep, text); }
 }
 
+// Direcciones que una URL escrita por un proveedor remoto nunca debe alcanzar (new URL ya normaliza 2130706433 y similares)
+const PRIVATE_URL = /^https?:\/\/(localhost|[^/:]*\.localhost|[^/:]*\.local|0\.|127\.|10\.|192\.168\.|169\.254\.|172\.(1[6-9]|2\d|3[01])\.|100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\.|\[(::|::1|f[cd]|fe[89ab]|::ffff:))/i;
+
 /** Llamada JSON a la API de imagen o vídeo de un proveedor. base = otra raíz del mismo proveedor (…/v2). */
 export function mediaCall(ep, path, { method = 'GET', body, base, auth, timeout = 300000, signal } = {}) {
   const job = request(base ? { ...ep, url: base } : ep, path, { method, body: body === undefined ? undefined : JSON.stringify(body), auth, timeout, signal });
@@ -248,7 +251,9 @@ export async function fetchMediaBlob(ep, url, { auth = false, mime = '', signal 
   try { u = new URL(url); } catch { throw new ApiError('El proveedor devolvió una URL de descarga no válida.', -1, '', 'format'); }
   if (!['https:', 'http:'].includes(u.protocol)) throw new ApiError('El proveedor devolvió una URL de descarga no válida.', -1, '', 'format');
   // un proveedor remoto no puede hacer que la app lea tu red local
-  if (LOCALISH.test(u.href) && !LOCALISH.test(ep.url)) throw new ApiError('El proveedor devolvió una dirección de tu red local: no se descarga.', -1, '', 'forbidden');
+  const remoteApi = !PRIVATE_URL.test(ep.url);
+  const refuse = (x) => { if (remoteApi && PRIVATE_URL.test(x)) throw new ApiError('El proveedor devolvió una dirección de tu red local: no se descarga.', -1, '', 'forbidden'); };
+  refuse(u.href);
   const same = u.origin === new URL(ep.url).origin;
   const headers = !auth || !same ? {} : auth === true ? { Authorization: `Bearer ${ep.key}` } : Object.fromEntries(Object.keys(auth).map((k) => [k, ep.key]));
   const fromB64 = (b64, type) => {
@@ -259,14 +264,28 @@ export async function fetchMediaBlob(ep, url, { auth = false, mime = '', signal 
   };
   const b = bridge();
   if (b?.http) {
-    const r = await b.http({ url, method: 'GET', headers, timeout: 600000, binary: true });
+    const r = await b.http({ url, method: 'GET', headers, timeout: 600000, binary: true, publicOnly: remoteApi });
     if (r.error) throw new ApiError(`No se pudo descargar el resultado (${r.error}).`, 0);
     if (r.status >= 400) throw new ApiError(`No se pudo descargar el resultado (${r.status}).`, r.status);
     return fromB64(r.b64, r.type);
   }
   const native = nativeHttp();
   if (native) {
-    const r = await native.request({ url, method: 'GET', headers, responseType: 'blob', connectTimeout: 30000, readTimeout: 600000 });
+    // las redirecciones se siguen a mano para comprobar cada destino; la clave no cambia de origen
+    let r;
+    let at = u;
+    let sent = headers;
+    for (let hop = 0; ; hop++) {
+      r = await native.request({ url: at.href, method: 'GET', headers: sent, responseType: 'blob', connectTimeout: 30000, readTimeout: 600000, disableRedirects: true });
+      const loc = r.status >= 300 && r.status < 400 ? (r.headers?.Location || r.headers?.location) : null;
+      if (!loc) break;
+      if (hop >= 5) throw new ApiError('Demasiadas redirecciones al descargar el resultado.', -1, '', 'format');
+      const next = new URL(loc, at);
+      if (!['https:', 'http:'].includes(next.protocol)) throw new ApiError('El proveedor devolvió una URL de descarga no válida.', -1, '', 'format');
+      refuse(next.href);
+      if (next.origin !== at.origin) sent = {};
+      at = next;
+    }
     if (r.status >= 400) throw new ApiError(`No se pudo descargar el resultado (${r.status}).`, r.status);
     return fromB64(String(r.data).replace(/\s/g, ''), r.headers?.['Content-Type'] || r.headers?.['content-type']);
   }

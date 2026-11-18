@@ -97,18 +97,17 @@ ipcMain.handle('http', async (_e, req) => {
   if (!['GET', 'POST'].includes(method)) return { error: 'método no permitido' };
   // sin límite, un servidor colgado dejaba la interfaz esperando para siempre
   const timeout = Math.min(Math.max(Number(req.timeout) || 60000, 1000), 3600000);
+  // imagen o vídeo generado: con tope de tamaño y comprobando cada salto (lib/tools.js)
+  if (req.binary) {
+    try {
+      const r = await tools.downloadBinary(req.url, { headers: req.headers, publicOnly: req.publicOnly !== false, timeout });
+      return { status: r.status, type: r.type, b64: r.data ? r.data.toString('base64') : '' };
+    } catch (e) { return { error: e.message }; }
+  }
   try {
     // noRedirect: comprobar un enlace sin seguir redirecciones (podrían llevar a la red local)
     const res = await fetch(req.url, { method, headers: req.headers, body: req.body, signal: AbortSignal.timeout(timeout), redirect: req.noRedirect ? 'manual' : 'follow' });
     if (req.noBody) { res.body?.cancel().catch(() => {}); return { status: res.status }; }
-    // imagen o vídeo generado: viaja en base64 por el puente, con un tope para no agotar la memoria
-    if (req.binary) {
-      const MAX = 300 * 1024 * 1024;
-      if (Number(res.headers.get('content-length')) > MAX) { res.body?.cancel().catch(() => {}); return { error: 'el archivo pasa de 300 MB' }; }
-      const data = Buffer.from(await res.arrayBuffer());
-      if (data.length > MAX) return { error: 'el archivo pasa de 300 MB' };
-      return { status: res.status, type: res.headers.get('content-type') || '', b64: res.ok ? data.toString('base64') : '' };
-    }
     return { status: res.status, body: await res.text() };
   } catch (e) {
     return { error: e.name === 'TimeoutError' ? 'sin respuesta a tiempo' : e.message };

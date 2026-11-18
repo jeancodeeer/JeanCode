@@ -15,12 +15,18 @@ async function inside(root, rel = '.') {
   if (relToBase.startsWith('..') || path.isAbsolute(relToBase)) {
     throw new Error(`ruta fuera del espacio de trabajo: ${rel}`);
   }
-  try {
-    const real = await fs.realpath(target);
-    const r2 = path.relative(base, real);
-    if (r2.startsWith('..') || path.isAbsolute(r2)) throw new Error(`enlace fuera del espacio de trabajo: ${rel}`);
-  } catch (e) {
-    if (e.code !== 'ENOENT') throw e;
+  // lo que aún no existe se comprueba por su antepasado más cercano: una carpeta enlazada no saca la escritura fuera
+  for (let p = target; ; p = path.dirname(p)) {
+    try {
+      const r2 = path.relative(base, await fs.realpath(p));
+      if (r2.startsWith('..') || path.isAbsolute(r2)) throw new Error(`enlace fuera del espacio de trabajo: ${rel}`);
+      break;
+    } catch (e) {
+      if (e.code !== 'ENOENT') throw e;
+      // un enlace roto tampoco: al escribir, crearía su destino fuera de la carpeta
+      if ((await fs.lstat(p).catch(() => null))?.isSymbolicLink()) throw new Error(`enlace fuera del espacio de trabajo: ${rel}`);
+      if (path.dirname(p) === p) break;
+    }
   }
   return target;
 }
@@ -488,6 +494,56 @@ function pinnedGet(u, addrs, { timeout = 20000 } = {}) {
   });
 }
 
+const MAX_DOWNLOAD = 300 * 1024 * 1024;
+/** Una petición de descarga: corta en cuanto pasa del tope, sin cargar antes el archivo entero en memoria. */
+function binaryGet(u, addrs, headers, { max, timeout }) {
+  const host = u.hostname.replace(/^\[|\]$/g, '');
+  const lib = u.protocol === 'https:' ? https : http;
+  return new Promise((resolve, reject) => {
+    const req = lib.request({
+      protocol: u.protocol, hostname: host, port: u.port || undefined, path: `${u.pathname}${u.search}`, method: 'GET', agent: false,
+      headers: { 'User-Agent': 'JeanCode', Accept: '*/*', 'Accept-Encoding': 'identity', ...headers },
+      servername: net.isIP(host) ? undefined : host, timeout: 60000,
+      ...(addrs ? { lookup: (_h, opts, cb) => (opts && opts.all ? cb(null, addrs) : cb(null, addrs[0].address, addrs[0].family)) } : {}),
+    }, (res) => {
+      const status = res.statusCode || 0;
+      const done = (extra = {}) => resolve({ status, type: res.headers['content-type'] || '', location: res.headers.location || '', ...extra });
+      if (status >= 300 || status < 200) { res.destroy(); return done(); }
+      const tooBig = () => req.destroy(new Error(`el archivo pasa de ${Math.round(max / 1048576)} MB`));
+      if (Number(res.headers['content-length']) > max) return tooBig();
+      const chunks = [];
+      let size = 0;
+      res.on('data', (c) => { size += c.length; if (size > max) tooBig(); else chunks.push(c); });
+      res.on('end', () => done({ data: Buffer.concat(chunks) }));
+      res.on('error', reject);
+    });
+    const deadline = setTimeout(() => req.destroy(new Error('sin respuesta a tiempo')), timeout);
+    req.on('timeout', () => req.destroy(new Error('sin respuesta a tiempo')));
+    req.on('error', reject);
+    req.on('close', () => clearTimeout(deadline));
+    req.end();
+  });
+}
+
+/**
+ * Descarga un archivo generado. Con publicOnly, cada salto se resuelve, se comprueba y se conecta a esa IP: una
+ * redirección o un DNS del proveedor no pueden llevar a la red local. Las cabeceras (la clave) no cambian de origen.
+ */
+async function downloadBinary(url, { headers = {}, publicOnly = true, max = MAX_DOWNLOAD, timeout = 600000, check = assertPublic } = {}) {
+  let u;
+  try { u = new URL(url); } catch { throw new Error('URL inválida'); }
+  let sent = headers;
+  for (let hop = 0; hop <= 5; hop++) {
+    if (!['http:', 'https:'].includes(u.protocol)) throw new Error('solo http/https');
+    const r = await binaryGet(u, publicOnly ? await check(u) : null, sent, { max, timeout });
+    if (!(r.status >= 300 && r.status < 400 && r.location)) return r;
+    const next = new URL(r.location, u);
+    if (next.origin !== u.origin) sent = {};
+    u = next;
+  }
+  throw new Error('demasiadas redirecciones');
+}
+
 async function webfetch(url, { lookup } = {}) {
   let u;
   try { u = new URL(url); } catch { throw new Error('URL inválida'); }
@@ -601,5 +657,5 @@ async function execHook(root, command, input, timeoutSec = 60) {
 module.exports = {
   inside, list, read, write: writeTracked, writeBinary, edit: editTracked, search, run, cancelRuns, systemInfo, osShort,
   startProcess, processOutput, listProcesses, stopProcess, stopAllProcesses, move, killTree,
-  undo, peek, glob, webfetch, pinnedGet, projectMemory, commands, agents, hooks, cleanHooks, execHook, beginTurn, rewind,
+  undo, peek, glob, webfetch, pinnedGet, downloadBinary, projectMemory, commands, agents, hooks, cleanHooks, execHook, beginTurn, rewind,
 };

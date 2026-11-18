@@ -1589,7 +1589,7 @@ test('imagen: la clave solo viaja al origen de la API', async (t) => {
   assert.equal(seen[0][1].Authorization, 'Bearer SECRETA');
   await API.fetchMediaBlob(ep, 'https://cdn.ajeno.example/v.mp4', { auth: true });
   assert.deepEqual(seen[1][1], {}, 'una URL de otro dominio no recibe la clave');
-  await assert.rejects(API.fetchMediaBlob(ep, 'http://192.168.1.1/x.png'), /red local/);
+  for (const x of ['http://192.168.1.1/x.png', 'http://169.254.169.254/latest', 'http://[::1]/x', 'http://[fd00::1]/x', 'http://2130706433/x', 'http://impresora.local/x']) await assert.rejects(API.fetchMediaBlob(ep, x), /red local/, x);
   await assert.rejects(API.fetchMediaBlob(ep, 'file:///etc/passwd'), /no válida/);
   await assert.rejects(API.fetchMediaBlob(ep, 'javascript:alert(1)'), /no válida/);
 });
@@ -1601,4 +1601,44 @@ test('escritorio: writeBinary guarda dentro de la carpeta y nunca pisa un archiv
   assert.deepEqual([...require('node:fs').readFileSync(join(root, 'generated', 'a.png'))], [0x89, 0x50, 0x4e, 0x47]);
   await assert.rejects(tools.writeBinary(root, 'generated/a.png', b64), /EEXIST/);
   await assert.rejects(tools.writeBinary(root, '../fuera.png', b64), /fuera/);
+});
+
+test('escritorio: una carpeta enlazada no saca las escrituras de la carpeta de trabajo', async (t) => {
+  const fsx = require('node:fs');
+  const root = mkdtempSync(join(tmpdir(), 'jc-link-'));
+  const out = mkdtempSync(join(tmpdir(), 'jc-out-'));
+  try { symlinkSync(out, join(root, 'salida'), 'junction'); symlinkSync(join(out, 'nada.png'), join(root, 'roto.png')); } catch { t.skip('este sistema no permite crear enlaces'); return; }
+  const b64 = Buffer.from('x').toString('base64');
+  await assert.rejects(tools.writeBinary(root, 'salida/nueva/a.png', b64), /enlace fuera/);
+  await assert.rejects(tools.write(root, 'salida/b.txt', 'x'), /enlace fuera/);
+  await assert.rejects(tools.writeBinary(root, 'roto.png', b64), /enlace fuera/);
+  assert.deepEqual(fsx.readdirSync(out), []);
+  assert.match(await tools.writeBinary(root, 'bien/c.png', b64), /c\.png/);
+});
+
+test('escritorio: la descarga de resultados comprueba cada salto y corta al pasar del tope', async (t) => {
+  const http = require('node:http');
+  const seen = [];
+  const server = http.createServer((req, res) => {
+    seen.push([req.url, req.headers.host, req.headers.authorization]);
+    if (req.url === '/mismo') { res.writeHead(302, { Location: '/fin' }); return res.end(); }
+    if (req.url === '/fuera') { res.writeHead(302, { Location: `http://ajeno.invalid:${server.address().port}/fin` }); return res.end(); }
+    if (req.url === '/interno') { res.writeHead(302, { Location: 'http://interno.invalid/secreto' }); return res.end(); }
+    if (req.url === '/grande') { res.writeHead(200); res.write(Buffer.alloc(4096)); res.write(Buffer.alloc(4096)); return; } // sin cabecera de tamaño y sin terminar
+    res.writeHead(200, { 'Content-Type': 'video/mp4' }); res.end('ok');
+  });
+  await new Promise((r) => server.listen(0, '127.0.0.1', r));
+  t.after(() => { server.closeAllConnections(); server.close(); });
+  const port = server.address().port;
+  const check = async (u) => { if (u.hostname === 'interno.invalid') throw new Error('destino no permitido'); return [{ address: '127.0.0.1', family: 4 }]; };
+  const headers = { Authorization: 'Bearer SECRETA' };
+  let r = await tools.downloadBinary(`http://api.invalid:${port}/mismo`, { headers, check });
+  assert.equal(r.data.toString(), 'ok');
+  assert.equal(seen.at(-1)[2], 'Bearer SECRETA', 'mismo origen: conserva la clave');
+  r = await tools.downloadBinary(`http://api.invalid:${port}/fuera`, { headers, check });
+  assert.equal(seen.at(-1)[2], undefined, 'otro origen: la clave no viaja');
+  await assert.rejects(tools.downloadBinary(`http://api.invalid:${port}/interno`, { check }), /no permitido/);
+  await assert.rejects(tools.downloadBinary(`http://api.invalid:${port}/grande`, { check, max: 1024 }), /pasa de/);
+  await assert.rejects(tools.downloadBinary(`http://127.0.0.1:${port}/fin`), /red local o privada/);
+  assert.equal((await tools.downloadBinary(`http://127.0.0.1:${port}/fin`, { publicOnly: false })).status, 200);
 });

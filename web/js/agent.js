@@ -348,7 +348,7 @@ ${r}` : '';
       const m = ctx.media.model(kind);
       if (!m) return `ERROR: el usuario no tiene ningún modelo de ${kind === 'video' ? 'vídeo' : 'imagen'} conectado. Díselo y no lo intentes de nuevo.`;
       // cuesta dinero y envía el prompt al proveedor: siempre se pregunta, con el modelo a la vista
-      if (!(await ask({ title: kind === 'video' ? 'GENERAR VÍDEO' : 'GENERAR IMAGEN', command: `${m.id} · ${m.billing}\n\n${String(args.prompt ?? '')}` }))) return 'RECHAZADO por el usuario.';
+      if (!(await ask({ title: kind === 'video' ? 'GENERAR VÍDEO' : 'GENERAR IMAGEN', command: `${m.id} · ${m.billing}\nSe guardará en: ${args.path ? String(args.path) : 'generated/ (nombre automático)'}\n\n${String(args.prompt ?? '')}` }))) return 'RECHAZADO por el usuario.';
       try {
         const r = await ctx.media.generate(kind, args, { signal: ctx.signal, workspace: ctx.workspace, desktop: d });
         ctx.onEvent({ type: 'media', ids: r.ids, sub });
