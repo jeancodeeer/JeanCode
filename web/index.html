@@ -11,6 +11,7 @@
 <link rel="icon" href="favicon.svg" type="image/svg+xml">
 <link rel="apple-touch-icon" href="icons/icon-192.png">
 <link rel="manifest" href="manifest.webmanifest">
+<link rel="preload" href="fonts/IBMPlexSansCondensed-700.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="stylesheet" href="css/fonts.css">
 <link rel="stylesheet" href="css/jeancode.css">
 </head>
@@ -47,6 +48,18 @@
     <symbol id="i-eye" viewBox="0 0 24 24"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z"/><path d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6z"/></symbol>
   </defs>
 </svg>
+
+<!-- ARRANQUE: visible desde el primer instante, hasta que la app está lista (app.js) -->
+<div id="boot" class="boot" role="status" aria-label="Iniciando JeanCode">
+  <div class="boot-col">
+    <svg class="wordmark boot-mark" viewBox="0 0 1000 300" aria-hidden="true">
+      <text class="wm-ghost" x="14" y="264" textLength="986" lengthAdjust="spacingAndGlyphs" style="font-size:300px">JEAN CODE</text>
+      <text class="wm-ink" x="0" y="250" textLength="986" lengthAdjust="spacingAndGlyphs" style="font-size:300px" filter="url(#xerox)">JEAN CODE</text>
+    </svg>
+    <p class="boot-sub">AI Development Environment</p>
+  </div>
+</div>
+<script>setTimeout(function () { var b = document.getElementById('boot'); if (b) b.remove(); }, 12000);</script>
 
 <!-- SPLASH: este equipo no tiene una API registrada -->
 <!-- VERSIÓN NUEVA (escritorio y móvil): update.js decide, app.js la muestra -->
@@ -525,6 +538,7 @@
         <select id="length-select"><option value="auto">Según la tarea</option><option value="short">Corta</option><option value="long">Larga y detallada</option></select>
       </label>
     </div>
+    <label class="check"><input type="checkbox" id="mascot-on" checked> Mostrar la mascota</label>
     <label class="check"><input type="checkbox" id="auto-compact" checked> Resumir sola la conversación al llegar al 85 % del contexto (te muestra el resumen)</label>
     <label class="field"><span class="label">Estilo de respuesta</span>
       <select id="style-select">

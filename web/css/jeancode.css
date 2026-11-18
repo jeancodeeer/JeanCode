@@ -772,3 +772,53 @@ kbd { font: 600 11px/1 var(--mono); border: 1px solid var(--line-3); padding: 2p
   .st-thumb .st-thumb-x, .st-job .st-thumb-x { width: 32px; height: 32px; }
 }
 @media (prefers-reduced-motion: reduce) { .st-job::after { animation: none; width: 100%; opacity: .4; } }
+
+/* ---------------------------------------------------------------- arranque */
+.boot { position: fixed; inset: 0; z-index: 100; display: grid; place-items: center; padding: 24px; background: var(--bg); transition: opacity .38s var(--ease); }
+.boot.out { opacity: 0; pointer-events: none; }
+.boot-col { width: min(620px, 86vw); display: grid; gap: var(--s3); animation: boot-in .7s var(--ease) both; }
+.boot-mark { width: 100%; }
+.boot-sub { margin: 0; text-align: center; font: 500 clamp(11px, 1.7vw, 14px)/1 var(--mono); letter-spacing: .32em; text-transform: uppercase; color: var(--smoke); animation: boot-in .7s .18s var(--ease) both; }
+@keyframes boot-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+
+/* ---------------------------------------------------------------- mascota */
+.composer-box { position: relative; }
+.st-stage { position: relative; }
+.mascot { position: absolute; right: 8px; bottom: calc(100% - 7px); z-index: 6; width: 128px; height: 104px; pointer-events: none; transform-origin: 50% 92%; }
+.m-sprite { position: absolute; inset: 0; background: url('../icons/mascot.png') no-repeat; background-size: 1152px 208px; image-rendering: pixelated; }
+.m-body { background-position: calc(var(--m-col, 0) * -128px) 0; pointer-events: none; }
+.m-marks { background-position: calc(var(--m-col, 0) * -128px) -104px; }
+/* en pantallas anchas, de pie junto a la caja: no tapa el texto */
+@media (min-width: 1500px) { .composer-box > .mascot { right: -128px; bottom: -8px; } }
+.st-stage > .mascot { right: 10px; bottom: 2px; }
+.stream { scroll-padding-bottom: 96px; }
+.mascot[data-state="idle"] .m-body { animation: m-bob 1.8s steps(2, jump-none) infinite; }
+.mascot[data-state="coffee"] .m-body { animation: m-bob 2.6s steps(2, jump-none) infinite; }
+.mascot[data-state="coffee"] .m-marks, .mascot[data-state="sleep"] .m-marks { animation: m-float 2.2s steps(5, end) infinite; }
+.mascot[data-state="walk"] { animation: m-walk 3.2s steps(16, end) infinite; }
+.mascot[data-state="walk"] .m-body { animation: m-step .36s steps(2, jump-none) infinite; }
+.mascot[data-state="happy"] .m-body { animation: m-jump .52s steps(4, end) infinite; }
+.mascot[data-state="happy"] .m-marks { animation: m-pulse .52s steps(2, jump-none) infinite; }
+.mascot[data-state="angry"] .m-body { animation: m-shake .24s steps(2, jump-none) infinite; }
+.mascot[data-state="alert"] .m-body { animation: m-pop .3s steps(3, end) 1; }
+.mascot[data-state="alert"] .m-marks { animation: m-pulse .6s steps(2, jump-none) infinite; }
+.mascot[data-state="confused"] .m-body { animation: m-sway 1.4s steps(4, jump-none) infinite alternate; }
+.mascot[data-state="confused"] .m-marks { animation: m-pulse 1s steps(2, jump-none) infinite; }
+.mascot[data-state="bored"] .m-marks { animation: m-pulse 1.6s steps(2, jump-none) infinite; }
+@keyframes m-bob { to { transform: translateY(1px); } }
+@keyframes m-step { to { transform: translateY(-2px); } }
+@keyframes m-jump { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-8px); } }
+@keyframes m-shake { from { transform: translateX(-1px); } to { transform: translateX(1px); } }
+@keyframes m-pop { 0% { transform: translateY(0); } 50% { transform: translateY(-6px); } 100% { transform: translateY(0); } }
+@keyframes m-sway { from { transform: translateX(-1px); } to { transform: translateX(2px); } }
+@keyframes m-float { from { transform: translateY(3px); opacity: .4; } 60% { opacity: 1; } to { transform: translateY(-5px); opacity: .2; } }
+@keyframes m-pulse { from { opacity: 1; } to { opacity: .35; } }
+@keyframes m-walk { 0%, 100% { transform: translateX(0) scaleX(1); } 49% { transform: translateX(-72px) scaleX(1); } 50% { transform: translateX(-72px) scaleX(-1); } 99% { transform: translateX(0) scaleX(-1); } }
+@media (max-width: 860px) {
+  .mascot { width: 64px; height: 52px; right: 4px; bottom: calc(100% - 3px); }
+  .m-sprite { background-size: 576px 104px; image-rendering: auto; }
+  .m-body { background-position: calc(var(--m-col, 0) * -64px) 0; }
+  .m-marks { background-position: calc(var(--m-col, 0) * -64px) -52px; }
+  @keyframes m-walk { 0%, 100% { transform: translateX(0) scaleX(1); } 49% { transform: translateX(-36px) scaleX(1); } 50% { transform: translateX(-36px) scaleX(-1); } 99% { transform: translateX(0) scaleX(-1); } }
+}
+@media (prefers-reduced-motion: reduce) { .mascot, .m-sprite, .boot-col, .boot-sub { animation: none !important; } }

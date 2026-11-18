@@ -170,7 +170,7 @@ export function initStudio(deps) {
     const comp = $('#st-compiled');
     if (comp) comp.textContent = composePrompt(f.guide) || 'El prompt se escribe solo mientras rellenas los campos.';
   }
-  function showError(msg) { st.error = msg; $('#st-error').hidden = !msg; $('#st-error').textContent = msg || ''; }
+  function showError(msg) { if (msg) window.dispatchEvent(new CustomEvent('jc:mascot', { detail: { fail: true } })); st.error = msg; $('#st-error').hidden = !msg; $('#st-error').textContent = msg || ''; }
 
   /* ---------------------------------------------------------------- generar */
   function requestOf(prompt) {

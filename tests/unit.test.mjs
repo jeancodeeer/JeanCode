@@ -1774,3 +1774,17 @@ test('android: cada salto de una descarga se resuelve, se comprueba y se fija a 
   await assert.rejects(API.fetchMediaBlob(ep, 'https://cdn.example/nombre'), /red local/);
   assert.equal(calls.length, 1, 'basta con UNA dirección privada entre las que resuelve');
 });
+
+test('mascota: qué expresión toca en cada momento', async () => {
+  const M = await import('../web/js/mascot.js');
+  assert.equal(M.restFrame(0), 'idle');
+  assert.equal(M.restFrame(30000), 'coffee');
+  assert.equal(M.restFrame(90000), 'bored');
+  assert.equal(M.restFrame(200000), 'sleep');
+  assert.equal(M.pickFrame({ work: 'thinking', quietMs: 0 }), 'confused');
+  assert.equal(M.pickFrame({ work: 'writing', quietMs: 999999 }), 'walk', 'trabajando no se duerme');
+  assert.equal(M.pickFrame({ reaction: 'angry', work: 'writing', quietMs: 0 }), 'angry', 'una reacción manda sobre el trabajo');
+  const { readFileSync } = require('node:fs');
+  const png = readFileSync(new URL('../web/icons/mascot.png', import.meta.url));
+  assert.deepEqual([png.readUInt32BE(16), png.readUInt32BE(20), png[25]], [1152, 208, 6], 'hoja RGBA de 9 × 2 celdas');
+});

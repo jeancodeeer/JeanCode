@@ -27,6 +27,7 @@ import { initPhoneAgent } from './mobile/agent-ui.js';
 import { initAutomations, parseInterval, validateTask, taskSummary, runSummary, describeTaskSchedule, fmtWhen } from './automations.js';
 import { createMediaService, library as mediaLibrary, blobToDataUrl, extOf, slugOf } from './media/service.js';
 import { detectMediaIntent } from './media/engine.js';
+import { createMascot } from './mascot.js';
 import { initStudio } from './media/studio.js';
 import { lintComposition } from './media/htmlvideo.js';
 import { exportHtmlVideo, writeComposition } from './media/htmlrender.js';
@@ -48,8 +49,15 @@ let phoneAgent = null;
 let remoteHost = null;   // escritorio: control desde móviles emparejados
 let remotePhone = null;  // web y móvil: controlar un PC
 
+const mascot = createMascot({ store });
+/** La mascota se apoya en la caja de mensaje; en Imagen, en el pie del panel. En PC y Móvil no aparece. */
+function placeMascot(mode = state.mode) {
+  mascot.place(mode === 'image' ? $('.st-stage') : ['chat', 'code', 'agent'].includes(mode) ? $('.composer-box') : null);
+}
+
 // Imagen y vídeo: un solo servicio para el estudio, el chat y el agente
 const mediaService = createMediaService({ models: () => state.models });
+mediaService.subscribe((what) => { if (what === 'jobs') { if (mediaService.jobs().length) mascot.work('media'); else mascot.done(); } });
 let studio = null;
 /** Pregunta al modelo de chat del usuario (mejorar prompts y escribir composiciones). */
 async function mediaChatText(system, user, signal) {
@@ -592,6 +600,7 @@ const KIND_HINT = {
   format: 'La URL no es de una API OpenAI-compatible: revisa que sea la base (…/v1).',
 };
 function showError(err) {
+  mascot.fail();
   const kind = err.kind && KIND_LABEL[err.kind] ? KIND_LABEL[err.kind].toUpperCase() + ' · ' : '';
   const row = addMessage('error', `${kind}${err.message || String(err)}${KIND_HINT[err.kind] ? `\n${KIND_HINT[err.kind]}` : ''}`);
   if (err.trace) attachTrace(row, err.trace);
@@ -679,6 +688,7 @@ function setMode(mode) {
   for (const el of [$('#route-menu'), $('.topbar .model')]) if (el) el.hidden = mode === 'remote' || mode === 'image';
   for (const el of [$('#crumb-title')?.previousElementSibling, $('#crumb-title')]) if (el) el.hidden = mode === 'remote';
   $('#crumb-mode').textContent = mode === 'agent' ? `AGENT · ${state.agent.toUpperCase()}` : mode === 'remote' ? 'CONTROLAR MI PC' : mode === 'device' ? 'AGENTE DEL MÓVIL' : mode === 'image' ? 'IMAGEN' : mode.toUpperCase();
+  placeMascot(mode);
   if (mode === 'image') { $('#crumb-title').textContent = 'ESTUDIO DE IMAGEN Y VÍDEO'; showRailFor(mode); studio.show(); return; }
   if (mode === 'remote') { renderThreads(); remotePhone?.autoconnect(); return; }
   if (mode === 'device') { renderThreads(); phoneAgent.check(); return; }
@@ -787,6 +797,7 @@ function setUsage(row, u) {
 const REDUCED = window.matchMedia?.('(prefers-reduced-motion: reduce)');
 function updateMessage(row, content, reasoning = '', streaming = false) {
   row._pending = { content, reasoning, streaming };
+  if (streaming && content) mascot.work('writing');
   if (streaming) row._animated = true;
   if (reasoning && !row._thinkStart) row._thinkStart = performance.now();
   if (reasoning && !row._thinkEnd && (stripVisible(content).trim() || !streaming)) row._thinkEnd = performance.now();
@@ -1223,6 +1234,7 @@ async function openNews() {
 }
 
 function busy(on) {
+  if (on) mascot.work('thinking'); else mascot.done();
   $('#send-btn').disabled = on;
   $('#stop-btn').hidden = !on;
   remoteHost?.pushState();
@@ -2648,6 +2660,7 @@ function confirmDialog(opts) {
   // con un móvil conectado, la misma pregunta llega al móvil y vale la primera respuesta (salvo localOnly)
   const remote = !opts.localOnly && remoteHost?.connected() ? remoteHost.ask({ ...opts, where: opts.where ?? state.workspace ?? '' }) : null;
   const local = localConfirm(opts, remote?.promise);
+  mascot.ask(local);
   if (remote) local.finally(() => remote.cancel());
   return local;
 }
@@ -2933,6 +2946,7 @@ function renderSettings() {
   $('#directness-select').value = store.get('directness', 'normal');
   $('#length-select').value = store.get('length', 'auto');
   $('#auto-compact').checked = store.get('autoCompact', true);
+  $('#mascot-on').checked = store.get('mascot', true) !== false;
   { const r = store.get('relay', null); $('#relay-url').value = r?.url || ''; $('#relay-key').value = r?.key || ''; }
   renderAllowList();
   renderFenix();
@@ -2965,6 +2979,7 @@ $('#auto-diag').addEventListener('change', (e) => store.set('autoDiag', e.target
 $('#directness-select').addEventListener('change', (e) => store.set('directness', e.target.value));
 $('#length-select').addEventListener('change', (e) => store.set('length', e.target.value));
 $('#auto-compact').addEventListener('change', (e) => store.set('autoCompact', e.target.checked));
+$('#mascot-on').addEventListener('change', (e) => { store.set('mascot', e.target.checked); placeMascot(); });
 
 /* hooks globales (escritorio): <userData>/hooks.json */
 if (desktop?.hooks) {
@@ -3496,6 +3511,14 @@ if ('serviceWorker' in navigator && location.protocol.startsWith('http') && !des
   navigator.serviceWorker.register('sw.js').catch(() => { /* sin SW la web funciona igual */ });
 }
 
+/** Quita la pantalla de arranque: se ve al menos un momento para que no sea un parpadeo. */
+function hideBoot() {
+  const boot = $('#boot');
+  if (!boot) return;
+  const wait = Math.max(0, 1300 - performance.now());
+  setTimeout(() => { boot.classList.add('out'); setTimeout(() => boot.remove(), 420); }, wait);
+}
+
 (async function init() {
   applyBrand();
   $('#splash-version').textContent = `v${VERSION}`;
@@ -3536,6 +3559,8 @@ if ('serviceWorker' in navigator && location.protocol.startsWith('http') && !des
   if (getEndpoints().length || wantsRemote) await enterApp();
   else showSplash();
   if (wantsRemote) setMode('remote');
+  placeMascot();
+  hideBoot();
   $('#splash-remote')?.addEventListener('click', async () => { await enterApp(); setMode('remote'); });
   setTimeout(() => checkUpdate(), 1500); // escritorio y móvil, también antes de conectar una API
 })();

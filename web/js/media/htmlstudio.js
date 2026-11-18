@@ -2,6 +2,7 @@
 import { HV_DURATIONS, HV_RATIOS, HV_STYLES, lintComposition } from './htmlvideo.js';
 import { exportHtmlVideo, mountComposition, sizeOfRatio, writeComposition } from './htmlrender.js';
 
+const mood = (detail) => window.dispatchEvent(new CustomEvent('jc:mascot', { detail }));
 const clock = (s) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
 const icon = (name) => `<svg class="i" aria-hidden="true"><use href="#i-${name}"/></svg>`;
 
@@ -129,6 +130,7 @@ export function createHtmlPanel(deps) {
     setError('');
     live.ctl = new AbortController();
     live.busy = 'Escribiendo…';
+    mood({ work: 'writing' });
     deps.refresh();
     try {
       const r = await writeComposition({ brief, ratio: s.ratio, duration: s.duration, previous, chatText: deps.chatText, signal: live.ctl.signal, onStatus: (t) => { live.busy = t; button(); } });
@@ -137,7 +139,7 @@ export function createHtmlPanel(deps) {
       live.refine = '';
       save();
       if (r.issues.length) setError(`Revisa la composición: ${r.issues.map((x) => x.message).join(' ')}`);
-    } catch (e) { if (e.name !== 'AbortError') setError(e.message); } finally { live.busy = ''; live.ctl = null; deps.refresh(); }
+    } catch (e) { if (e.name !== 'AbortError') setError(e.message); } finally { live.busy = ''; live.ctl = null; mood({ done: true }); deps.refresh(); }
   }
 
   async function exportNow() {
@@ -145,6 +147,7 @@ export function createHtmlPanel(deps) {
     stop();
     live.ctl = new AbortController();
     live.busy = 'Exportando… 0 %';
+    mood({ work: 'media' });
     live.progress = 0;
     deps.refresh();
     try {
@@ -163,7 +166,7 @@ export function createHtmlPanel(deps) {
       live.busy = '';
       if (e.name !== 'AbortError') setError(e.message);
       deps.refresh();
-    } finally { live.ctl = null; }
+    } finally { live.ctl = null; mood({ done: true }); }
   }
 
   return {
