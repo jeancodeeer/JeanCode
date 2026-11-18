@@ -447,7 +447,8 @@ export async function chatStream(opts) {
 /** Espera máxima hasta que el servidor responde (cabeceras). En CPU (Jean, local) leer un contexto largo tarda. */
 export const firstByteTimeout = (ep) => (providerOf(ep).id === 'jean' || providerOf(ep).local || /localhost|127\.0\.0\.1/.test(ep.url) ? 900000 : 120000);
 
-async function chatOnce({ ep, model, messages, signal, onDelta, onReasoning, onToolCalls, onUsage, temperature, think, reasoning, tools }, skip = new Set()) {
+async function chatOnce({ ep, model, messages, signal, onDelta, onReasoning, onToolCalls, onUsage, temperature, think, reasoning, tools, firstByteMs }, skip = new Set()) {
+  const waitFirst = firstByteMs || firstByteTimeout(ep); // un trabajo largo (escribir una composición) puede pedir más margen
   let payload = { model, messages, stream: true, temperature: temperature ?? 0.2 };
   // Modo de razonamiento elegido (NORMAL / PENSAR / ESFUERZO): cada proveedor lo pide a su manera (reasoning.js)
   if (reasoning) payload = applyReasoning(payload, ep, model, reasoning, capsOf(ep, model));
@@ -509,7 +510,7 @@ async function chatOnce({ ep, model, messages, signal, onDelta, onReasoning, onT
   if (b?.stream) {
     await new Promise((resolve, reject) => {
       const id = b.stream(
-        { url: ep.url + '/chat/completions', headers: headersFor(ep), body, timeout: firstByteTimeout(ep) },
+        { url: ep.url + '/chat/completions', headers: headersFor(ep), body, timeout: waitFirst },
         {
           onEvent: (json) => { try { handleChunk(json); } catch (e) { b.abort(id); reject(e); } },
           onDone: resolve,
@@ -528,7 +529,7 @@ async function chatOnce({ ep, model, messages, signal, onDelta, onReasoning, onT
   const chatNative = async (r) => {
     const once = { ...payload, stream: false };
     delete once.stream_options;
-    const job = nativeRequest(ep, r.url, { method: 'POST', headers: r.headers, body: JSON.stringify(once), timeout: firstByteTimeout(ep) });
+    const job = nativeRequest(ep, r.url, { method: 'POST', headers: r.headers, body: JSON.stringify(once), timeout: waitFirst });
     const stop = new Promise((_, reject) => signal?.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError'))));
     handleChunk(await Promise.race([job, stop]));
     return finish();
@@ -539,7 +540,7 @@ async function chatOnce({ ep, model, messages, signal, onDelta, onReasoning, onT
   const ctl = new AbortController();
   const onUserAbort = () => ctl.abort(new DOMException('aborted', 'AbortError'));
   signal?.addEventListener('abort', onUserAbort);
-  const timer = setTimeout(() => ctl.abort(new DOMException('timeout', 'TimeoutError')), firstByteTimeout(ep));
+  const timer = setTimeout(() => ctl.abort(new DOMException('timeout', 'TimeoutError')), waitFirst);
   try {
     try {
       res = await fetch(rt.url, { method: 'POST', signal: ctl.signal, body, headers: rt.headers });

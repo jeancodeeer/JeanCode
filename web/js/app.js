@@ -54,8 +54,8 @@ let studio = null;
 /** Pregunta al modelo de chat del usuario (mejorar prompts y escribir composiciones). */
 async function mediaChatText(system, user, signal) {
   const m = decide(routeFor('chat'), { models: state.visible || [], mode: 'chat', endpoints: getEndpoints(), need: {} }).model;
-  if (!m) throw new Error('conecta un modelo de chat para esto');
-  return (await routedChat(m, { signal, think: false, temperature: 0.7, messages: [{ role: 'system', content: system }, { role: 'user', content: user }] }, routeCtx(() => {}))).text.replace(/<think>[\s\S]*?<\/think>/g, '').trim();
+  if (!m) throw new Error('Elige un modelo de chat en el selector de arriba (en catálogos grandes, como NVIDIA, hay que fijarlo primero).');
+  return (await routedChat(m, { signal, think: false, temperature: 0.7, firstByteMs: 420000, messages: [{ role: 'system', content: system }, { role: 'user', content: user }] }, routeCtx(() => {}))).text.replace(/<think>[\s\S]*?<\/think>/g, '').trim();
 }
 /** Guarda un archivo generado en la carpeta de trabajo; si la ruta no vale, sigue en la galería. */
 async function saveToWorkspace(item, wanted, d, workspace) {

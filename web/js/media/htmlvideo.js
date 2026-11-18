@@ -26,9 +26,10 @@ REGLAS PARA QUE EL RENDER SEA EXACTO
 - No uses backdrop-filter, mix-blend-mode sobre el fondo ni <iframe>.
 
 OFICIO
-- Una idea por escena. Título legible en 1 s; cada escena dura lo que tarda en leerse. Una jerarquía clara: un elemento protagonista por escena.
+- Una idea por escena, cada una en su propio .clip. Título legible en 1 s; cada escena dura lo que tarda en leerse. Una jerarquía clara: un elemento protagonista por escena.
+- Nada se queda encima de lo siguiente: antes de que entre un elemento en un lugar, lo anterior ya salió o su clip terminó. Usa todo el encuadre, no una columna pequeña en el centro.
 - Zona segura: el contenido dentro del 90 % central y el texto clave dentro del 80 %. En vertical, deja libre el 15 % inferior.
-- Tipografía grande: en ${width}×${height}, el texto principal mide al menos ${Math.round(Math.min(width, height) * 0.06)} px y el secundario ${Math.round(Math.min(width, height) * 0.03)} px.
+- Tipografía grande: en ${width}×${height}, el texto principal mide al menos ${Math.round(Math.min(width, height) * 0.14)} px y el secundario al menos ${Math.round(Math.min(width, height) * 0.06)} px.
 - El movimiento guía la atención: entradas de 0.4 a 0.8 s con power3.out o expo.out, salidas más cortas con power2.in, y stagger de 0.04 a 0.1 s. Solapa las transiciones entre escenas; nunca dejes un fotograma vacío.
 - Paleta de 2 o 3 colores con contraste alto y un fondo con profundidad (degradado, formas, textura SVG). Nada de plantilla genérica: una decisión visual fuerte y coherente.
 - Respeta cualquier texto literal del usuario. Termina con un cierre deliberado que se sostenga al menos 0.5 s.`;
@@ -159,14 +160,22 @@ export function jcHvRuntime(cfg) {
   const targetsOf = (t) => (typeof t === 'string' ? [...document.querySelectorAll(t)] : t instanceof Element ? [t] : t?.length != null ? [...t].flatMap(targetsOf) : t ? [t] : []);
   const cssName = (p) => p.replace(/[A-Z]/g, (c) => `-${c.toLowerCase()}`);
   const NEEDS_PX = /^(width|height|top|left|right|bottom|margin|padding|font-size|border-radius|gap|letter-spacing|outline-offset|border-width)/;
+  // gsap.set fija el punto de partida de un elemento; lo que anime después empieza desde ahí
+  const FIXED = new WeakMap();
+  let frameState = new WeakMap();
   const startValue = (el, prop) => {
+    const fixed = FIXED.get(el);
+    if (fixed && prop in fixed) return fixed[prop];
     if (prop in TRANSFORM) return TRANSFORM[prop];
     if (prop === 'autoAlpha') return parseFloat(getComputedStyle(el).opacity);
     if (prop.startsWith('--')) return getComputedStyle(el).getPropertyValue(prop).trim();
     const v = getComputedStyle(el)[prop] ?? getComputedStyle(el).getPropertyValue(cssName(prop));
     return /^-?\d*\.?\d+$/.test(v) ? Number(v) : v;
   };
-  function applyAll(el, state) {
+  function applyAll(el, partial) {
+    // varias líneas pueden animar el mismo elemento: cada una suma sus propiedades a las del fotograma
+    const state = { ...(FIXED.get(el) || {}), ...(frameState.get(el) || {}), ...partial };
+    frameState.set(el, state);
     const t = { ...TRANSFORM };
     let hasT = false;
     for (const [p, v] of Object.entries(state)) {
@@ -278,7 +287,18 @@ export function jcHvRuntime(cfg) {
   const root = new Timeline();
   W.__timelines = {};
   W.gsap = {
-    timeline: (o) => new Timeline(o), to: (t, v) => root.to(t, v, 0), from: (t, v) => root.from(t, v, 0), fromTo: (t, a, b) => root.fromTo(t, a, b, 0), set: (t, v) => root.set(t, v, 0),
+    timeline: (o) => new Timeline(o), to: (t, v) => root.to(t, v, 0), from: (t, v) => root.from(t, v, 0), fromTo: (t, a, b) => root.fromTo(t, a, b, 0),
+    set: (t, v) => {
+      for (const el of targetsOf(t)) {
+        if (!(el instanceof Element)) continue;
+        const cur = FIXED.get(el) || {};
+        for (const [raw, val] of Object.entries(v)) if (!RESERVED.has(raw)) { const p = ALIAS[raw] || raw; cur[p] = relative(val, cur[p] ?? startValue(el, p)); }
+        FIXED.set(el, cur);
+        if (v.transformOrigin) el.style.transformOrigin = v.transformOrigin;
+        applyAll(el, {});
+      }
+      return W.gsap;
+    },
     registerPlugin() {}, defaults() {}, config() {}, killTweensOf() {},
     utils: { toArray: targetsOf, clamp: (a, b, v) => Math.min(b, Math.max(a, v)), random: (a, b) => a + Math.random() * (b - a), wrap: (a, b, v) => a + ((((v - a) % (b - a)) + (b - a)) % (b - a)) },
   };
@@ -286,6 +306,7 @@ export function jcHvRuntime(cfg) {
   /* ---- saltar a un instante ---- */
   function seek(t) {
     T = t;
+    frameState = new WeakMap();
     for (const [id, x] of [...timers]) {
       while (timers.has(id) && x.at <= T) { x.fn(...x.a); if (x.every) x.at += x.every; else timers.delete(id); }
     }

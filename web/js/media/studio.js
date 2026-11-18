@@ -271,7 +271,7 @@ export function initStudio(deps) {
     const canEdit = !isVideo && !!item.blob;
     actions.innerHTML = [
       canEdit && ['edit', 'brush', 'Editar'],
-      canEdit && ['reference', 'plus', 'Referencia', 'Usarla como imagen de referencia'],
+      canEdit && service.pick('image') && service.controls(service.pick('image')).refs > 0 && ['reference', 'plus', 'Referencia', 'Usarla como imagen de referencia'],
       canEdit && ['animate', 'film', 'Animar', 'Crear un vídeo a partir de esta imagen'],
       isVideo && item.blob && ['frame', 'image', 'Fotograma', 'Usar el fotograma actual como inicio de otro vídeo'],
       item.html && ['composition', 'brush', 'Editar HTML', 'Seguir trabajando la composición'],
