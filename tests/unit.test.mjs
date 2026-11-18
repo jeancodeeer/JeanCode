@@ -1589,7 +1589,10 @@ test('imagen: la clave solo viaja al origen de la API', async (t) => {
   assert.equal(seen[0][1].Authorization, 'Bearer SECRETA');
   await API.fetchMediaBlob(ep, 'https://cdn.ajeno.example/v.mp4', { auth: true });
   assert.deepEqual(seen[1][1], {}, 'una URL de otro dominio no recibe la clave');
-  for (const x of ['http://192.168.1.1/x.png', 'http://169.254.169.254/latest', 'http://[::1]/x', 'http://[fd00::1]/x', 'http://2130706433/x', 'http://impresora.local/x']) await assert.rejects(API.fetchMediaBlob(ep, x), /red local/, x);
+  for (const x of ['http://192.168.1.1/x.png', 'http://169.254.169.254/latest', 'http://[::1]/x', 'http://[fd00::1]/x', 'http://2130706433/x', 'http://0x7f.1/x', 'http://impresora.local/x', 'http://localhost./x', 'http://[::ffff:127.0.0.1]/x']) await assert.rejects(API.fetchMediaBlob(ep, x), /red local/, x);
+  for (const x of ['http://usuario@127.0.0.1/x', 'http://a:b@192.168.1.1/x', 'https://a:b@cdn.example/x']) await assert.rejects(API.fetchMediaBlob(ep, x), /no válida/, x);
+  assert.equal(API.isPrivateTarget('https://cdn.example/v.mp4'), false);
+  assert.equal(API.isPrivateTarget('http://8.8.8.8/'), false);
   await assert.rejects(API.fetchMediaBlob(ep, 'file:///etc/passwd'), /no válida/);
   await assert.rejects(API.fetchMediaBlob(ep, 'javascript:alert(1)'), /no válida/);
 });

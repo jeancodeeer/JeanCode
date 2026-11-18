@@ -228,8 +228,20 @@ async function request(ep, path, init = {}) {
   try { return JSON.parse(text); } catch { throw notApi(ep, text); }
 }
 
-// Direcciones que una URL escrita por un proveedor remoto nunca debe alcanzar (new URL ya normaliza 2130706433 y similares)
-const PRIVATE_URL = /^https?:\/\/(localhost|[^/:]*\.localhost|[^/:]*\.local|0\.|127\.|10\.|192\.168\.|169\.254\.|172\.(1[6-9]|2\d|3[01])\.|100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\.|\[(::|::1|f[cd]|fe[89ab]|::ffff:))/i;
+/**
+ * ¿Apunta a este equipo o a una red privada? Se mira el host ya interpretado por URL, nunca el texto: así
+ * `http://usuario@127.0.0.1/`, `localhost.` o `2130706433` no se cuelan.
+ */
+export function isPrivateTarget(url) {
+  let u;
+  try { u = url instanceof URL ? url : new URL(url); } catch { return true; }
+  const h = u.hostname.toLowerCase().replace(/^\[|\]$/g, '').replace(/\.$/, '');
+  if (h.includes(':')) return /^(::|f[cd]|fe[89ab]|ff|64:ff9b:|2002:)/.test(h);
+  const v4 = h.match(/^(\d+)\.(\d+)\.(\d+)\.(\d+)$/);
+  if (!v4) return !h || /(^|\.)(localhost|local|internal|lan|home\.arpa)$/.test(h);
+  const [a, b] = [Number(v4[1]), Number(v4[2])];
+  return a === 0 || a === 10 || a === 127 || a >= 224 || (a === 169 && b === 254) || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) || (a === 192 && b === 0) || (a === 198 && (b === 18 || b === 19)) || (a === 100 && b >= 64 && b <= 127);
+}
 
 /** Llamada JSON a la API de imagen o vídeo de un proveedor. base = otra raíz del mismo proveedor (…/v2). */
 export function mediaCall(ep, path, { method = 'GET', body, base, auth, timeout = 300000, signal } = {}) {
@@ -249,11 +261,13 @@ export function mediaCall(ep, path, { method = 'GET', body, base, auth, timeout 
 export async function fetchMediaBlob(ep, url, { auth = false, mime = '', signal } = {}) {
   let u;
   try { u = new URL(url); } catch { throw new ApiError('El proveedor devolvió una URL de descarga no válida.', -1, '', 'format'); }
-  if (!['https:', 'http:'].includes(u.protocol)) throw new ApiError('El proveedor devolvió una URL de descarga no válida.', -1, '', 'format');
-  // un proveedor remoto no puede hacer que la app lea tu red local
-  const remoteApi = !PRIVATE_URL.test(ep.url);
-  const refuse = (x) => { if (remoteApi && PRIVATE_URL.test(x)) throw new ApiError('El proveedor devolvió una dirección de tu red local: no se descarga.', -1, '', 'forbidden'); };
-  refuse(u.href);
+  // un proveedor remoto no puede hacer que la app lea tu red local; se repite en cada redirección
+  const remoteApi = !isPrivateTarget(ep.url);
+  const refuse = (x) => {
+    if (!['https:', 'http:'].includes(x.protocol) || x.username || x.password) throw new ApiError('El proveedor devolvió una URL de descarga no válida.', -1, '', 'format');
+    if (remoteApi && isPrivateTarget(x)) throw new ApiError('El proveedor devolvió una dirección de tu red local: no se descarga.', -1, '', 'forbidden');
+  };
+  refuse(u);
   const same = u.origin === new URL(ep.url).origin;
   const headers = !auth || !same ? {} : auth === true ? { Authorization: `Bearer ${ep.key}` } : Object.fromEntries(Object.keys(auth).map((k) => [k, ep.key]));
   const fromB64 = (b64, type) => {
@@ -281,8 +295,7 @@ export async function fetchMediaBlob(ep, url, { auth = false, mime = '', signal 
       if (!loc) break;
       if (hop >= 5) throw new ApiError('Demasiadas redirecciones al descargar el resultado.', -1, '', 'format');
       const next = new URL(loc, at);
-      if (!['https:', 'http:'].includes(next.protocol)) throw new ApiError('El proveedor devolvió una URL de descarga no válida.', -1, '', 'format');
-      refuse(next.href);
+      refuse(next);
       if (next.origin !== at.origin) sent = {};
       at = next;
     }
