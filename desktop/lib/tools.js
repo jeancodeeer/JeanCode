@@ -360,6 +360,14 @@ async function rewind(root, turn) {
   return n ? `restaurados ${n} cambio(s) de archivo hechos por el agente (sin git, los comandos de terminal no se pueden deshacer)`
     : 'no había cambios del agente desde ese mensaje';
 }
+/** Archivo binario (imagen o vídeo generado) dentro de la carpeta de trabajo; nunca pisa uno que ya exista. */
+async function writeBinary(root, rel, b64) {
+  const file = await inside(root, rel);
+  await fs.mkdir(path.dirname(file), { recursive: true });
+  const data = Buffer.from(String(b64), 'base64');
+  await fs.writeFile(file, data, { flag: 'wx' });
+  return `${rel} (${Math.round(data.length / 1024)} KB)`;
+}
 async function writeTracked(root, rel, content) { await snapshot(root, rel); return write(root, rel, content); }
 async function editTracked(root, rel, a, b) { await snapshot(root, rel); return edit(root, rel, a, b); }
 async function undo(root) {
@@ -591,7 +599,7 @@ async function execHook(root, command, input, timeoutSec = 60) {
 }
 
 module.exports = {
-  inside, list, read, write: writeTracked, edit: editTracked, search, run, cancelRuns, systemInfo, osShort,
+  inside, list, read, write: writeTracked, writeBinary, edit: editTracked, search, run, cancelRuns, systemInfo, osShort,
   startProcess, processOutput, listProcesses, stopProcess, stopAllProcesses, move, killTree,
   undo, peek, glob, webfetch, pinnedGet, projectMemory, commands, agents, hooks, cleanHooks, execHook, beginTurn, rewind,
 };

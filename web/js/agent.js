@@ -34,6 +34,9 @@ Escritura (piden permiso según el modo):
 - write_file {"path": "a.js", "content": "..."}           crea o reemplaza un archivo completo
 - edit_file {"path": "a.js", "old": "texto exacto", "new": "reemplazo"}   reemplazo único
 - run_command {"command": "npm test", "timeout": 120}     terminal, cwd = carpeta de trabajo
+Imagen y vídeo (piden permiso; el archivo se guarda en la carpeta de trabajo):
+- generate_image {"prompt": "descripción visual detallada", "path": "assets/hero.png", "ratio": "16:9", "from": "id de un resultado anterior para editarlo"}
+- generate_video {"prompt": "escena, acción y cámara", "path": "assets/intro.mp4", "ratio": "16:9", "duration": 6, "from": "id de una imagen para animarla"}
 Organización:
 - todo_write {"todos": [{"content": "paso", "status": "pending|in_progress|done"}]}
     mantén una lista de tareas visible para el usuario en trabajos de varios pasos
@@ -63,6 +66,8 @@ export const TOOL_SCHEMAS = [
   ['write_file', 'Crea o reemplaza un archivo completo', S({ path: str('ruta RELATIVA a la carpeta de trabajo'), content: str('contenido completo') }, ['path', 'content'])],
   ['edit_file', 'Reemplaza un fragmento exacto y único de un archivo', S({ path: str('ruta relativa'), old: str('texto exacto actual'), new: str('texto nuevo') }, ['path', 'old', 'new'])],
   ['run_command', 'Ejecuta un comando de terminal en la carpeta de trabajo', S({ command: str('comando'), timeout: { type: 'integer', description: 'segundos' } }, ['command'])],
+  ['generate_image', 'Genera una imagen con el modelo de imagen del usuario y la guarda en la carpeta de trabajo. Pide permiso', S({ prompt: str('descripción visual detallada'), path: str('ruta relativa donde guardarla (opcional)'), ratio: str('proporción, p. ej. 1:1, 16:9, 9:16'), from: str('id de un resultado anterior para editarlo') }, ['prompt'])],
+  ['generate_video', 'Genera un vídeo con el modelo de vídeo del usuario y lo guarda en la carpeta de trabajo. Tarda varios minutos. Pide permiso', S({ prompt: str('escena, acción y movimiento de cámara'), path: str('ruta relativa donde guardarlo (opcional)'), ratio: str('proporción, p. ej. 16:9, 9:16'), duration: { type: 'integer', description: 'segundos' }, from: str('id de una imagen generada para animarla') }, ['prompt'])],
   ['todo_write', 'Actualiza la lista de tareas visible para el usuario', S({ todos: { type: 'array', items: S({ content: str('paso'), status: { type: 'string', enum: ['pending', 'in_progress', 'done'] } }, ['content', 'status']) } }, ['todos'])],
   ['schedule_task', 'Tareas programadas (como las de Claude): listar, ver ejecuciones, crear, cambiar, borrar o lanzar. Crear/cambiar/borrar/lanzar pide permiso', S({
     action: { type: 'string', enum: ['list', 'runs', 'create', 'update', 'delete', 'run'] }, id: str('id o nombre de la tarea (runs, update, delete, run)'),
@@ -335,6 +340,24 @@ ${r}` : '';
         if (!ok) return 'RECHAZADO por el usuario.';
       }
       if (tool === 'delete_file' && !(await ask({ title: 'MOVER A LA PAPELERA', path: String(args.path), command: `Se enviará «${args.path}» a la papelera del sistema (recuperable).` }))) return 'RECHAZADO por el usuario.';
+    }
+    if (tool === 'generate_image' || tool === 'generate_video') {
+      if (readOnly || (sub && !ctx.subWrite)) return 'DENEGADO: modo de solo lectura: describe la imagen o el vídeo en tu plan.';
+      const kind = tool === 'generate_video' ? 'video' : 'image';
+      if (!ctx.media) return 'ERROR: la generación de imagen y vídeo no está disponible aquí.';
+      const m = ctx.media.model(kind);
+      if (!m) return `ERROR: el usuario no tiene ningún modelo de ${kind === 'video' ? 'vídeo' : 'imagen'} conectado. Díselo y no lo intentes de nuevo.`;
+      // cuesta dinero y envía el prompt al proveedor: siempre se pregunta, con el modelo a la vista
+      if (!(await ask({ title: kind === 'video' ? 'GENERAR VÍDEO' : 'GENERAR IMAGEN', command: `${m.id} · ${m.billing}\n\n${String(args.prompt ?? '')}` }))) return 'RECHAZADO por el usuario.';
+      try {
+        const r = await ctx.media.generate(kind, args, { signal: ctx.signal, workspace: ctx.workspace, desktop: d });
+        ctx.onEvent({ type: 'media', ids: r.ids, sub });
+        if (r.path) ctx.onEvent({ type: 'file-changed', path: r.path });
+        return r.text;
+      } catch (e) {
+        if (e.name === 'AbortError') throw e;
+        return `ERROR: ${e.message || e}`;
+      }
     }
     const writes = WRITE_TOOLS.includes(tool);
     const runs = tool === 'run_command';

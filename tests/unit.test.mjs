@@ -6,6 +6,10 @@ import { mkdtempSync, mkdirSync, writeFileSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
+import * as ME from '../web/js/media/engine.js';
+import * as MX from '../web/js/media/edit.js';
+import * as CAP from '../web/js/capabilities.js';
+import * as API from '../web/js/api.js';
 import { VERSION, isNewer } from '../web/js/version.js';
 import { parseFiles, safePath, buildPreview } from '../web/js/code.js';
 import { parseToolCalls, stripToolBlocks } from '../web/js/agent.js';
@@ -1433,4 +1437,168 @@ test('móvil: pantalla del iPhone (jeancode-hid y uiopen): coordenadas, escapes 
   assert.match(await s.act('inspect_screen'), /no se pueden leer los controles/);
   const broken = MS.createIosScreen({ exec: async () => ({ code: 4, out: '', err: 'falta IOHIDEventSystemClientCreate en esta versión de iOS' }), screenshot: async () => null }, {});
   assert.match(await broken.act('mouse_click', { x: 1, y: 1 }), /ERROR: jeancode-hid: falta IOHIDEventSystemClientCreate/, 'si el binario falla, el agente recibe el motivo');
+});
+
+/* ------------------------------------------------------------------ imagen y vídeo */
+test('imagen y vídeo: qué modelos sirven y no se cuelan en el chat', () => {
+  const ep = (provider) => ({ id: provider, url: 'https://x.example/v1', key: 'k', provider });
+  for (const id of ['gpt-image-2', 'black-forest-labs/FLUX.1-schnell', 'grok-imagine-image-2.0', 'gemini-3.1-flash-image', 'Qwen/Qwen-Image', 'image-01']) {
+    assert.equal(ME.mediaKindOf(ep('openai'), id), 'image', id);
+    assert.equal(CAP.capsOf(ep('openai'), id).chat, false, id);
+  }
+  for (const id of ['MiniMax-H3', 'grok-imagine-video-1.5', 'Wan-AI/Wan2.2-T2V-A14B', 'bytedance/seedance-2.5', 'kling-v2']) assert.equal(ME.mediaKindOf(ep('together'), id), 'video', id);
+  for (const id of ['gpt-5', 'claude-sonnet', 'gemini-2.5-pro', 'jean-marvel', 'qwen3-coder', 'wandb-helper']) { assert.equal(ME.mediaKindOf(ep('openai'), id), null, id); assert.notEqual(CAP.capsOf(ep('openai'), id).chat, false, id); }
+  assert.equal(ME.protocolOf(ep('openai'), 'video'), null, 'OpenAI cerró su API de vídeo');
+  assert.equal(ME.protocolOf(ep('anthropic'), 'image'), null);
+  assert.equal(ME.protocolOf(ep('custom'), 'image'), 'generic');
+  assert.deepEqual(ME.controlsFor(ep('openai'), 'gpt-image-2', 'image').ratios, ['1:1', '3:2', '2:3']);
+  assert.equal(ME.controlsFor(ep('openai'), 'gpt-image-2', 'image').mask, true);
+  assert.equal(ME.controlsFor(ep('together'), 'x', 'image').negative, true);
+  assert.equal(ME.controlsFor(ep('xai'), 'grok-imagine-video', 'video').resolutions.includes('1080p'), false);
+  assert.deepEqual(ME.sizeFor('16:9'), { width: 1360, height: 768 });
+});
+
+test('imagen: cada proveedor recibe su formato y se entiende su respuesta', async () => {
+  const run = async (provider, req, reply, url = 'https://api.example/v1') => {
+    const calls = [];
+    const net = { ep: { id: 'e', url, key: 'K', provider }, call: async (path, o = {}) => { calls.push({ path, ...o }); return reply; } };
+    return { items: await ME.generateImage({ kind: 'image', model: 'm', prompt: 'gato', ratio: '16:9', count: 1, ...req }, net), call: calls[0] };
+  };
+  const png = 'iVBORw0KGgo=';
+  let r = await run('openai', { ratio: '3:2', quality: 'high' }, { data: [{ b64_json: png }] });
+  assert.equal(r.call.path, '/images/generations');
+  assert.deepEqual([r.call.body.size, r.call.body.quality, r.items[0].b64], ['1536x1024', 'high', png]);
+  r = await run('openai', { ratio: '1:1', refs: ['data:image/png;base64,AA'], mask: 'data:image/png;base64,BB' }, { data: [{ b64_json: png }] });
+  assert.equal(r.call.path, '/images/edits');
+  assert.deepEqual(r.call.body.images, [{ image_url: 'data:image/png;base64,AA' }]);
+  assert.deepEqual(r.call.body.mask, { image_url: 'data:image/png;base64,BB' });
+  r = await run('openrouter', { resolution: '2K', seed: '7', refs: ['data:image/png;base64,AA'] }, { data: [{ b64_json: png }] });
+  assert.equal(r.call.path, '/images');
+  assert.deepEqual([r.call.body.aspect_ratio, r.call.body.resolution, r.call.body.seed], ['16:9', '2K', 7]);
+  assert.equal(r.call.body.input_references[0].image_url.url, 'data:image/png;base64,AA');
+  r = await run('together', { negative: 'borroso', steps: '20' }, { data: [{ index: 0, url: 'https://cdn.example/a.png', type: 'url' }] });
+  assert.deepEqual([r.call.body.width, r.call.body.height, r.call.body.negative_prompt, r.call.body.steps], [1360, 768, 'borroso', 20]);
+  assert.equal(r.items[0].url, 'https://cdn.example/a.png');
+  r = await run('siliconflow', {}, { images: [{ url: 'https://cdn.example/b.png' }] });
+  assert.equal(r.call.body.image_size, '1360x768');
+  assert.equal(r.items[0].url, 'https://cdn.example/b.png');
+  r = await run('minimax', {}, { data: { image_base64: [png] }, base_resp: { status_code: 0 } });
+  assert.deepEqual([r.call.path, r.call.body.response_format, r.items[0].b64], ['/image_generation', 'base64', png]);
+  await assert.rejects(run('minimax', {}, { base_resp: { status_code: 1026, status_msg: 'contenido sensible' } }), /contenido sensible/);
+  r = await run('gemini', { resolution: '2K' }, { steps: [{ type: 'model_output', content: [{ type: 'text', text: 'ok' }, { type: 'image', data: png }] }] }, 'https://generativelanguage.googleapis.com/v1beta/openai');
+  assert.equal(r.call.base, 'https://generativelanguage.googleapis.com/v1beta');
+  assert.deepEqual(r.call.auth, { 'x-goog-api-key': 'K' });
+  assert.deepEqual(r.call.body.response_format, { type: 'image', aspect_ratio: '16:9', image_size: '2K' });
+  assert.equal(r.items[0].b64, png);
+  await assert.rejects(run('openai', {}, { data: [] }), /filtro de contenido/);
+  // una API genérica que rechaza un parámetro opcional: se repite sin él
+  const seen = [];
+  const net = { ep: { id: 'e', url: 'http://localhost:9/v1', key: 'k', provider: 'custom' }, call: async (_p, o) => {
+    seen.push(Object.keys(o.body));
+    if ('negative_prompt' in o.body) throw Object.assign(new Error('unknown field negative_prompt'), { status: 400 });
+    return { data: [{ b64_json: png }] };
+  } };
+  await ME.generateImage({ kind: 'image', model: 'm', prompt: 'x', ratio: '1:1', count: 1, negative: 'y' }, net);
+  assert.equal(seen.length, 2);
+  assert.equal(seen[1].includes('negative_prompt'), false);
+});
+
+test('vídeo: crear y seguir el trabajo en cada proveedor', async () => {
+  const flow = async (provider, url, submitReply, polls, req = {}) => {
+    const calls = [];
+    let i = 0;
+    const net = { ep: { id: 'e', url, key: 'K', provider }, call: async (path, o = {}) => { calls.push({ path, ...o }); return calls.length === 1 ? submitReply : polls[Math.min(i++, polls.length - 1)]; } };
+    const ref = await ME.submitVideo({ kind: 'video', model: 'm', prompt: 'olas', ratio: '16:9', duration: 6, resolution: '720p', ...req }, net);
+    let st = await ME.pollVideo(ref, net);
+    while (!st.done) st = await ME.pollVideo(ref, net);
+    return { ref, st, calls };
+  };
+  let f = await flow('openrouter', 'https://openrouter.ai/api/v1', { id: 'j1', status: 'pending' }, [{ status: 'in_progress' }, { status: 'completed', unsigned_urls: ['https://openrouter.ai/api/v1/videos/j1/content?index=0'] }], { start: 'data:image/png;base64,AA', audio: false });
+  assert.deepEqual(f.calls[0].body.frame_images[0].frame_type, 'first_frame');
+  assert.equal(f.calls[0].body.generate_audio, false);
+  assert.deepEqual(f.st.items[0], { url: 'https://openrouter.ai/api/v1/videos/j1/content?index=0', auth: true, mime: 'video/mp4' });
+  f = await flow('xai', 'https://api.x.ai/v1', { request_id: 'r1' }, [{ status: 'pending' }, { status: 'done', video: { url: 'https://vidgen.x.ai/a.mp4' } }]);
+  assert.equal(f.calls[0].path, '/videos/generations');
+  assert.equal(f.st.items[0].url, 'https://vidgen.x.ai/a.mp4');
+  f = await flow('together', 'https://api.together.xyz/v1', { id: 't1' }, [{ status: 'in_progress' }, { status: 'completed', outputs: { video_url: 'https://cdn/t.mp4' } }]);
+  assert.equal(f.calls[0].base, 'https://api.together.xyz/v2');
+  assert.equal(f.calls[0].body.seconds, '6');
+  f = await flow('siliconflow', 'https://api.siliconflow.com/v1', { requestId: 's1' }, [{ status: 'InQueue' }, { status: 'Succeed', results: { videos: [{ url: 'https://cdn/s.mp4' }] } }]);
+  assert.deepEqual(f.calls[1].body, { requestId: 's1' });
+  f = await flow('gemini', 'https://generativelanguage.googleapis.com/v1beta/openai', { name: 'models/veo/operations/o1' }, [{ done: false }, { done: true, response: { generateVideoResponse: { generatedSamples: [{ video: { uri: 'https://generativelanguage.googleapis.com/v1beta/files/a:download' } }] } } }]);
+  assert.equal(f.calls[0].path, '/models/m:predictLongRunning');
+  assert.equal(f.calls[0].body.parameters.durationSeconds, '6');
+  assert.equal(f.calls[1].path, '/models/veo/operations/o1');
+  assert.deepEqual(f.st.items[0].auth, { 'x-goog-api-key': true });
+  f = await flow('minimax', 'https://api.minimax.io/v1', { task_id: 'm1' }, [{ task: { status: 'running' } }, { task: { status: 'succeeded', content: { url: 'https://cdn/m.mp4' } } }], { resolution: '768P' });
+  assert.equal(f.calls[0].base, 'https://api.minimax.io/v2');
+  assert.deepEqual(f.calls[0].body.content[0], { type: 'text', text: 'olas' });
+  f = await flow('xai', 'https://api.x.ai/v1', { request_id: 'r2' }, [{ status: 'failed', error: 'bloqueado' }]);
+  assert.equal(f.st.error, 'bloqueado');
+  await assert.rejects(async () => ME.submitVideo({ model: 'sora-2', prompt: 'x' }, { ep: { id: 'e', url: 'https://api.openai.com/v1', key: 'k', provider: 'openai' } }), /no ofrece una API de vídeo/);
+});
+
+test('imagen y vídeo: pedirlo en el chat sin confundir preguntas de programación', () => {
+  const yes = [
+    ['genera una imagen de un faro al amanecer', 'image', 'un faro al amanecer'],
+    ['Por favor, créame una foto de un gato con gafas', 'image', 'un gato con gafas'],
+    ['hazme un logo de una cafetería minimalista', 'image', 'logo de una cafetería minimalista'],
+    ['Dibuja un retrato de una astronauta', 'image', 'retrato de una astronauta'],
+    ['create an image of a red fox', 'image', 'a red fox'],
+    ['genera un vídeo de olas a cámara lenta', 'video', 'olas a cámara lenta'],
+    ['¿me puedes crear una animación de un cohete despegando?', 'video', 'un cohete despegando'],
+  ];
+  for (const [t, kind, prompt] of yes) assert.deepEqual(ME.detectMediaIntent(t), { kind, prompt }, t);
+  for (const t of ['crea una imagen de docker para node', 'genera una imagen en base64 con python', '¿cómo creo una imagen de disco?', 'explica cómo generar un vídeo con ffmpeg', 'haz un script que descargue imágenes', 'qué modelo genera imágenes', 'crea un componente de video en react', '/imagen hola'])
+    assert.equal(ME.detectMediaIntent(t), null, t);
+  const last = { kind: 'image' };
+  assert.deepEqual(ME.detectMediaIntent('hazla más azul', { last }), { kind: 'image', prompt: 'hazla más azul', from: 'edit' });
+  assert.deepEqual(ME.detectMediaIntent('ahora anímala', { last }), { kind: 'video', prompt: 'ahora anímala', from: 'animate' });
+  assert.equal(ME.detectMediaIntent('hazla más azul'), null, 'sin imagen previa no hay nada que editar');
+});
+
+test('imagen: prompts guiados, variantes y retoque local', () => {
+  assert.deepEqual(ME.expandPrompt('un coche {rojo|azul} en {París|Lima}'), ['un coche rojo en París', 'un coche rojo en Lima', 'un coche azul en París', 'un coche azul en Lima']);
+  assert.deepEqual(ME.expandPrompt('sin variantes'), ['sin variantes']);
+  assert.equal(ME.expandPrompt('{a|b|c} {d|e|f} {g|h|i}').length, 8, 'con tope: cada variante cuesta');
+  assert.equal(ME.composePrompt({ subject: 'un zorro', action: 'corriendo', place: 'en la nieve', style: 'óleo', light: 'hora dorada' }), 'un zorro, corriendo. en la nieve. Estilo: óleo. Luz: hora dorada');
+  assert.equal(ME.composePrompt({}), '');
+  const px = new Uint8ClampedArray([100, 150, 200, 255]);
+  MX.applyAdjust(px, {});
+  assert.deepEqual([...px], [100, 150, 200, 255], 'sin cambios: los píxeles quedan igual');
+  const gray = new Uint8ClampedArray([100, 150, 200, 128]);
+  MX.applyAdjust(gray, { saturation: -100 });
+  assert.equal(gray[0], gray[1]);
+  assert.equal(gray[1], gray[2]);
+  assert.equal(gray[3], 128, 'el alfa no se toca');
+  const light = new Uint8ClampedArray([100, 100, 100, 255]);
+  MX.applyAdjust(light, { brightness: 50 });
+  assert.ok(light[0] > 150);
+  assert.deepEqual(MX.cropRect({ x: 10, y: 10 }, { x: 210, y: 110 }, 400, 400, 'free'), { x: 10, y: 10, width: 200, height: 100 });
+  assert.deepEqual(MX.cropRect({ x: 210, y: 110 }, { x: 10, y: 10 }, 400, 400, '1:1'), { x: 10, y: 10, width: 100, height: 100 });
+  assert.deepEqual(MX.cropRect({ x: -50, y: 0 }, { x: 999, y: 999 }, 300, 200, 'free'), { x: 0, y: 0, width: 300, height: 200 });
+});
+
+test('imagen: la clave solo viaja al origen de la API', async (t) => {
+  const seen = [];
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async (url, o) => { seen.push([String(url), o.headers]); return new Response(new Uint8Array([1, 2, 3]), { status: 200 }); };
+  t.after(() => { globalThis.fetch = realFetch; });
+  const ep = { id: 'e', url: 'https://openrouter.ai/api/v1', key: 'SECRETA', provider: 'openrouter' };
+  await API.fetchMediaBlob(ep, 'https://openrouter.ai/api/v1/videos/j/content', { auth: true });
+  assert.equal(seen[0][1].Authorization, 'Bearer SECRETA');
+  await API.fetchMediaBlob(ep, 'https://cdn.ajeno.example/v.mp4', { auth: true });
+  assert.deepEqual(seen[1][1], {}, 'una URL de otro dominio no recibe la clave');
+  await assert.rejects(API.fetchMediaBlob(ep, 'http://192.168.1.1/x.png'), /red local/);
+  await assert.rejects(API.fetchMediaBlob(ep, 'file:///etc/passwd'), /no válida/);
+  await assert.rejects(API.fetchMediaBlob(ep, 'javascript:alert(1)'), /no válida/);
+});
+
+test('escritorio: writeBinary guarda dentro de la carpeta y nunca pisa un archivo', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'jc-bin-'));
+  const b64 = Buffer.from([0x89, 0x50, 0x4e, 0x47]).toString('base64');
+  assert.match(await tools.writeBinary(root, 'generated/a.png', b64), /generated\/a\.png/);
+  assert.deepEqual([...require('node:fs').readFileSync(join(root, 'generated', 'a.png'))], [0x89, 0x50, 0x4e, 0x47]);
+  await assert.rejects(tools.writeBinary(root, 'generated/a.png', b64), /EEXIST/);
+  await assert.rejects(tools.writeBinary(root, '../fuera.png', b64), /fuera/);
 });

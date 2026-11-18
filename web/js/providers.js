@@ -24,7 +24,7 @@ const DEFAULT_ADAPTER = {
   request: (payload) => payload,
   /** Lee GET /models y registra lo que el proveedor informe de cada modelo. Devuelve los ids. */
   models: (json, ep) => {
-    const list = json.data || json.models || [];
+    const list = Array.isArray(json) ? json : json.data || json.models || []; // Together devuelve la lista sin envolver
     if (!Array.isArray(list)) throw new TypeError('la respuesta de /models no trae una lista de modelos');
     return list.map((m) => {
       if (typeof m === 'string') return m;
@@ -32,6 +32,9 @@ const DEFAULT_ADAPTER = {
       // muchos proveedores (SambaNova, Chutes, Together, vLLM, LM Studio…) informan la ventana real del modelo
       const ctx = contextFrom(m);
       if (id && ctx) reportCaps(ep, id, { context: ctx });
+      // Together y otros dicen el tipo de cada modelo: imagen y vídeo no van al selector de chat
+      if (id && m.type === 'image') reportCaps(ep, id, { chat: false, image: true });
+      if (id && m.type === 'video') reportCaps(ep, id, { chat: false, video: true });
       return id;
     }).filter(Boolean);
   },
@@ -52,6 +55,7 @@ const OPENROUTER_ADAPTER = {
       reasoning: m.supported_parameters ? (params.has('reasoning') || params.has('include_reasoning')) : null,
       structured: m.supported_parameters ? (params.has('structured_outputs') || params.has('response_format')) : null,
       chat: Array.isArray(m.architecture?.output_modalities) ? m.architecture.output_modalities.includes('text') : null,
+      image: Array.isArray(m.architecture?.output_modalities) ? m.architecture.output_modalities.includes('image') : null,
       price: Number.isFinite(prompt) && Number.isFinite(completion) ? { prompt, completion } : null,
     });
     return m.id;

@@ -25,6 +25,7 @@ contextBridge.exposeInMainWorld('jeancodeDesktop', {
     list: call('fs:list'),
     read: call('fs:read'),
     write: call('fs:write'),
+    writeBinary: call('fs:writeBinary'),
     edit: call('fs:edit'),
     search: call('fs:search'),
     undo: call('fs:undo'),

@@ -191,21 +191,30 @@ function corsHint(ep) {
   return `${providerOf(ep).name} no acepta llamadas desde una página web (CORS). Soluciones: añade tu Jean-API-Generator (URL del puerto 8899) en Ajustes y JeanCode usará su relay, o usa la app de escritorio o la de móvil.`;
 }
 
+/** Google pide la clave en su propia cabecera: `auth` sustituye a la de Bearer. */
+const withAuth = (headers, auth) => {
+  if (!auth) return headers;
+  const { Authorization: _bearer, ...rest } = headers;
+  return { ...rest, ...auth };
+};
+
 async function request(ep, path, init = {}) {
   const b = bridge();
   const timeout = init.timeout ?? ep.timeout ?? 60000;
   if (b?.http) {
-    const r = await b.http({ url: ep.url + path, method: init.method || 'GET', headers: headersFor(ep), body: init.body, timeout });
+    const r = await b.http({ url: ep.url + path, method: init.method || 'GET', headers: withAuth(headersFor(ep), init.auth), body: init.body, timeout });
     if (r.error) throw new ApiError(networkHint(ep) + ` (${r.error})`, 0, '', /a tiempo/.test(r.error) ? 'timeout' : 'network');
     if (r.status >= 400) throw new ApiError(explain(r.status, r.body, ep), r.status, serverMessage(r.body));
     try { return JSON.parse(r.body); } catch { throw notApi(ep, r.body); }
   }
   const rt = routeOf(ep, path);
+  rt.headers = withAuth(rt.headers, init.auth);
   if (rt.via === 'native') return nativeRequest(ep, rt.url, { method: init.method, headers: rt.headers, body: init.body, timeout });
   let res;
   try {
     const signal = init.signal || AbortSignal.timeout(timeout);
-    res = await fetch(rt.url, { ...init, headers: rt.headers, signal });
+    const { auth: _auth, timeout: _timeout, retried: _retried, ...opts } = init;
+    res = await fetch(rt.url, { ...opts, headers: rt.headers, signal });
   } catch (e) {
     if (e.name === 'AbortError' && init.signal?.aborted) throw e;
     if (e.name === 'TimeoutError') throw new ApiError(`${providerOf(ep).name} no respondió a tiempo.`, 0, '', 'timeout');
@@ -219,10 +228,57 @@ async function request(ep, path, init = {}) {
   try { return JSON.parse(text); } catch { throw notApi(ep, text); }
 }
 
+/** Llamada JSON a la API de imagen o vídeo de un proveedor. base = otra raíz del mismo proveedor (…/v2). */
+export function mediaCall(ep, path, { method = 'GET', body, base, auth, timeout = 300000, signal } = {}) {
+  const job = request(base ? { ...ep, url: base } : ep, path, { method, body: body === undefined ? undefined : JSON.stringify(body), auth, timeout, signal });
+  if (!signal) return job;
+  // el puente del escritorio y la red nativa no se cancelan a medias: Parar responde igualmente al momento
+  return Promise.race([job, new Promise((_, reject) => {
+    const stop = () => reject(new DOMException('aborted', 'AbortError'));
+    if (signal.aborted) stop(); else signal.addEventListener('abort', stop, { once: true });
+  })]);
+}
+
+/**
+ * Descarga un resultado → Blob. La clave solo viaja si el archivo está en el MISMO origen que la API: las URL las
+ * escribe el proveedor y una ajena no debe recibirla nunca. auth: true (Bearer) u { cabecera: true } (clave en esa cabecera).
+ */
+export async function fetchMediaBlob(ep, url, { auth = false, mime = '', signal } = {}) {
+  let u;
+  try { u = new URL(url); } catch { throw new ApiError('El proveedor devolvió una URL de descarga no válida.', -1, '', 'format'); }
+  if (!['https:', 'http:'].includes(u.protocol)) throw new ApiError('El proveedor devolvió una URL de descarga no válida.', -1, '', 'format');
+  // un proveedor remoto no puede hacer que la app lea tu red local
+  if (LOCALISH.test(u.href) && !LOCALISH.test(ep.url)) throw new ApiError('El proveedor devolvió una dirección de tu red local: no se descarga.', -1, '', 'forbidden');
+  const same = u.origin === new URL(ep.url).origin;
+  const headers = !auth || !same ? {} : auth === true ? { Authorization: `Bearer ${ep.key}` } : Object.fromEntries(Object.keys(auth).map((k) => [k, ep.key]));
+  const fromB64 = (b64, type) => {
+    const bin = atob(b64);
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    return new Blob([bytes], { type: type || mime });
+  };
+  const b = bridge();
+  if (b?.http) {
+    const r = await b.http({ url, method: 'GET', headers, timeout: 600000, binary: true });
+    if (r.error) throw new ApiError(`No se pudo descargar el resultado (${r.error}).`, 0);
+    if (r.status >= 400) throw new ApiError(`No se pudo descargar el resultado (${r.status}).`, r.status);
+    return fromB64(r.b64, r.type);
+  }
+  const native = nativeHttp();
+  if (native) {
+    const r = await native.request({ url, method: 'GET', headers, responseType: 'blob', connectTimeout: 30000, readTimeout: 600000 });
+    if (r.status >= 400) throw new ApiError(`No se pudo descargar el resultado (${r.status}).`, r.status);
+    return fromB64(String(r.data).replace(/\s/g, ''), r.headers?.['Content-Type'] || r.headers?.['content-type']);
+  }
+  const res = await fetch(url, { headers, signal });
+  if (!res.ok) throw new ApiError(`No se pudo descargar el resultado (${res.status}).`, res.status);
+  return res.blob();
+}
+
 /** Modelos de un endpoint y, si es el router de Jean-API-Generator, qué puertos no están disponibles y por qué. */
 export async function listModelsDetailed(ep) {
   const data = await request(ep, '/models', { timeout: ep.timeout ?? MODELS_TIMEOUT });
-  if (!data || typeof data !== 'object' || !(Array.isArray(data.data) || Array.isArray(data.models))) {
+  if (!data || typeof data !== 'object' || !(Array.isArray(data) || Array.isArray(data.data) || Array.isArray(data.models))) {
     throw new ApiError(`${providerOf(ep).name} respondió, pero /models no trae una lista de modelos: no parece una API OpenAI-compatible.`, -1, '', 'format');
   }
   const ids = adapterOf(ep).models(data, ep);

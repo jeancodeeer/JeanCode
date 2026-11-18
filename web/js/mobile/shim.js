@@ -111,6 +111,13 @@ export function createPhoneDesktop(dev) {
     await must(`mkdir -p ${sq(abs.replace(/\/[^/]*$/, '') || '/')}`, 'no se pudo crear la carpeta');
     await dev.writeFile(abs, textToB64(text));
   };
+  const writeBinary = async (root, rel, b64) => {
+    const abs = insidePath(root, rel);
+    if ((await sh(`[ -e ${sq(abs)} ]`)).code === 0) throw new Error(`ya existe ${rel}`);
+    await must(`mkdir -p ${sq(abs.replace(/\/[^/]*$/, '') || '/')}`, 'no se pudo crear la carpeta');
+    await dev.writeFile(abs, b64);
+    return rel;
+  };
   const isDir = async (abs) => (await sh(`[ -d ${sq(abs)} ]`)).code === 0;
   const exists = async (abs) => (await sh(`[ -e ${sq(abs)} ]`)).code === 0;
 
@@ -238,6 +245,7 @@ export function createPhoneDesktop(dev) {
     },
   };
 
+  fs.writeBinary = writeBinary;
   return {
     fs, shell, proc,
     web: { fetch: (url) => webfetch(url, dev.fetch, dev.resolve) },

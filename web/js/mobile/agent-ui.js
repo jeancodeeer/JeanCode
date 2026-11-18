@@ -146,7 +146,7 @@ export function initPhoneAgent(deps) {
     const rows = new Map();
     const ctx = {
       ep: m.ep, model: m.id, desktop: d, workspace: ws, mode: perm, agent: 'build', sys, think: false, signal: st.abort.signal,
-      chat: (o) => deps.chat({ id: o.model, ep: o.ep }, o), computer, mcp: [], autoDiagnostics: false,
+      chat: (o) => deps.chat({ id: o.model, ep: o.ep }, o), computer, mcp: [], autoDiagnostics: false, media: deps.media,
       confirm: (o) => ask({ ...o, where: ws }),
       isAllowed: (cmd) => allow.includes(cmd.trim()),
       allowCommand: (cmd) => { if (!allow.includes(cmd)) { allow.push(cmd); store.set(`allow:device:${ws}`, allow); } },

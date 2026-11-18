@@ -101,6 +101,14 @@ ipcMain.handle('http', async (_e, req) => {
     // noRedirect: comprobar un enlace sin seguir redirecciones (podrían llevar a la red local)
     const res = await fetch(req.url, { method, headers: req.headers, body: req.body, signal: AbortSignal.timeout(timeout), redirect: req.noRedirect ? 'manual' : 'follow' });
     if (req.noBody) { res.body?.cancel().catch(() => {}); return { status: res.status }; }
+    // imagen o vídeo generado: viaja en base64 por el puente, con un tope para no agotar la memoria
+    if (req.binary) {
+      const MAX = 300 * 1024 * 1024;
+      if (Number(res.headers.get('content-length')) > MAX) { res.body?.cancel().catch(() => {}); return { error: 'el archivo pasa de 300 MB' }; }
+      const data = Buffer.from(await res.arrayBuffer());
+      if (data.length > MAX) return { error: 'el archivo pasa de 300 MB' };
+      return { status: res.status, type: res.headers.get('content-type') || '', b64: res.ok ? data.toString('base64') : '' };
+    }
     return { status: res.status, body: await res.text() };
   } catch (e) {
     return { error: e.name === 'TimeoutError' ? 'sin respuesta a tiempo' : e.message };
@@ -158,6 +166,7 @@ ipcMain.handle('fs:pickFolder', async () => {
 ipcMain.handle('fs:list', (_e, root, rel) => tools.list(root, rel));
 ipcMain.handle('fs:read', (_e, root, rel, off, lim) => tools.read(root, rel, off, lim));
 ipcMain.handle('fs:write', (_e, root, rel, content) => tools.write(root, rel, content));
+ipcMain.handle('fs:writeBinary', (_e, root, rel, b64) => tools.writeBinary(root, rel, b64));
 ipcMain.handle('fs:edit', (_e, root, rel, a, b) => tools.edit(root, rel, a, b));
 ipcMain.handle('fs:search', (_e, root, pat, rel) => tools.search(root, pat, rel));
 ipcMain.handle('shell:run', (_e, root, cmd, timeout) => tools.run(root, cmd, timeout));

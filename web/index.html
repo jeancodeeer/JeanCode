@@ -26,6 +26,13 @@
       <feTurbulence type="fractalNoise" baseFrequency="0.02 0.6" numOctaves="1" seed="3" result="w"/>
       <feDisplacementMap in="eaten" in2="w" scale="5" xChannelSelector="R" yChannelSelector="G"/>
     </filter>
+    <symbol id="i-brush" viewBox="0 0 24 24"><path d="M14 4l6 6-9 9H5v-6z"/><path d="M12 6l6 6"/></symbol>
+    <symbol id="i-film" viewBox="0 0 24 24"><path d="M3 5h18v14H3z"/><path d="M7 5v14M17 5v14M3 12h4M17 12h4"/></symbol>
+    <symbol id="i-image" viewBox="0 0 24 24"><path d="M3 5h18v14H3z"/><path d="M3 16l5-5 4 4 3-3 6 6"/></symbol>
+    <symbol id="i-spark" viewBox="0 0 24 24"><path d="M12 3v6M12 15v6M3 12h6M15 12h6"/></symbol>
+    <symbol id="i-rotate" viewBox="0 0 24 24"><path d="M20 12a8 8 0 1 1-2.4-5.7L20 9"/><path d="M20 3v6h-6"/></symbol>
+    <symbol id="i-flip" viewBox="0 0 24 24"><path d="M12 3v18"/><path d="M8 7L3 17h5zM16 7l5 10h-5z"/></symbol>
+    <symbol id="i-trash" viewBox="0 0 24 24"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13"/></symbol>
     <symbol id="i-menu" viewBox="0 0 24 24"><path d="M3 6h18M3 12h18M3 18h18"/></symbol>
     <symbol id="i-close" viewBox="0 0 24 24"><path d="M5 5l14 14M19 5L5 19"/></symbol>
     <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 4v16M4 12h16"/></symbol>
@@ -133,12 +140,14 @@
       <button class="mode desktop-only" data-mode="agent" role="tab" aria-selected="false" hidden>Agent</button>
       <button class="mode remote-only" data-mode="remote" role="tab" aria-selected="false">PC</button>
       <button class="mode native-only" data-mode="device" role="tab" aria-selected="false" hidden>Móvil</button>
+      <button class="mode" data-mode="image" role="tab" aria-selected="false">Imagen</button>
     </nav>
 
     <button class="btn new" id="new-thread"><svg class="i"><use href="#i-plus"/></svg>Nueva conversación</button>
 
     <input class="thread-search" id="thread-search" type="search" placeholder="Buscar en el historial" aria-label="Buscar en el historial" spellcheck="false">
     <div class="threads" id="threads" aria-label="Historial"></div>
+    <div class="st-gallery" id="media-gallery" aria-label="Galería" hidden></div>
 
     <div class="rail-foot">
       <details class="menu up" id="more-menu">
@@ -357,6 +366,9 @@
         </form>
       </div>
     </section>
+
+    <!-- IMAGEN: estudio de imagen y vídeo (media/studio.js) -->
+    <section class="view studio" id="view-image" hidden></section>
 
     <!-- COMPOSER -->
     <form class="composer" id="composer">

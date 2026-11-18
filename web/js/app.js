@@ -25,6 +25,9 @@ import { createRemoteHost } from './remote/host.js';
 import { initRemotePhone } from './remote/phone.js';
 import { initPhoneAgent } from './mobile/agent-ui.js';
 import { initAutomations, parseInterval, validateTask, taskSummary, runSummary, describeTaskSchedule, fmtWhen } from './automations.js';
+import { createMediaService, library as mediaLibrary, blobToDataUrl, extOf, slugOf } from './media/service.js';
+import { detectMediaIntent } from './media/engine.js';
+import { initStudio } from './media/studio.js';
 import { SKILL_CATALOG, SKILL_CATEGORIES } from './skills-catalog.js';
 import { PLUGIN_CATALOG, pluginUrl } from './plugins-catalog.js';
 
@@ -42,6 +45,40 @@ if (isNativeApp()) $$('.native-only').forEach((el) => { el.hidden = false; });
 let phoneAgent = null;
 let remoteHost = null;   // escritorio: control desde móviles emparejados
 let remotePhone = null;  // web y móvil: controlar un PC
+
+// Imagen y vídeo: un solo servicio para el estudio, el chat y el agente
+const mediaService = createMediaService({ models: () => state.models });
+let studio = null;
+/** Lo que el agente puede pedir: modelo disponible y generar guardando el archivo en su carpeta de trabajo. */
+const agentMedia = {
+  model(kind) {
+    const m = mediaService.pick(kind);
+    return m ? { id: m.id, billing: { local: 'en tu equipo', own: 'tu servidor', free: 'gratis', paid: 'de pago' }[mediaService.billing(m)] || 'coste según tu proveedor' } : null;
+  },
+  async generate(kind, args, { signal, workspace, desktop: d }) {
+    const m = mediaService.pick(kind);
+    const c = mediaService.controls(m);
+    const req = { kind, modelKey: m.key, prompt: String(args.prompt || ''), count: 1, ratio: c.ratios.includes(args.ratio) ? args.ratio : c.ratios[0] };
+    if (c.durations.length) req.duration = c.durations.includes(Number(args.duration)) ? Number(args.duration) : c.durations[0];
+    if (c.resolutions.length) req.resolution = c.resolutions[Math.min(1, c.resolutions.length - 1)];
+    if (args.from) {
+      const prev = await mediaLibrary.get(String(args.from));
+      if (!prev?.blob) throw new Error(`no existe el resultado ${args.from}`);
+      const url = await blobToDataUrl(prev.blob);
+      if (kind === 'video' && c.start) req.start = url; else if (kind === 'image' && c.refs) req.refs = [url]; else throw new Error(`${m.id} no acepta imágenes de entrada`);
+    }
+    const items = await mediaService.generate(req, { source: 'agent', signal, parent: args.from || null });
+    const item = items[0];
+    let path = '';
+    let saveNote = '';
+    if (d?.fs?.writeBinary && workspace && item.blob) {
+      const wanted = String(args.path || `generated/${slugOf(item.prompt)}-${item.id.slice(0, 6)}.${extOf(item.mime)}`);
+      // ya está pagado: si la ruta no vale, el resultado sigue en la galería y el agente se entera
+      try { await d.fs.writeBinary(workspace, wanted, (await blobToDataUrl(item.blob)).split(',')[1]); path = wanted; } catch (e) { saveNote = ` No se pudo guardar en ${wanted} (${e.message}): está en la galería de Imagen.`; }
+    }
+    return { ids: items.map((i) => i.id), path, text: `${kind === 'video' ? 'Vídeo generado' : 'Imagen generada'} con ${m.id}. id: ${item.id}${path ? ` · guardado en ${path}` : ''}. El usuario ya lo ve en la conversación.${saveNote}` };
+  },
+};
 
 const DEFAULT_SYS = 'Eres Jean, un asistente de programación. Responde en el idioma del usuario, con precisión y código claro.';
 
@@ -116,6 +153,11 @@ async function enterApp() {
   await refreshModels();
   renderThreads();
   openThread(state.threads.find((t) => t.mode === state.mode)?.id || null);
+  // imagen y vídeo: catálogos aparte y los vídeos que quedaron en marcha al cerrar la app
+  mediaService.refresh().finally(() => mediaService.resume({
+    onDone: () => toast('TU VÍDEO ESTÁ LISTO EN LA PESTAÑA IMAGEN'),
+    onFail: (e) => toast(`EL VÍDEO FALLÓ: ${e.message}`.toUpperCase()),
+  }));
 }
 
 /*
@@ -599,6 +641,7 @@ $('#new-thread').addEventListener('click', () => { state.current = null; openThr
 document.addEventListener('click', (e) => { if (e.target.closest('[data-news]')) openNews(); });
 
 function setMode(mode) {
+  if (state.mode === 'image' && mode !== 'image') showRailFor(mode);
   if ((mode === 'agent' && !desktop) || (mode === 'code' && !CODE_MODE) || (mode === 'remote' && desktop) || (mode === 'device' && !phoneAgent)) return;
   state.mode = mode;
   applyRoute();
@@ -612,10 +655,13 @@ function setMode(mode) {
   $('#view-agent').hidden = mode !== 'agent';
   $('#view-remote').hidden = mode !== 'remote';
   $('#view-device').hidden = mode !== 'device';
-  $('#composer').hidden = mode === 'remote' || mode === 'device'; // estas vistas tienen su propia caja de mensaje
+  $('#view-image').hidden = mode !== 'image';
+  $('#composer').hidden = mode === 'remote' || mode === 'device' || mode === 'image'; // estas vistas tienen su propia caja de mensaje
   // el modelo lo elige el PC, no este dispositivo: fuera el selector, la ruta y el título de conversación local
-  for (const el of [$('#route-menu'), $('.topbar .model'), $('#crumb-title')?.previousElementSibling, $('#crumb-title')]) if (el) el.hidden = mode === 'remote';
-  $('#crumb-mode').textContent = mode === 'agent' ? `AGENT · ${state.agent.toUpperCase()}` : mode === 'remote' ? 'CONTROLAR MI PC' : mode === 'device' ? 'AGENTE DEL MÓVIL' : mode.toUpperCase();
+  for (const el of [$('#route-menu'), $('.topbar .model')]) if (el) el.hidden = mode === 'remote' || mode === 'image';
+  for (const el of [$('#crumb-title')?.previousElementSibling, $('#crumb-title')]) if (el) el.hidden = mode === 'remote';
+  $('#crumb-mode').textContent = mode === 'agent' ? `AGENT · ${state.agent.toUpperCase()}` : mode === 'remote' ? 'CONTROLAR MI PC' : mode === 'device' ? 'AGENTE DEL MÓVIL' : mode === 'image' ? 'IMAGEN' : mode.toUpperCase();
+  if (mode === 'image') { $('#crumb-title').textContent = 'ESTUDIO DE IMAGEN Y VÍDEO'; showRailFor(mode); studio.show(); return; }
   if (mode === 'remote') { renderThreads(); remotePhone?.autoconnect(); return; }
   if (mode === 'device') { renderThreads(); phoneAgent.check(); return; }
   updateHint();
@@ -624,6 +670,13 @@ function setMode(mode) {
   if (mode === 'agent') loadProject();
 }
 $$('.mode').forEach((b) => b.addEventListener('click', () => setMode(b.dataset.mode)));
+
+/** En IMAGEN el rail enseña la galería en lugar de las conversaciones. */
+function showRailFor(mode) {
+  const on = mode === 'image';
+  for (const el of [$('#new-thread'), $('#thread-search'), $('#threads')]) el.hidden = on;
+  $('#media-gallery').hidden = !on;
+}
 
 function streamEl() {
   return { chat: $('#chat-stream'), code: $('#code-stream'), agent: $('#agent-stream') }[state.mode];
@@ -651,6 +704,7 @@ function openThread(id, { keepTop = false } = {}) {
     for (let i = start; i < t.messages.length; i++) {
       const m = t.messages[i];
       const row = addMessage(m.role, m.content, { reasoning: m.reasoning, turn: m.turn, model: m.model });
+      if (m.media?.length) showMedia(row, m.media);
       if (m.usage) setUsage(row, m.usage);
       if (m.role === 'assistant') decorateAssistant(row, t, i);
     }
@@ -800,7 +854,7 @@ function decorateAssistant(row, t, index) {
   const bar = document.createElement('div');
   bar.className = 'msg-actions';
   const n = msg.alts?.length || 0;
-  const canRegen = state.mode !== 'agent' && index === t.messages.length - 1;
+  const canRegen = state.mode !== 'agent' && index === t.messages.length - 1 && !msg.media?.length;
   bar.innerHTML = `<button type="button" data-msg="copy-md">Copiar</button><button type="button" data-msg="copy-text">Copiar texto</button>`
     + (canRegen ? `<details class="menu regen"><summary>Regenerar</summary><div class="menu-list" role="menu">
         <button type="button" role="menuitem" data-msg="regen" data-how="">Otra vez</button>
@@ -1176,7 +1230,107 @@ $('#composer').addEventListener('submit', async (e) => {
   await send(text);
 });
 
+/* ---------------------------------------------------------------- imagen y vídeo en el chat y el agente */
+const mediaUrls = new Map();
+/** Pinta los resultados guardados bajo un mensaje, con sus acciones. */
+async function showMedia(row, ids) {
+  let box = $('.msg-media', row);
+  if (!box) { box = document.createElement('div'); box.className = 'msg-media'; $('.bubble', row).after(box); }
+  if (!row._pending?.content) $('.bubble', row).hidden = true; // del agente: solo el archivo, sin texto
+  for (const id of ids) {
+    if ($(`[data-media="${CSS.escape(id)}"]`, box)) continue;
+    const item = await mediaLibrary.get(id);
+    const fig = document.createElement('figure');
+    fig.dataset.media = id;
+    if (!item) { fig.innerHTML = '<figcaption class="fine">Este archivo ya no está en este dispositivo.</figcaption>'; box.appendChild(fig); continue; }
+    if (item.blob && !mediaUrls.has(id)) mediaUrls.set(id, URL.createObjectURL(item.blob));
+    const src = esc(mediaUrls.get(id) || item.remoteUrl || '');
+    fig.innerHTML = `${item.kind === 'video' ? `<video src="${src}" controls playsinline preload="metadata"></video>` : `<img src="${src}" alt="${esc(item.prompt)}" loading="lazy">`}
+      <figcaption class="media-actions"><button type="button" data-media-act="open">Editar en Imagen</button>${item.kind === 'image' && item.blob ? '<button type="button" data-media-act="animate">Animar</button>' : ''}${item.blob ? '<button type="button" data-media-act="download">Descargar</button>' : ''}</figcaption>`;
+    box.appendChild(fig);
+  }
+  const el = row.parentElement;
+  if (el) el.scrollTop = el.scrollHeight;
+}
+document.addEventListener('click', async (e) => {
+  const b = e.target.closest('[data-media-act]');
+  if (!b) return;
+  const id = b.closest('[data-media]').dataset.media;
+  const act = b.dataset.mediaAct;
+  if (act === 'download') { const i = await mediaLibrary.get(id); if (i?.blob) downloadBlob(i.blob, `${slugOf(i.prompt)}.${extOf(i.mime)}`); return; }
+  setMode('image');
+  if (act === 'open') await studio.open(id); else await studio.animate(id);
+});
+
+/** El último resultado de la conversación (para «hazla más azul» o «anímala»). */
+async function lastMediaOf(t) {
+  const m = [...(t?.messages || [])].reverse().find((x) => x.role === 'assistant');
+  return m?.media?.length ? mediaLibrary.get(m.media[m.media.length - 1]) : null;
+}
+/** Genera dentro de la conversación: el chat no necesita un modelo de chat para esto. */
+async function sendMedia(intent, text) {
+  const t = thread() || newThread();
+  const noun = intent.kind === 'video' ? 'vídeo' : 'imagen';
+  if (!t.messages.length) { t.title = text.replace(/\s+/g, ' ').slice(0, 60).toUpperCase(); $('#crumb-title').textContent = t.title; }
+  input.value = ''; autosize();
+  t.messages.push({ role: 'user', content: text });
+  addMessage('user', text);
+  const m = mediaService.pick(intent.kind);
+  if (!m) {
+    const note = `No tienes ningún modelo de ${noun} conectado. Añade un proveedor que lo ofrezca en Ajustes y aparecerá en la pestaña Imagen.`;
+    t.messages.push({ role: 'assistant', content: note, at: Date.now() });
+    addMessage('assistant', note);
+    t.updated = Date.now(); saveThreads(); renderThreads();
+    return;
+  }
+  const row = addMessage('assistant', '', { streaming: true, model: m.id });
+  const started = Date.now();
+  const tick = setInterval(() => { $('.bubble', row).innerHTML = `<p class="muted mono waiting">generando ${noun}… ${Math.round((Date.now() - started) / 1000)} s</p>`; }, 1000);
+  state.abort = new AbortController();
+  busy(true);
+  try {
+    const req = { kind: intent.kind, prompt: intent.prompt, ratio: intent.kind === 'video' ? '16:9' : '1:1', count: 1, modelKey: m.key };
+    const controls = mediaService.controls(m);
+    if (!controls.ratios.includes(req.ratio)) req.ratio = controls.ratios[0];
+    if (controls.durations.length) req.duration = controls.durations[0];
+    if (controls.resolutions.length) req.resolution = controls.resolutions[Math.min(1, controls.resolutions.length - 1)];
+    let parent = null;
+    if (intent.from) {
+      const last = await lastMediaOf(t);
+      if (last?.blob) {
+        parent = last.id;
+        const url = await blobToDataUrl(last.blob);
+        if (intent.from === 'animate' && controls.start) req.start = url;
+        else if (intent.from === 'edit' && controls.refs) req.refs = [url];
+        else req.prompt = `${last.prompt}. ${intent.prompt}`; // el modelo no acepta imágenes: se rehace con el cambio
+      }
+    }
+    const items = await mediaService.generate(req, { source: 'chat', parent, signal: state.abort.signal });
+    clearInterval(tick);
+    const content = `${intent.kind === 'video' ? 'Vídeo generado' : 'Imagen generada'} con \`${m.id}\`.\n\nPrompt: ${req.prompt}`;
+    const ids = items.map((i) => i.id);
+    t.messages.push({ role: 'assistant', content, media: ids, model: m.id, at: Date.now() });
+    updateMessage(row, content, '', false);
+    await showMedia(row, ids);
+    decorateAssistant(row, t, t.messages.length - 1);
+  } catch (err) {
+    clearInterval(tick);
+    row.remove();
+    if (err.name === 'AbortError') addMessage('system', 'Detenido.'); else showError(err);
+  } finally {
+    clearInterval(tick);
+    state.abort = null;
+    busy(false);
+    t.updated = Date.now(); saveThreads(); renderThreads();
+  }
+}
+
 async function send(text) {
+  // «genera una imagen de…» en el chat: va directo al modelo de imagen, sin pasar por el de texto
+  if (state.mode === 'chat') {
+    const intent = detectMediaIntent(text, { last: await lastMediaOf(thread()) });
+    if (intent) return sendMedia(intent, text);
+  }
   const decision = currentDecision();
   const m = decision.model;
   if (!m) { toast(decision.reasons[0] ? decision.reasons[0].toUpperCase() : 'SIN API CONECTADA — REVISA AJUSTES'); return; }
@@ -1371,6 +1525,12 @@ async function runCommand({ name, args }) {
         saveThreads(); openThread(t.id);
       }
       return null;
+    case 'imagen': case 'image': case 'video': {
+      const kind = name === 'video' ? 'video' : 'image';
+      if (!args) { setMode('image'); return null; }
+      await sendMedia({ kind, prompt: args }, `/${name} ${args}`);
+      return null;
+    }
     case 'hooks': await showHooks(); return null;
     case 'help': openPanel('help'); return null;
     case 'model':
@@ -2352,8 +2512,13 @@ async function sendAgent(t, m, text, turn) {
     chat: (o) => routedChat({ id: o.model, ep: o.ep }, o, routeCtx((to) => { ctx.ep = to.ep; ctx.model = to.id; })).then((r) => r.text),
     signal: state.abort.signal, confirm: confirmWithAttention, isAllowed, allowCommand, hooks: engine, computer,
     notify: (type, message) => hookNotify(t.id, type, message), scheduler: schedulerFor(t, state.workspace, state.agent === 'plan' ? 'plan' : state.perm),
-    autoDiagnostics: store.get('autoDiag', true), mcp: mcpTools,
+    autoDiagnostics: store.get('autoDiag', true), mcp: mcpTools, media: agentMedia,
     onEvent: (ev) => {
+      if (ev.type === 'media') {
+        const r = addMessage('assistant', '', { cls: ev.nested ? 'nested' : '' });
+        t.messages.push({ role: 'assistant', content: '', media: ev.ids, model: ctx.model, at: Date.now() });
+        showMedia(r, ev.ids);
+      }
       if (ev.type === 'usage') { addUsage(t, ev.usage, { ep: ctx.ep, id: ctx.model }); if (row) setUsage(row, ev.usage); }
       if (ev.type === 'assistant-start') row = addMessage('assistant', '', { streaming: true, cls: ev.nested ? 'nested' : '' });
       if (ev.type === 'assistant-delta' && row) updateMessage(row, ev.text, ev.reasoning, true);
@@ -3112,7 +3277,7 @@ $('#export-btn').addEventListener('click', () => {
 $('#wipe-btn').addEventListener('click', () => {
   if (!window.confirm('Esto borra la URL, la clave y todo el historial de este equipo. ¿Seguir?')) return;
   store.wipe();
-  wipeThreads().finally(() => location.reload());
+  Promise.allSettled([wipeThreads(), mediaLibrary.wipe()]).finally(() => location.reload());
 });
 
 async function renderSkills() {
@@ -3303,11 +3468,20 @@ if ('serviceWorker' in navigator && location.protocol.startsWith('http') && !des
   window.addEventListener('pagehide', () => { saveThreadsNow(state.threads.slice(0, 200)); });
   if (isNativeApp()) {
     phoneAgent = initPhoneAgent({
-      $, esc, store, toast, renderMarkdown, confirmDialog, agentSystem, runAgent, stripToolBlocks, capsOf,
+      $, esc, store, toast, renderMarkdown, confirmDialog, agentSystem, runAgent, stripToolBlocks, capsOf, media: agentMedia,
       model: () => currentModel(),
       chat: (m, o) => routedChat(m, o, { models: state.routable || state.models, mode: 'agent', endpoints: getEndpoints(), need: { tools: true } }).then((r) => r.text),
     });
   }
+  studio = initStudio({
+    $, esc, store, toast, confirmDialog, downloadBlob, service: mediaService,
+    endpoints: getEndpoints, providerName: (ep) => providerOf(ep).name, openSettings: () => openPanel('settings'),
+    chatText: async (system, user, signal) => {
+      const m = decide(routeFor('chat'), { models: state.visible || [], mode: 'chat', endpoints: getEndpoints(), need: {} }).model;
+      if (!m) throw new Error('conecta un modelo de chat para mejorar prompts');
+      return (await routedChat(m, { signal, think: false, temperature: 0.7, messages: [{ role: 'system', content: system }, { role: 'user', content: user }] }, routeCtx(() => {}))).text.replace(/<think>[\s\S]*?<\/think>/g, '').trim();
+    },
+  });
   if (!desktop) remotePhone = initRemotePhone({ $, esc, store, toast, renderMarkdown, platform: isNativeApp() ? 'app' : 'web' });
   if (desktop?.remote) initRemoteHostUi().catch((e) => console.warn('control remoto', e));
   // controlar un PC no necesita API propia: un enlace de emparejamiento o un PC ya emparejado entran directos
