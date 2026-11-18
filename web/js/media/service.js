@@ -2,7 +2,7 @@
 // Elige el modelo, lanza el trabajo, sigue los vídeos (también tras cerrar la app) y guarda cada resultado en este
 // dispositivo (IndexedDB). Nada de esto pasa por servidores de JeanCode: solo hacia el proveedor que elegiste.
 import { store } from '../store.js';
-import { mediaCall, fetchMediaBlob, getEndpoints } from '../api.js';
+import { mediaCall, mediaBytes, fetchMediaBlob, getEndpoints } from '../api.js';
 import { providerOf } from '../providers.js';
 import { billingOf } from '../capabilities.js';
 import { mediaKindOf, knownModels, discoverModels, generateImage, submitVideo, pollVideo, controlsFor, MediaError } from './engine.js';
@@ -90,7 +90,7 @@ export function createMediaService({ models }) {
   const live = new Map();       // trabajos en curso: id → { id, kind, prompt, model, startedAt, status, ctl }
   const discovered = new Map(); // ep.id → [{ id, kind }]
   const emit = (what) => listeners.forEach((fn) => fn(what));
-  const netFor = (ep, signal) => ({ ep, call: (path, opts = {}) => mediaCall(ep, path, { ...opts, signal }) });
+  const netFor = (ep, signal) => ({ ep, call: (path, opts = {}) => mediaCall(ep, path, { ...opts, signal }), bytes: (path, opts = {}) => mediaBytes(ep, path, { ...opts, signal }) });
 
   const customList = () => store.get('media:custom', []);
 
@@ -134,7 +134,8 @@ export function createMediaService({ models }) {
   async function persist(raw, meta, ep, signal) {
     let blob = null;
     let remoteUrl = '';
-    if (raw.b64) blob = b64ToBlob(raw.b64, raw.mime || 'image/png');
+    if (raw.blob) blob = raw.blob;
+    else if (raw.b64) blob = b64ToBlob(raw.b64, raw.mime || 'image/png');
     else {
       try { blob = await fetchMediaBlob(ep, raw.url, { auth: raw.auth, mime: raw.mime, signal }); } catch (e) {
         if (e.name === 'AbortError' || raw.auth || e.kind === 'forbidden' || !/^https?:\/\//i.test(raw.url)) throw e;
@@ -226,8 +227,15 @@ export function createMediaService({ models }) {
     }
   }
 
+  /** Guarda un vídeo exportado desde HTML junto con su composición, para poder seguir editándola. */
+  async function saveHtmlVideo(blob, { prompt, html, ratio, duration, source = 'html' }) {
+    const item = await library.put({ id: crypto.randomUUID(), createdAt: Date.now(), kind: 'video', blob, mime: blob.type || 'video/mp4', remoteUrl: '', prompt, negative: '', model: 'Composición HTML', html, params: { ratio, duration }, parent: null, batch: null, source });
+    emit('library');
+    return item;
+  }
+
   return {
-    catalog, refresh, addCustom, pick, choose, generate, resume,
+    catalog, refresh, addCustom, pick, choose, generate, resume, saveHtmlVideo,
     controls: (m) => controlsFor(m.ep, m.id, m.kind),
     billing: (m) => billingOf(m.ep, m.id),
     jobs: () => [...live.values()],

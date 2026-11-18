@@ -12,7 +12,7 @@
 const HOSTS = new Set(`
 api.openai.com api.anthropic.com generativelanguage.googleapis.com openrouter.ai api.groq.com
 router.huggingface.co api.deepseek.com api.mistral.ai api.x.ai api.together.xyz api.fireworks.ai
-api.cerebras.ai integrate.api.nvidia.com api.sambanova.ai api.deepinfra.com api.hyperbolic.xyz
+api.cerebras.ai integrate.api.nvidia.com ai.api.nvidia.com api.sambanova.ai api.deepinfra.com api.hyperbolic.xyz
 api.novita.ai api.tokenfactory.nebius.com api.studio.nebius.com llm.chutes.ai api.siliconflow.com
 api.inference.net api.moonshot.ai api.z.ai dashscope-intl.aliyuncs.com api.minimax.io api.cohere.ai
 api.scaleway.ai openai.inference.de-txl.ionos.com

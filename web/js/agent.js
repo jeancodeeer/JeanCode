@@ -37,6 +37,9 @@ Escritura (piden permiso según el modo):
 Imagen y vídeo (piden permiso; el archivo se guarda en la carpeta de trabajo):
 - generate_image {"prompt": "descripción visual detallada", "path": "assets/hero.png", "ratio": "16:9", "from": "id de un resultado anterior para editarlo"}
 - generate_video {"prompt": "escena, acción y cámara", "path": "assets/intro.mp4", "ratio": "16:9", "duration": 6, "from": "id de una imagen para animarla"}
+- render_html_video {"html": "composición completa", "path": "assets/anuncio.mp4", "ratio": "16:9|9:16|1:1|4:5", "duration": 10}
+    convierte HTML animado en MP4 en este equipo, sin modelo de vídeo. Raíz <div data-composition-id="main" data-start="0" data-duration="10" data-width="1920" data-height="1080">;
+    escenas class="clip" data-start data-duration; const tl = gsap.timeline({paused:true}) ... window.__timelines["main"] = tl. gsap ya está cargado. Sin red, reloj ni azar
 Organización:
 - todo_write {"todos": [{"content": "paso", "status": "pending|in_progress|done"}]}
     mantén una lista de tareas visible para el usuario en trabajos de varios pasos
@@ -68,6 +71,7 @@ export const TOOL_SCHEMAS = [
   ['run_command', 'Ejecuta un comando de terminal en la carpeta de trabajo', S({ command: str('comando'), timeout: { type: 'integer', description: 'segundos' } }, ['command'])],
   ['generate_image', 'Genera una imagen con el modelo de imagen del usuario y la guarda en la carpeta de trabajo. Pide permiso', S({ prompt: str('descripción visual detallada'), path: str('ruta relativa donde guardarla (opcional)'), ratio: str('proporción, p. ej. 1:1, 16:9, 9:16'), from: str('id de un resultado anterior para editarlo') }, ['prompt'])],
   ['generate_video', 'Genera un vídeo con el modelo de vídeo del usuario y lo guarda en la carpeta de trabajo. Tarda varios minutos. Pide permiso', S({ prompt: str('escena, acción y movimiento de cámara'), path: str('ruta relativa donde guardarlo (opcional)'), ratio: str('proporción, p. ej. 16:9, 9:16'), duration: { type: 'integer', description: 'segundos' }, from: str('id de una imagen generada para animarla') }, ['prompt'])],
+  ['render_html_video', 'Convierte una composición HTML animada en un MP4 sin modelo de vídeo. Raíz con data-composition-id, data-start, data-duration, data-width y data-height; escenas class="clip" con data-start y data-duration; línea gsap.timeline({paused:true}) registrada en window.__timelines["main"] (gsap ya está cargado). Sin red, reloj, azar ni temporizadores. Pide permiso', S({ html: str('composición HTML completa'), path: str('ruta relativa del .mp4 (opcional)'), ratio: { type: 'string', enum: ['16:9', '9:16', '1:1', '4:5'] }, duration: { type: 'integer', description: 'segundos' } }, ['html'])],
   ['todo_write', 'Actualiza la lista de tareas visible para el usuario', S({ todos: { type: 'array', items: S({ content: str('paso'), status: { type: 'string', enum: ['pending', 'in_progress', 'done'] } }, ['content', 'status']) } }, ['todos'])],
   ['schedule_task', 'Tareas programadas (como las de Claude): listar, ver ejecuciones, crear, cambiar, borrar o lanzar. Crear/cambiar/borrar/lanzar pide permiso', S({
     action: { type: 'string', enum: ['list', 'runs', 'create', 'update', 'delete', 'run'] }, id: str('id o nombre de la tarea (runs, update, delete, run)'),
@@ -340,6 +344,22 @@ ${r}` : '';
         if (!ok) return 'RECHAZADO por el usuario.';
       }
       if (tool === 'delete_file' && !(await ask({ title: 'MOVER A LA PAPELERA', path: String(args.path), command: `Se enviará «${args.path}» a la papelera del sistema (recuperable).` }))) return 'RECHAZADO por el usuario.';
+    }
+    if (tool === 'render_html_video') {
+      if (readOnly || (sub && !ctx.subWrite)) return 'DENEGADO: modo de solo lectura.';
+      if (!ctx.media?.renderHtml) return 'ERROR: el vídeo HTML no está disponible aquí.';
+      const problems = ctx.media.lintHtml(String(args.html ?? ''));
+      if (problems.length) return `ERROR: corrige la composición antes de renderizar:\n${problems.map((x) => `- ${x.message}`).join('\n')}`;
+      if (!(await ask({ title: 'RENDERIZAR VÍDEO HTML', command: `Se guardará en: ${args.path ? String(args.path) : 'generated/ (nombre automático)'}\n${args.ratio || '16:9'} · ${Number(args.duration) || 10} s` }))) return 'RECHAZADO por el usuario.';
+      try {
+        const r = await ctx.media.renderHtml(args, { signal: ctx.signal, workspace: ctx.workspace, desktop: d });
+        ctx.onEvent({ type: 'media', ids: r.ids, sub });
+        if (r.path) ctx.onEvent({ type: 'file-changed', path: r.path });
+        return r.text;
+      } catch (e) {
+        if (e.name === 'AbortError') throw e;
+        return `ERROR: ${e.message || e}`;
+      }
     }
     if (tool === 'generate_image' || tool === 'generate_video') {
       if (readOnly || (sub && !ctx.subWrite)) return 'DENEGADO: modo de solo lectura: describe la imagen o el vídeo en tu plan.';

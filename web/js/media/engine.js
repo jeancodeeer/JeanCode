@@ -14,16 +14,16 @@ export class MediaError extends Error {
 
 /* ---------------------------------------------------------------- qué modelos */
 // Proveedores que solo sirven texto: aunque un nombre se parezca, nunca se les pide imagen ni vídeo
-const TEXT_ONLY = new Set(['anthropic', 'groq', 'cerebras', 'deepseek', 'cohere', 'moonshot', 'sambanova', 'ollama', 'lmstudio']);
-// Vídeo solo donde la API está comprobada. OpenAI cerró su API de vídeo (Sora) el 24-09-2026.
-const VIDEO_PROTOCOL = { openrouter: 'openrouter', gemini: 'veo', minimax: 'minimax', xai: 'xai', together: 'together', siliconflow: 'siliconflow', jean: 'generic', custom: 'generic', litellm: 'generic' };
-const IMAGE_PROTOCOL = { openai: 'openai', openrouter: 'openrouter', gemini: 'gemini', minimax: 'minimax', xai: 'xai', together: 'together', siliconflow: 'siliconflow' };
+const TEXT_ONLY = new Set(['anthropic', 'groq', 'cerebras', 'deepseek', 'cohere', 'moonshot', 'sambanova', 'hyperbolic']);
+// El resto de proveedores usa el formato de OpenAI (/images/generations y /videos): lo que aquí no aparece, se intenta así.
+const VIDEO_PROTOCOL = { openai: 'openai', openrouter: 'openrouter', gemini: 'veo', minimax: 'minimax', xai: 'xai', together: 'together', siliconflow: 'siliconflow', dashscope: 'dashscope', zai: 'zai' };
+const IMAGE_PROTOCOL = { openai: 'openai', openrouter: 'openrouter', gemini: 'gemini', minimax: 'minimax', xai: 'xai', together: 'together', siliconflow: 'siliconflow', nvidia: 'nvidia', huggingface: 'hf', dashscope: 'dashscope', zai: 'zai' };
 
 /** Formato de la API de este proveedor para ese tipo de contenido, o null si no lo ofrece. */
 export function protocolOf(ep, kind) {
   const p = providerOf(ep).id;
   if (TEXT_ONLY.has(p)) return null;
-  return kind === 'video' ? VIDEO_PROTOCOL[p] || null : IMAGE_PROTOCOL[p] || 'generic';
+  return (kind === 'video' ? VIDEO_PROTOCOL[p] : IMAGE_PROTOCOL[p]) || 'generic';
 }
 
 /** 'image', 'video' o null: lo que informa el proveedor y, si no, el nombre del modelo. */
@@ -35,6 +35,12 @@ export function mediaKindOf(ep, id) {
 
 // Modelos que el proveedor documenta pero no siempre devuelve en /models
 const KNOWN = {
+  openai: [['gpt-image-2.6-sunburst', 'image'], ['gpt-image-2.6-flare', 'image'], ['gpt-image-2', 'image']],
+  // integrate.api.nvidia.com/v1/models no lista los modelos visuales: viven en ai.api.nvidia.com
+  nvidia: [['black-forest-labs/flux.1-dev', 'image'], ['black-forest-labs/flux.1-schnell', 'image'], ['black-forest-labs/flux.2-klein-4b', 'image'], ['black-forest-labs/flux-3-image-klein', 'image'], ['black-forest-labs/flux.1-kontext-dev', 'image'], ['stabilityai/stable-diffusion-3.5-large', 'image'], ['qwen/qwen-image', 'image']],
+  huggingface: [['black-forest-labs/FLUX.1-schnell', 'image'], ['stabilityai/stable-diffusion-3-medium-diffusers', 'image']],
+  dashscope: [['qwen-image-2.0-pro', 'image'], ['wan2.7-t2v', 'video']],
+  zai: [['glm-image', 'image'], ['cogvideox-3', 'video']],
   minimax: [['image-01', 'image'], ['MiniMax-H3', 'video'], ['MiniMax-H3-Lite', 'video'], ['MiniMax-H3-Highspeed', 'video'], ['MiniMax-H3-Max', 'video']],
   xai: [['grok-imagine-image-2.0', 'image'], ['grok-imagine-video-1.5', 'video'], ['grok-imagine-video-1.5-lite', 'video'], ['grok-imagine-video', 'video']],
 };
@@ -70,11 +76,23 @@ export function controlsFor(ep, id, kind) {
     negative: false, seed: false, steps: false, guidance: false, background: false, mask: false, audio: false, start: false, end: false };
   if (kind === 'image') {
     switch (p) {
-      case 'openai': return { ...base, ratios: ['1:1', '3:2', '2:3'], qualities: ['auto', 'low', 'medium', 'high'], count: /dall-e-3/.test(id) ? 1 : 10, refs: /dall-e/.test(id) ? 0 : 16, background: !/dall-e/.test(id), mask: !/dall-e/.test(id) };
+      case 'openai': {
+        // la familia gpt-image-2 acepta medidas libres; las anteriores, solo tres tamaños
+        const free = /gpt-image-[2-9]/.test(id);
+        return { ...base, ratios: free ? [...R_COMMON, '21:9'] : ['1:1', '3:2', '2:3'], resolutions: free ? ['1K', '2K'] : [], qualities: free ? ['auto', 'low', 'medium', 'high', 'xhigh', 'max'] : ['auto', 'low', 'medium', 'high'],
+          count: /dall-e-3/.test(id) ? 1 : 10, refs: /dall-e/.test(id) ? 0 : 16, background: !/dall-e/.test(id), mask: !/dall-e/.test(id) };
+      }
+      case 'nvidia': {
+        const klein = /klein/.test(id), kontext = /kontext/.test(id);
+        return { ...base, refs: klein || kontext ? 1 : 0, steps: !/schnell/.test(id), guidance: !klein, seed: !/flux\.1|flux\.2/.test(id) };
+      }
+      case 'hf': return { ...base, negative: true, seed: true, steps: true, guidance: true };
+      case 'dashscope': return { ...base, ratios: ['1:1', '16:9', '9:16', '4:3', '3:4'], count: 6, negative: true, seed: true };
+      case 'zai': return { ...base, ratios: ['1:1', '3:2', '2:3', '4:3', '3:4', '16:9', '9:16'], qualities: ['hd', 'standard'] };
       case 'openrouter': return { ...base, ratios: [...R_COMMON, '21:9', '4:5', '5:4'], resolutions: ['1K', '2K', '4K'], qualities: ['auto', 'low', 'medium', 'high'], count: 10, refs: 16, seed: true, background: true };
       case 'gemini': return { ...base, ratios: [...R_COMMON, '21:9', '4:5', '5:4'], resolutions: ['1K', '2K', '4K'], refs: 14 };
       case 'minimax': return { ...base, ratios: ['1:1', '16:9', '4:3', '3:2', '2:3', '3:4', '9:16', '21:9'], count: 9, refs: 1, seed: true };
-      case 'xai': return { ...base, ratios: [...R_COMMON, '2:1', '1:2', '19.5:9', '9:19.5', '20:9', '9:20'], count: 10, refs: 5 };
+      case 'xai': return { ...base, ratios: [...R_COMMON, '2:1', '1:2', '19.5:9', '9:19.5', '20:9', '9:20', '21:9', '5:2'], resolutions: ['1k', '2k'], count: 10, refs: 5 };
       case 'together': return { ...base, count: 4, refs: 4, negative: true, seed: true, steps: true, guidance: true };
       case 'siliconflow': return { ...base, ratios: ['1:1', '16:9', '9:16', '4:3', '3:4'], count: 4, refs: 1, negative: true, seed: true, steps: true, guidance: true };
       default: return { ...base, count: 4, negative: true, seed: true, steps: true, guidance: true };
@@ -86,7 +104,10 @@ export function controlsFor(ep, id, kind) {
       return { ...base, ratios: info.supported_aspect_ratios?.length ? info.supported_aspect_ratios : R_VIDEO, resolutions: info.supported_resolutions?.length ? info.supported_resolutions : ['480p', '720p', '1080p'],
         durations: (info.supported_durations || [4, 6, 8]).filter((d) => d > 0), seed: true, audio: true, start: true, end: true, refs: 4 };
     }
-    case 'xai': return { ...base, ratios: ['16:9', '9:16', '1:1', '4:3', '3:4', '3:2', '2:3', '21:9'], resolutions: /1\.5/.test(id) ? ['480p', '720p', '1080p'] : ['480p', '720p'], durations: [4, 6, 8, 10, 12, 15], start: true };
+    case 'xai': return { ...base, ratios: ['16:9', '9:16', '1:1', '4:3', '3:4', '3:2', '2:3', '21:9', '5:2'], resolutions: /1\.5/.test(id) ? ['480p', '720p', '1080p'] : ['480p', '720p'], durations: [4, 6, 8, 10, 12, 15], start: true };
+    case 'dashscope': return { ...base, resolutions: ['720P', '1080P'], durations: [5, 8, 10, 15], negative: true, seed: true };
+    case 'zai': return { ...base, ratios: ['16:9', '9:16', '1:1'], durations: [5, 10], audio: true, start: true, end: true };
+    case 'openai': return { ...base, ratios: ['16:9', '9:16'], durations: [4, 8, 12] };
     case 'together': return { ...base, resolutions: ['480p', '720p', '1080p'], durations: [5, 8, 10], negative: true, seed: true, audio: true, start: true, end: true };
     case 'siliconflow': return { ...base, ratios: ['16:9', '9:16', '1:1'], negative: true, seed: true, start: true };
     case 'veo': return { ...base, ratios: ['16:9', '9:16'], resolutions: ['720p', '1080p', '4k'], durations: [4, 6, 8], start: true, end: true };
@@ -104,6 +125,15 @@ export function sizeFor(ratio, side = 1024, step = 16) {
   return { width: snap((h * a) / b), height: snap(h) };
 }
 const OPENAI_SIZE = { '1:1': '1024x1024', '3:2': '1536x1024', '2:3': '1024x1536' };
+/** NVIDIA solo acepta lados de 768 a 1344 en pasos de 64. */
+function nvidiaSize(ratio) {
+  const { width, height } = sizeFor(ratio, 1024, 64);
+  const fit = (n) => Math.min(1344, Math.max(768, n));
+  return { width: fit(width), height: fit(height) };
+}
+const ZAI_SIZE = { '1:1': '1280x1280', '3:2': '1568x1056', '2:3': '1056x1568', '4:3': '1472x1088', '3:4': '1088x1472', '16:9': '1728x960', '9:16': '960x1728' };
+const ZAI_VIDEO = { '16:9': '1920x1080', '9:16': '1080x1920', '1:1': '1024x1024' };
+const dashBase = (ep) => `${new URL(ep.url).origin}/api/v1`;
 const VIDEO_SIZE = { '16:9': '1280x720', '9:16': '720x1280', '1:1': '960x960' };
 
 /** Solo los campos con valor: lo que el usuario no tocó no se envía y decide el proveedor. */
@@ -116,7 +146,7 @@ const mimeOf = (dataUrl) => String(dataUrl).match(/^data:([^;,]+)/)?.[1] || 'ima
 const BASE64 = /^[A-Za-z0-9+/\s]+=*$/;
 /** Imágenes de cualquier forma habitual: data[], images[], output[], con base64 o URL. */
 export function parseImages(json, mime = 'image/png') {
-  const list = [json?.data, json?.images, json?.output, json?.data?.image_base64, json?.data?.image_urls].find(Array.isArray) || [];
+  const list = [json?.data, json?.images, json?.artifacts, json?.output, json?.data?.image_base64, json?.data?.image_urls].find(Array.isArray) || (typeof json?.image === 'string' ? [json.image] : []);
   return list.map((x) => {
     if (typeof x === 'string') return /^https?:/i.test(x) ? { url: x } : { b64: b64Of(x), mime };
     const raw = x?.b64_json || x?.b64 || x?.image_base64 || x?.base64 || (typeof x?.image === 'string' && BASE64.test(x.image.slice(0, 200)) ? x.image : null);
@@ -145,12 +175,42 @@ async function tolerant(body, optional, send) {
 /* ---------------------------------------------------------------- imagen */
 const IMAGE = {
   async openai(r, net) {
-    const shared = clean({ model: r.model, prompt: r.prompt, n: r.count > 1 ? r.count : undefined, size: OPENAI_SIZE[r.ratio], quality: r.quality === 'auto' ? undefined : r.quality,
+    const free = /gpt-image-[2-9]/.test(r.model);
+    const side = r.resolution === '2K' ? 2048 : 1024;
+    const { width, height } = sizeFor(r.ratio, side, 16);
+    const shared = clean({ model: r.model, prompt: r.prompt, n: r.count > 1 ? r.count : undefined, size: free && r.ratio ? `${width}x${height}` : OPENAI_SIZE[r.ratio], quality: r.quality === 'auto' ? undefined : r.quality,
       background: r.background ? 'transparent' : undefined, ...(/dall-e/.test(r.model) ? { response_format: 'b64_json' } : {}) });
+    const optional = ['background', 'quality', 'size'];
     if (r.refs?.length) {
-      return need(parseImages(await net.call('/images/edits', { method: 'POST', body: clean({ ...shared, images: r.refs.map((image_url) => ({ image_url })), mask: r.mask ? { image_url: r.mask } : undefined }) })));
+      const body = clean({ ...shared, images: r.refs.map((image_url) => ({ image_url })), mask: r.mask ? { image_url: r.mask } : undefined });
+      return need(parseImages(await tolerant(body, optional, (b) => net.call('/images/edits', { method: 'POST', body: b }))));
     }
-    return need(parseImages(await net.call('/images/generations', { method: 'POST', body: shared })));
+    return need(parseImages(await tolerant(shared, optional, (b) => net.call('/images/generations', { method: 'POST', body: b }))));
+  },
+  /** NVIDIA: cada modelo tiene su URL en ai.api.nvidia.com y rechaza cualquier campo que no conozca. */
+  async nvidia(r, net) {
+    const kontext = /kontext/.test(r.model), klein = /klein/.test(r.model);
+    if (kontext && !r.refs?.length) throw new MediaError('Este modelo edita una imagen: añade una imagen de referencia.', { kind: 'request' });
+    const body = clean({ prompt: r.prompt, ...(kontext ? { aspect_ratio: r.ratio || 'match_input_image' } : nvidiaSize(r.ratio)), steps: num(r.steps), cfg_scale: num(r.guidance), seed: num(r.seed), image: r.refs?.[0],
+      mode: klein && r.refs?.length ? 'Image Editing' : undefined });
+    const json = await tolerant(body, ['seed', 'steps', 'cfg_scale', 'width', 'height', 'aspect_ratio'], (b) => net.call(`/${r.model}`, { method: 'POST', base: 'https://ai.api.nvidia.com/v1/genai', body: b }));
+    if (json.artifacts?.some((a) => a.finishReason === 'CONTENT_FILTERED')) throw new MediaError('El filtro de contenido de NVIDIA bloqueó esta imagen: cambia el prompt.', { kind: 'empty' });
+    return need(parseImages(json, 'image/jpeg'));
+  },
+  /** Hugging Face devuelve directamente los bytes de la imagen. */
+  async hf(r, net) {
+    const { width, height } = sizeFor(r.ratio);
+    const blob = await net.bytes(`/models/${r.model}`, { base: 'https://router.huggingface.co/hf-inference', body: { inputs: r.prompt, parameters: clean({ width, height, negative_prompt: r.negative, seed: num(r.seed), num_inference_steps: num(r.steps), guidance_scale: num(r.guidance) }) } });
+    return [{ blob, mime: blob.type || 'image/jpeg' }];
+  },
+  async dashscope(r, net) {
+    const { width, height } = sizeFor(r.ratio, 1328, 16);
+    const json = await net.call('/services/aigc/multimodal-generation/generation', { method: 'POST', base: dashBase(net.ep), body: { model: r.model, input: { messages: [{ role: 'user', content: [...(r.refs || []).map((image) => ({ image })), { text: r.prompt }] }] },
+      parameters: clean({ size: `${width}*${height}`, n: r.count > 1 ? r.count : undefined, negative_prompt: r.negative, seed: num(r.seed) }) } });
+    return need((json.output?.choices || []).flatMap((c) => c.message?.content || []).filter((x) => x.image).map((x) => ({ url: x.image })));
+  },
+  async zai(r, net) {
+    return need(parseImages(await net.call('/images/generations', { method: 'POST', body: clean({ model: r.model, prompt: r.prompt, size: ZAI_SIZE[r.ratio], quality: r.quality === 'auto' ? undefined : r.quality }) })));
   },
   async openrouter(r, net) {
     return need(parseImages(await net.call('/images', { method: 'POST', body: clean({ model: r.model, prompt: r.prompt, n: r.count > 1 ? r.count : undefined, aspect_ratio: r.ratio, resolution: r.resolution, seed: num(r.seed),
@@ -172,11 +232,11 @@ const IMAGE = {
     return need(parseImages(json, 'image/jpeg'));
   },
   async xai(r, net) {
-    const body = clean({ model: r.model, prompt: r.prompt, n: r.count > 1 ? r.count : undefined, aspect_ratio: r.ratio, response_format: 'b64_json' });
+    const body = clean({ model: r.model, prompt: r.prompt, n: r.count > 1 ? r.count : undefined, aspect_ratio: r.ratio, resolution: r.resolution, response_format: 'b64_json' });
     const refs = (r.refs || []).map((url) => ({ url, type: 'image_url' }));
     const path = refs.length ? '/images/edits' : '/images/generations';
     const full = refs.length === 1 ? { ...body, image: refs[0] } : refs.length ? { ...body, images: refs } : body;
-    return need(parseImages(await tolerant(full, ['response_format', 'aspect_ratio', 'n'], (b) => net.call(path, { method: 'POST', body: b })), 'image/jpeg'));
+    return need(parseImages(await tolerant(full, ['response_format', 'aspect_ratio', 'resolution', 'n'], (b) => net.call(path, { method: 'POST', body: b })), 'image/jpeg'));
   },
   async together(r, net) {
     const { width, height } = sizeFor(r.ratio);
@@ -235,8 +295,47 @@ const VIDEO = {
       const j = await net.call(`/videos/${encodeURIComponent(ref.id)}`);
       if (j.status === 'done' || j.video?.url) return { done: true, items: need(j.video?.url ? [{ url: j.video.url, mime: 'video/mp4' }] : []) };
       if (['failed', 'expired'].includes(j.status)) return failed(j.error?.message || j.error || `Trabajo ${j.status}`);
+      return { done: false, progress: num(j.progress) };
+    },
+  },
+  dashscope: {
+    async submit(r, net) {
+      const j = await net.call('/services/aigc/video-generation/video-synthesis', { method: 'POST', base: dashBase(net.ep), headers: { 'X-DashScope-Async': 'enable' },
+        body: { model: r.model, input: clean({ prompt: r.prompt, negative_prompt: r.negative }), parameters: clean({ resolution: r.resolution, ratio: r.ratio, duration: num(r.duration), seed: num(r.seed) }) } });
+      return { id: j.output?.task_id };
+    },
+    async poll(ref, net) {
+      const o = (await net.call(`/tasks/${encodeURIComponent(ref.id)}`, { base: dashBase(net.ep) })).output || {};
+      if (o.task_status === 'SUCCEEDED') return { done: true, items: need(o.video_url ? [{ url: o.video_url, mime: 'video/mp4' }] : []) };
+      if (['FAILED', 'CANCELED', 'UNKNOWN'].includes(o.task_status)) return failed(o.message || `Trabajo ${o.task_status}`);
       return pending;
     },
+  },
+  zai: {
+    async submit(r, net) {
+      const frames = [r.start, r.end].filter(Boolean);
+      const j = await net.call('/videos/generations', { method: 'POST', body: clean({ model: r.model, prompt: r.prompt, size: ZAI_VIDEO[r.ratio], duration: num(r.duration), with_audio: r.audio === undefined ? undefined : !!r.audio, image_url: frames.length > 1 ? frames : frames[0], quality: frames.length > 1 ? 'speed' : undefined }) });
+      return { id: j.id };
+    },
+    async poll(ref, net) {
+      const j = await net.call(`/async-result/${encodeURIComponent(ref.id)}`);
+      if (j.task_status === 'SUCCESS') return { done: true, items: need((j.video_result || []).map((v) => ({ url: v.url, mime: 'video/mp4' }))) };
+      if (j.task_status === 'FAIL') return failed('Z.ai no pudo generar el vídeo.');
+      return pending;
+    },
+  },
+  /** La API /videos de OpenAI. La oficial cerró el 24-09-2026, pero el formato sigue vivo en pasarelas compatibles. */
+  openai: {
+    async submit(r, net) {
+      try {
+        const j = await net.call('/videos', { method: 'POST', timeout: 120000, body: clean({ model: r.model, prompt: r.prompt, size: VIDEO_SIZE[r.ratio] || VIDEO_SIZE['16:9'], seconds: r.duration ? String(r.duration) : undefined }) });
+        return { id: j.id };
+      } catch (e) {
+        if ([404, 410].includes(e.status)) throw new MediaError('OpenAI cerró su API de vídeo (Sora) el 24 de septiembre de 2026. Puedes usar Sora u otros modelos por OpenRouter o Together, o crear el vídeo en la pestaña HTML.', { kind: 'unsupported', status: e.status });
+        throw e;
+      }
+    },
+    poll: (ref, net) => VIDEO.generic.poll(ref, net),
   },
   together: {
     async submit(r, net) {
@@ -313,15 +412,20 @@ const VIDEO = {
 };
 
 /** Genera imágenes. net = { ep, call(path, { method, body, base, auth, timeout }) }. */
-export function generateImage(req, net) {
-  const fn = IMAGE[protocolOf(net.ep, 'image')];
-  if (!fn) throw new MediaError(`${providerOf(net.ep).name} no ofrece generación de imágenes.`, { kind: 'unsupported' });
-  return fn(req, net);
+/** Un 404 en el formato de OpenAI casi siempre significa que ese proveedor no tiene esa API: se dice claro. */
+const explainMissing = (ep, what) => (e) => {
+  if (e.status === 404 && !e.detail) throw new MediaError(`${providerOf(ep).name} no tiene una API de ${what} compatible en esta URL, o ese modelo no existe.`, { kind: 'unsupported', status: 404 });
+  throw e;
+};
+export async function generateImage(req, net) {
+  const protocol = protocolOf(net.ep, 'image');
+  if (!protocol) throw new MediaError(`${providerOf(net.ep).name} no ofrece generación de imágenes.`, { kind: 'unsupported' });
+  return IMAGE[protocol](req, net).catch(explainMissing(net.ep, 'imágenes'));
 }
-export function submitVideo(req, net) {
-  const api = VIDEO[protocolOf(net.ep, 'video')];
-  if (!api) throw new MediaError(`${providerOf(net.ep).name} no ofrece una API de vídeo.`, { kind: 'unsupported' });
-  return api.submit(req, net);
+export async function submitVideo(req, net) {
+  const protocol = protocolOf(net.ep, 'video');
+  if (!protocol) throw new MediaError(`${providerOf(net.ep).name} no ofrece una API de vídeo.`, { kind: 'unsupported' });
+  return VIDEO[protocol].submit(req, net).catch(explainMissing(net.ep, 'vídeo'));
 }
 export const pollVideo = (ref, net) => VIDEO[protocolOf(net.ep, 'video')].poll(ref, net);
 
@@ -367,6 +471,7 @@ const IMG_NOUN = 'im[aá]gen(?:es)?|images?|fotos?|fotograf[ií]as?|photos?|pict
 const VID_NOUN = 'v[ií]deos?|clips?|animaci[oó]n(?:es)?|animations?';
 const intentRe = (noun) => new RegExp(`^\\s*${LEAD}${VERB}\\s+(?:(?:una?|unas?|unos|otra|otro|an?|the|some)\\s+)?(?:[\\p{L}\\d-]+\\s+)?(${noun})\\b[\\s,:]*(?:(?:de|del|con|sobre|que|donde|en\\s+la\\s+que|of|with|about|showing)\\s+)?([\\s\\S]{3,})$`, 'iu');
 const KEEP_NOUN = /logo|p[oó]ster|poster|retrato|portrait|wallpaper|fondo|ilustraci|illustration|dibujo|drawing/i;
+const HTML_VIDEO_RE = /^\s*(?:(?:por\s+favor|porfa|oye)[,\s]+)?(?:gen[eé]ra(?:me)?|cr[eé]a(?:me)?|haz(?:me)?|dise[ñn]a(?:me)?|quiero|necesito|make|create|generate)\b[^.?!]*?\b(?:v[ií]deo|video|animaci[oó]n|animation|clip)\b[^.?!]*?\b(?:html|motion\s+graphics?|gr[aá]ficos\s+animados)\b/i;
 const EDIT_RE = /^\s*(?:(?:ahora|y|pero)[,\s]+)?(?:hazla|hazlo|ponle|p[oó]n|c[aá]mbia(?:le|la|lo)?|qu[ií]ta(?:le)?|a[nñ]ade|a[nñ][aá]dele|agr[eé]ga(?:le)?|ed[ií]ta(?:la|lo)|mejora(?:la|lo)|make\s+it|change|add|remove|turn\s+it)\b/i;
 const ANIMATE_RE = /^\s*(?:(?:ahora|y|pero)[,\s]+)?(?:an[ií]ma(?:la|lo|r)|convi[eé]rte(?:la|lo)\s+en\s+(?:un\s+)?v[ií]deo|haz(?:la|lo)?\s+(?:un\s+)?v[ií]deo|dale\s+movimiento|animate\s+(?:it|this))/i;
 
@@ -378,6 +483,7 @@ const ANIMATE_RE = /^\s*(?:(?:ahora|y|pero)[,\s]+)?(?:an[ií]ma(?:la|lo|r)|convi
 export function detectMediaIntent(text, { last = null } = {}) {
   const t = String(text || '').replace(/^[¿¡\s]+/, '').trim();
   if (!t || t.startsWith('/') || t.length > 2000 || /[?¿]\s*$/.test(t) && !/^\s*(?:me\s+)?(?:puedes|podr[ií]as|can\s+you|could\s+you)/i.test(t)) return null;
+  if (HTML_VIDEO_RE.test(t)) return { kind: 'html', prompt: t };
   if (last?.kind === 'image' && ANIMATE_RE.test(t)) return { kind: 'video', prompt: t, from: 'animate' };
   if (last?.kind === 'image' && EDIT_RE.test(t) && !NOT_MEDIA.test(t)) return { kind: 'image', prompt: t, from: 'edit' };
   if (NOT_MEDIA.test(t)) return null;

@@ -28,6 +28,8 @@ import { initAutomations, parseInterval, validateTask, taskSummary, runSummary, 
 import { createMediaService, library as mediaLibrary, blobToDataUrl, extOf, slugOf } from './media/service.js';
 import { detectMediaIntent } from './media/engine.js';
 import { initStudio } from './media/studio.js';
+import { lintComposition } from './media/htmlvideo.js';
+import { exportHtmlVideo, writeComposition } from './media/htmlrender.js';
 import { SKILL_CATALOG, SKILL_CATEGORIES } from './skills-catalog.js';
 import { PLUGIN_CATALOG, pluginUrl } from './plugins-catalog.js';
 
@@ -49,8 +51,30 @@ let remotePhone = null;  // web y móvil: controlar un PC
 // Imagen y vídeo: un solo servicio para el estudio, el chat y el agente
 const mediaService = createMediaService({ models: () => state.models });
 let studio = null;
+/** Pregunta al modelo de chat del usuario (mejorar prompts y escribir composiciones). */
+async function mediaChatText(system, user, signal) {
+  const m = decide(routeFor('chat'), { models: state.visible || [], mode: 'chat', endpoints: getEndpoints(), need: {} }).model;
+  if (!m) throw new Error('conecta un modelo de chat para esto');
+  return (await routedChat(m, { signal, think: false, temperature: 0.7, messages: [{ role: 'system', content: system }, { role: 'user', content: user }] }, routeCtx(() => {}))).text.replace(/<think>[\s\S]*?<\/think>/g, '').trim();
+}
+/** Guarda un archivo generado en la carpeta de trabajo; si la ruta no vale, sigue en la galería. */
+async function saveToWorkspace(item, wanted, d, workspace) {
+  if (!d?.fs?.writeBinary || !workspace || !item.blob) return { path: '', note: '' };
+  const target = String(wanted || `generated/${slugOf(item.prompt)}-${item.id.slice(0, 6)}.${extOf(item.mime)}`);
+  try { await d.fs.writeBinary(workspace, target, (await blobToDataUrl(item.blob)).split(',')[1]); return { path: target, note: '' }; } catch (e) { return { path: '', note: ` No se pudo guardar en ${target} (${e.message}): está en la galería de Imagen.` }; }
+}
+
 /** Lo que el agente puede pedir: modelo disponible y generar guardando el archivo en su carpeta de trabajo. */
 const agentMedia = {
+  lintHtml: lintComposition,
+  async renderHtml(args, { signal, workspace, desktop: d }) {
+    const ratio = ['16:9', '9:16', '1:1', '4:5'].includes(args.ratio) ? args.ratio : '16:9';
+    const duration = Math.min(120, Math.max(1, Number(args.duration) || 10));
+    const blob = await exportHtmlVideo(String(args.html), { ratio, duration, signal });
+    const item = await mediaService.saveHtmlVideo(blob, { prompt: String(args.path || 'Composición HTML'), html: String(args.html), ratio, duration, source: 'agent' });
+    const { path, note } = await saveToWorkspace(item, args.path, d, workspace);
+    return { ids: [item.id], path, text: `Vídeo renderizado (${ratio}, ${duration} s). id: ${item.id}${path ? ` · guardado en ${path}` : ''}. El usuario ya lo ve en la conversación.${note}` };
+  },
   model(kind) {
     const m = mediaService.pick(kind);
     return m ? { id: m.id, billing: { local: 'en tu equipo', own: 'tu servidor', free: 'gratis', paid: 'de pago' }[mediaService.billing(m)] || 'coste según tu proveedor' } : null;
@@ -69,13 +93,7 @@ const agentMedia = {
     }
     const items = await mediaService.generate(req, { source: 'agent', signal, parent: args.from || null });
     const item = items[0];
-    let path = '';
-    let saveNote = '';
-    if (d?.fs?.writeBinary && workspace && item.blob) {
-      const wanted = String(args.path || `generated/${slugOf(item.prompt)}-${item.id.slice(0, 6)}.${extOf(item.mime)}`);
-      // ya está pagado: si la ruta no vale, el resultado sigue en la galería y el agente se entera
-      try { await d.fs.writeBinary(workspace, wanted, (await blobToDataUrl(item.blob)).split(',')[1]); path = wanted; } catch (e) { saveNote = ` No se pudo guardar en ${wanted} (${e.message}): está en la galería de Imagen.`; }
-    }
+    const { path, note: saveNote } = await saveToWorkspace(item, args.path, d, workspace);
     return { ids: items.map((i) => i.id), path, text: `${kind === 'video' ? 'Vídeo generado' : 'Imagen generada'} con ${m.id}. id: ${item.id}${path ? ` · guardado en ${path}` : ''}. El usuario ya lo ve en la conversación.${saveNote}` };
   },
 };
@@ -1267,6 +1285,36 @@ async function lastMediaOf(t) {
   const m = [...(t?.messages || [])].reverse().find((x) => x.role === 'assistant');
   return m?.media?.length ? mediaLibrary.get(m.media[m.media.length - 1]) : null;
 }
+/** Vídeo con HTML dentro de la conversación: el modelo de chat escribe la animación y este equipo la exporta. */
+async function sendHtmlVideo(t, intent, chatModel) {
+  const row = addMessage('assistant', '', { streaming: true, model: chatModel?.id || '' });
+  const say = (text) => { $('.bubble', row).innerHTML = `<p class="muted mono waiting">${esc(text)}</p>`; };
+  state.abort = new AbortController();
+  busy(true);
+  say('escribiendo la composición…');
+  try {
+    if (!chatModel) throw new Error('Conecta un modelo de chat para crear vídeos con HTML.');
+    const ratio = /vertical|9:16|reel|tiktok|short/i.test(intent.prompt) ? '9:16' : /cuadrad|1:1/i.test(intent.prompt) ? '1:1' : '16:9';
+    const duration = Math.min(30, Number(intent.prompt.match(/(\d+)\s*(?:s\b|seg)/i)?.[1]) || 10);
+    const signal = state.abort.signal;
+    const { html } = await writeComposition({ brief: intent.prompt, ratio, duration, chatText: mediaChatText, signal, onStatus: say });
+    const blob = await exportHtmlVideo(html, { ratio, duration, signal, onProgress: (p) => say(`exportando… ${Math.round(p * 100)} %`) });
+    const item = await mediaService.saveHtmlVideo(blob, { prompt: intent.prompt, html, ratio, duration, source: 'chat' });
+    const content = `Vídeo creado con HTML (${ratio}, ${duration} s, sin sonido). Puedes seguir editándolo en la pestaña Imagen.`;
+    t.messages.push({ role: 'assistant', content, media: [item.id], model: chatModel.id, at: Date.now() });
+    updateMessage(row, content, '', false);
+    await showMedia(row, [item.id]);
+    decorateAssistant(row, t, t.messages.length - 1);
+  } catch (err) {
+    row.remove();
+    if (err.name === 'AbortError') addMessage('system', 'Detenido.'); else showError(err);
+  } finally {
+    state.abort = null;
+    busy(false);
+    t.updated = Date.now(); saveThreads(); renderThreads();
+  }
+}
+
 /** Genera dentro de la conversación: el chat no necesita un modelo de chat para esto. */
 async function sendMedia(intent, text) {
   const t = thread() || newThread();
@@ -1275,6 +1323,9 @@ async function sendMedia(intent, text) {
   input.value = ''; autosize();
   t.messages.push({ role: 'user', content: text });
   addMessage('user', text);
+  // sin modelo de vídeo, el vídeo se hace con HTML y el modelo de chat
+  const chatModel = decide(routeFor('chat'), { models: state.visible || [], mode: 'chat', endpoints: getEndpoints(), need: {} }).model;
+  if (intent.kind === 'html' || (intent.kind === 'video' && !mediaService.pick('video') && chatModel)) return sendHtmlVideo(t, intent, chatModel);
   const m = mediaService.pick(intent.kind);
   if (!m) {
     const note = `No tienes ningún modelo de ${noun} conectado. Añade un proveedor que lo ofrezca en Ajustes y aparecerá en la pestaña Imagen.`;
@@ -1525,8 +1576,8 @@ async function runCommand({ name, args }) {
         saveThreads(); openThread(t.id);
       }
       return null;
-    case 'imagen': case 'image': case 'video': {
-      const kind = name === 'video' ? 'video' : 'image';
+    case 'imagen': case 'image': case 'video': case 'videohtml': {
+      const kind = name === 'videohtml' ? 'html' : name === 'video' ? 'video' : 'image';
       if (!args) { setMode('image'); return null; }
       await sendMedia({ kind, prompt: args }, `/${name} ${args}`);
       return null;
@@ -3476,11 +3527,7 @@ if ('serviceWorker' in navigator && location.protocol.startsWith('http') && !des
   studio = initStudio({
     $, esc, store, toast, confirmDialog, downloadBlob, service: mediaService,
     endpoints: getEndpoints, providerName: (ep) => providerOf(ep).name, openSettings: () => openPanel('settings'),
-    chatText: async (system, user, signal) => {
-      const m = decide(routeFor('chat'), { models: state.visible || [], mode: 'chat', endpoints: getEndpoints(), need: {} }).model;
-      if (!m) throw new Error('conecta un modelo de chat para mejorar prompts');
-      return (await routedChat(m, { signal, think: false, temperature: 0.7, messages: [{ role: 'system', content: system }, { role: 'user', content: user }] }, routeCtx(() => {}))).text.replace(/<think>[\s\S]*?<\/think>/g, '').trim();
-    },
+    chatText: mediaChatText,
   });
   if (!desktop) remotePhone = initRemotePhone({ $, esc, store, toast, renderMarkdown, platform: isNativeApp() ? 'app' : 'web' });
   if (desktop?.remote) initRemoteHostUi().catch((e) => console.warn('control remoto', e));

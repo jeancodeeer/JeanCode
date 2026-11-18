@@ -17,7 +17,7 @@ const EMPTY = {
 
 // Modelos que generan imagen o vídeo (por su nombre, cuando el proveedor no lo informa). No son de chat.
 export const VIDEO_MODEL = /grok-imagine-video|minimax-h\d|hailuo|seedance|\bveo-?\d|kling|\bwan-?\d|wan2\.|ltx-?(video|\d)|cogvideo|mochi-?\d|pixverse|vidu|runway|gen-?4-turbo|hunyuan-?video|\bsora-?\d|text-to-video|image-to-video|[-_/](t2v|i2v)([-_/]|$)/i;
-export const IMAGE_MODEL = /gpt-image|chatgpt-image|dall-e|flux|stable-?diffusion|sdxl|\bsd-?[123](\.\d)?([-_]|$)|^image-01|grok-imagine-image|grok-2-image|qwen-image|z-image|seedream|recraft|ideogram|hidream|playground-v|juggernaut|dreamshaper|kolors|nano-banana|gemini-[\w.-]*image/i;
+export const IMAGE_MODEL = /gpt-image|chatgpt-image|dall-e|flux|stable-?diffusion|sdxl|\bsd-?[123](\.\d)?([-_]|$)|^image-01|grok-imagine-image|grok-2-image|qwen-image|z-image|glm-image|cogview|seedream|recraft|ideogram|hidream|playground-v|juggernaut|dreamshaper|kolors|nano-banana|gemini-[\w.-]*image/i;
 
 /*
  * Familias conocidas (id del modelo, sin distinguir mayúsculas). Solo hechos públicos y estables.

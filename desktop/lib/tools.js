@@ -496,19 +496,19 @@ function pinnedGet(u, addrs, { timeout = 20000 } = {}) {
 
 const MAX_DOWNLOAD = 300 * 1024 * 1024;
 /** Una petición de descarga: corta en cuanto pasa del tope, sin cargar antes el archivo entero en memoria. */
-function binaryGet(u, addrs, headers, { max, timeout }) {
+function binaryGet(u, addrs, headers, { max, timeout, method = 'GET', body }) {
   const host = u.hostname.replace(/^\[|\]$/g, '');
   const lib = u.protocol === 'https:' ? https : http;
   return new Promise((resolve, reject) => {
     const req = lib.request({
-      protocol: u.protocol, hostname: host, port: u.port || undefined, path: `${u.pathname}${u.search}`, method: 'GET', agent: false,
+      protocol: u.protocol, hostname: host, port: u.port || undefined, path: `${u.pathname}${u.search}`, method, agent: false,
       headers: { 'User-Agent': 'JeanCode', Accept: '*/*', 'Accept-Encoding': 'identity', ...headers },
       servername: net.isIP(host) ? undefined : host, timeout: 60000,
       ...(addrs ? { lookup: (_h, opts, cb) => (opts && opts.all ? cb(null, addrs) : cb(null, addrs[0].address, addrs[0].family)) } : {}),
     }, (res) => {
       const status = res.statusCode || 0;
       const done = (extra = {}) => resolve({ status, type: res.headers['content-type'] || '', location: res.headers.location || '', ...extra });
-      if (status >= 300 || status < 200) { res.destroy(); return done(); }
+      if (status >= 300 && status < 400) { res.destroy(); return done(); }
       const tooBig = () => req.destroy(new Error(`el archivo pasa de ${Math.round(max / 1048576)} MB`));
       if (Number(res.headers['content-length']) > max) return tooBig();
       const chunks = [];
@@ -521,7 +521,7 @@ function binaryGet(u, addrs, headers, { max, timeout }) {
     req.on('timeout', () => req.destroy(new Error('sin respuesta a tiempo')));
     req.on('error', reject);
     req.on('close', () => clearTimeout(deadline));
-    req.end();
+    req.end(body);
   });
 }
 
@@ -529,13 +529,13 @@ function binaryGet(u, addrs, headers, { max, timeout }) {
  * Descarga un archivo generado. Con publicOnly, cada salto se resuelve, se comprueba y se conecta a esa IP: una
  * redirección o un DNS del proveedor no pueden llevar a la red local. Las cabeceras (la clave) no cambian de origen.
  */
-async function downloadBinary(url, { headers = {}, publicOnly = true, max = MAX_DOWNLOAD, timeout = 600000, check = assertPublic } = {}) {
+async function downloadBinary(url, { headers = {}, publicOnly = true, max = MAX_DOWNLOAD, timeout = 600000, check = assertPublic, method = 'GET', body } = {}) {
   let u;
   try { u = new URL(url); } catch { throw new Error('URL inválida'); }
   let sent = headers;
   for (let hop = 0; hop <= 5; hop++) {
     if (!['http:', 'https:'].includes(u.protocol)) throw new Error('solo http/https');
-    const r = await binaryGet(u, publicOnly ? await check(u) : null, sent, { max, timeout });
+    const r = await binaryGet(u, publicOnly ? await check(u) : null, sent, { max, timeout, method, body });
     if (!(r.status >= 300 && r.status < 400 && r.location)) return r;
     const next = new URL(r.location, u);
     if (next.origin !== u.origin) sent = {};

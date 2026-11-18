@@ -100,7 +100,7 @@ ipcMain.handle('http', async (_e, req) => {
   // imagen o vídeo generado: con tope de tamaño y comprobando cada salto (lib/tools.js)
   if (req.binary) {
     try {
-      const r = await tools.downloadBinary(req.url, { headers: req.headers, publicOnly: req.publicOnly !== false, timeout });
+      const r = await tools.downloadBinary(req.url, { headers: req.headers, publicOnly: req.publicOnly !== false, timeout, method, body: req.body });
       return { status: r.status, type: r.type, b64: r.data ? r.data.toString('base64') : '' };
     } catch (e) { return { error: e.message }; }
   }

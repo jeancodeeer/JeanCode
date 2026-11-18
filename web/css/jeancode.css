@@ -646,7 +646,7 @@ kbd { font: 600 11px/1 var(--mono); border: 1px solid var(--line-3); padding: 2p
 .st-field { display: grid; gap: var(--s2); min-width: 0; }
 .st-field > select, .st-field textarea, .st-field input[type="text"], .st-field input:not([type]) { width: 100%; min-width: 0; }
 .st-head { display: flex; align-items: center; justify-content: space-between; gap: var(--s3); }
-.st-kind { display: grid; grid-template-columns: 1fr 1fr; }
+.st-kind { display: grid; grid-template-columns: repeat(3, 1fr); }
 .st-seg { display: flex; flex-wrap: wrap; width: fit-content; max-width: 100%; }
 .st-seg button { min-height: 32px; padding: 0 var(--s3); }
 .st-prompt textarea { min-height: 148px; resize: vertical; font-size: 15px; line-height: 1.5; }
@@ -731,6 +731,18 @@ kbd { font: 600 11px/1 var(--mono); border: 1px solid var(--line-3); padding: 2p
 .st-brush { flex: 0 1 140px; }
 .ed-tools input[type="range"] { width: 100%; min-height: 24px; padding: 0; border: 0; background: none; accent-color: var(--ink); }
 .st-note { margin: 0; }
+.hv-preview { display: grid; grid-template-rows: minmax(0, 1fr) auto auto; gap: var(--s2); min-height: 0; min-width: 0; height: 100%; }
+.hv-fit { position: relative; min-height: 0; min-width: 0; overflow: hidden; }
+.hv-scale { position: absolute; transform-origin: 0 0; background: #000; }
+.hv-bar { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: var(--s3); }
+.hv-bar input[type="range"] { width: 100%; min-height: 24px; padding: 0; border: 0; background: none; accent-color: var(--ink); }
+.hv-bar .fine { font-variant-numeric: tabular-nums; white-space: nowrap; }
+.hv-progress { height: 2px; background: var(--line-2); }
+.hv-progress i { display: block; height: 100%; background: var(--ink); }
+.hv-code { display: grid; grid-template-rows: minmax(0, 1fr) auto; gap: var(--s2); min-height: 0; height: 100%; }
+.hv-code textarea { width: 100%; height: 100%; min-height: 0; resize: none; font: 13px/1.6 var(--mono); white-space: pre; overflow: auto; }
+.hv-lint { margin: 0; color: var(--ok); }
+.hv-lint.bad { color: var(--bad); }
 .msg-media { display: grid; gap: var(--s3); margin-top: var(--s2); max-width: 560px; }
 .msg-media figure { margin: 0; display: grid; gap: var(--s1); }
 .msg-media img, .msg-media video { display: block; width: 100%; height: auto; max-height: 70vh; object-fit: contain; border: 1px solid var(--line-2); background: var(--raise); }

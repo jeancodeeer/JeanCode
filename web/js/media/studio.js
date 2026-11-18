@@ -2,6 +2,7 @@
 // edita el resultado. El chat y el agente generan con el mismo servicio; aquí está el control fino.
 import { GUIDE_FIELDS, composePrompt, expandPrompt, improveInstruction } from './engine.js';
 import { library, extOf, slugOf } from './service.js';
+import { createHtmlPanel } from './htmlstudio.js';
 import { applyAdjust, adjusted, canvasBlob, canvasFromBlob, canvasOf, cropRect, cropped, flipped, maskFrom, referenceDataUrl, rotated } from './edit.js';
 
 const PRESETS = {
@@ -54,7 +55,16 @@ export function initStudio(deps) {
       <div class="st-strip" id="st-strip" aria-label="Versiones y trabajos en curso"></div>
     </div>`;
 
+  const html = createHtmlPanel({
+    esc, store, toast, chatText: deps.chatText, showError: (m) => showError(m),
+    refresh: () => { renderControls(); renderStage(); },
+    saveVideo: (blob, meta) => service.saveHtmlVideo(blob, meta),
+    showItem: async (id) => { html.leave(); st.kind = 'video'; store.set('media:kind', 'video'); st.items = await library.list(); renderControls(); select(id); },
+  });
+  html.attach({ go: $('#st-generate'), summary: $('#st-summary'), actions: $('#st-actions'), view: $('#st-view') });
+
   /* ---------------------------------------------------------------- panel de controles */
+  const kindTabs = () => `<div class="seg st-kind" role="tablist" aria-label="Qué generar">${[['image', 'Imagen'], ['video', 'Vídeo'], ['html', 'HTML']].map(([k, l]) => `<button type="button" role="tab" aria-selected="${st.kind === k}" class="${st.kind === k ? 'active' : ''}" data-kind="${k}">${l}</button>`).join('')}</div>`;
   function modelOptions() {
     const list = service.catalog(st.kind);
     const groups = new Map();
@@ -74,6 +84,11 @@ export function initStudio(deps) {
   const dropZone = (slot, label, list, max) => `<div class="st-field"><span class="label">${label}</span><div class="st-inputs">${list.map((x, i) => thumb(slot, x, i)).join('')}${list.length < max ? `<label class="st-add">${icon('plus')}<span class="sr">Añadir ${label.toLowerCase()}</span><input type="file" accept="image/png,image/jpeg,image/webp" data-file="${slot}" ${max > 1 ? 'multiple' : ''}></label>` : ''}</div></div>`;
 
   function renderControls() {
+    if (st.kind === 'html') {
+      $('#st-controls').innerHTML = kindTabs() + html.controls();
+      html.button();
+      return;
+    }
     const f = form();
     const m = model();
     const c = m ? service.controls(m) : null;
@@ -87,11 +102,10 @@ export function initStudio(deps) {
       if (!c.start) st.start = null;
       if (!c.end) st.end = null;
     }
-    const kindTabs = `<div class="seg st-kind" role="tablist" aria-label="Qué generar">${[['image', 'Imagen'], ['video', 'Vídeo']].map(([k, l]) => `<button type="button" role="tab" aria-selected="${st.kind === k}" class="${st.kind === k ? 'active' : ''}" data-kind="${k}">${l}</button>`).join('')}</div>`;
     if (!m) {
-      $('#st-controls').innerHTML = `${kindTabs}<div class="st-none"><h2 class="st-h">Conecta un modelo de ${st.kind === 'video' ? 'vídeo' : 'imagen'}</h2>
+      $('#st-controls').innerHTML = `${kindTabs()}<div class="st-none"><h2 class="st-h">Conecta un modelo de ${st.kind === 'video' ? 'vídeo' : 'imagen'}</h2>
         <p class="note">Ninguna de tus conexiones ofrece uno todavía. ${st.kind === 'video' ? 'OpenRouter, xAI, Together, SiliconFlow, Google y MiniMax generan vídeo.' : 'OpenAI, OpenRouter, xAI, Together, SiliconFlow, Google y MiniMax generan imágenes; también cualquier servidor con /images/generations.'}</p>
-        <div class="row gap wrap"><button class="btn" type="button" data-act="settings">Abrir Ajustes</button>${manualForm()}</div></div>`;
+        <div class="row gap wrap"><button class="btn" type="button" data-act="settings">Abrir Ajustes</button>${manualForm()}</div>${st.kind === 'video' ? '<p class="note">También puedes crear vídeo sin un modelo de vídeo en la pestaña HTML.</p>' : ''}</div>`;
       $('#st-generate').disabled = true;
       $('#st-summary').textContent = '';
       return;
@@ -99,7 +113,7 @@ export function initStudio(deps) {
     $('#st-generate').disabled = false;
     const guided = f.tab === 'guide';
     const advanced = c.seed || c.steps || c.guidance || c.background || c.qualities.length;
-    $('#st-controls').innerHTML = `${kindTabs}
+    $('#st-controls').innerHTML = `${kindTabs()}
       <div class="st-field"><label class="label" for="st-model">Modelo</label>
         <select id="st-model" class="mono">${modelOptions()}</select>
         <span class="fine">${esc(BILLING[service.billing(m)] || 'Coste según tu proveedor')}</span>${st.manual ? manualForm() : ''}</div>
@@ -192,6 +206,7 @@ export function initStudio(deps) {
   }
   $('#st-form').addEventListener('submit', async (e) => {
     e.preventDefault();
+    if (st.kind === 'html') { await html.submit(); return; }
     const m = model();
     if (!m) return;
     const text = promptText().trim();
@@ -205,7 +220,14 @@ export function initStudio(deps) {
 
   /* ---------------------------------------------------------------- escenario */
   const currentItem = () => st.items.find((i) => i.id === st.current) || null;
-  function select(id) { st.current = id; st.editor = null; renderStage(); renderGallery(); }
+  function select(id) {
+    st.current = id;
+    st.editor = null;
+    const item = currentItem();
+    if (st.kind === 'html' && item) { html.leave(); st.kind = item.kind; store.set('media:kind', item.kind); renderControls(); }
+    renderStage();
+    renderGallery();
+  }
   /** Misma tanda y misma familia de ediciones que el resultado abierto. */
   function lineage(item) {
     if (!item) return [];
@@ -234,6 +256,7 @@ export function initStudio(deps) {
   function renderStage() {
     renderStrip();
     view.classList.toggle('editing', !!st.editor);
+    if (st.kind === 'html') { html.stage(); return; }
     if (st.editor) return;
     const item = currentItem();
     const box = $('#st-view');
@@ -251,6 +274,7 @@ export function initStudio(deps) {
       canEdit && ['reference', 'plus', 'Referencia', 'Usarla como imagen de referencia'],
       canEdit && ['animate', 'film', 'Animar', 'Crear un vídeo a partir de esta imagen'],
       isVideo && item.blob && ['frame', 'image', 'Fotograma', 'Usar el fotograma actual como inicio de otro vídeo'],
+      item.html && ['composition', 'brush', 'Editar HTML', 'Seguir trabajando la composición'],
       ['reuse', 'undo', 'Reutilizar', 'Volver a cargar su prompt y sus ajustes'],
     ].filter(Boolean).map(bar).join('') + `<span class="st-gap"></span>
       ${isVideo || !item.blob ? bar(['download', 'down', 'Descargar']) : `<details class="menu st-dl"><summary class="btn ghost sm">${icon('down')}Descargar</summary><div class="menu-list" role="menu">${['png', 'jpeg', 'webp'].map((x) => `<button type="button" role="menuitem" data-export="${x}">${x.toUpperCase()}</button>`).join('')}</div></details>`}
@@ -269,7 +293,7 @@ export function initStudio(deps) {
       ${list.length ? `<div class="st-gal">${list.map((i) => `<button type="button" class="st-tile${i.id === st.current ? ' active' : ''}" data-open="${esc(i.id)}" title="${esc(i.prompt.slice(0, 120))}">${tile(i)}${i.kind === 'video' ? `<span class="st-badge">${icon('film')}</span>` : ''}</button>`).join('')}</div>`
     : '<p class="note st-gal-none">Lo que generes se guarda aquí, solo en este dispositivo.</p>'}`;
   }
-  async function reload() { st.items = await library.list(); if (st.current && !currentItem()) st.current = null; renderGallery(); renderStage(); }
+  async function reload() { st.items = await library.list(); if (st.current && !currentItem()) st.current = null; renderGallery(); if (st.kind !== 'html') renderStage(); }
 
   /* ---------------------------------------------------------------- editor */
   async function openEditor(item) {
@@ -475,6 +499,7 @@ export function initStudio(deps) {
     reference: () => { const i = currentItem(); if (i) useAs(i, 'refs', 'image'); },
     animate: () => { const i = currentItem(); if (i) useAs(i, 'start', 'video'); },
     reuse: () => { const i = currentItem(); if (i) reuse(i); },
+    composition: () => { const i = currentItem(); if (!i?.html) return; html.load(i); st.kind = 'html'; store.set('media:kind', 'html'); renderControls(); renderStage(); },
     frame: async () => {
       const v = $('#st-video');
       if (!v?.videoWidth) return;
@@ -512,6 +537,7 @@ export function initStudio(deps) {
   /* ---------------------------------------------------------------- eventos */
   async function onClick(e) {
     const t = e.target;
+    if (st.kind === 'html' && html.onClick(t)) return;
     const open = t.closest('[data-open]');
     if (open) { select(open.dataset.open); document.querySelector('#rail')?.classList.remove('open'); return; }
     const cancel = t.closest('[data-cancel]');
@@ -527,7 +553,7 @@ export function initStudio(deps) {
       return;
     }
     const kind = t.closest('[data-kind]');
-    if (kind) { st.kind = kind.dataset.kind; store.set('media:kind', st.kind); showError(''); renderControls(); renderStage(); return; }
+    if (kind) { if (st.kind === 'html') html.leave(); st.kind = kind.dataset.kind; st.editor = null; store.set('media:kind', st.kind); showError(''); renderControls(); renderStage(); return; }
     const preset = t.closest('[data-preset]');
     if (preset) {
       const f = form();
@@ -553,6 +579,7 @@ export function initStudio(deps) {
   rail?.addEventListener('click', onClick);
   view.addEventListener('input', (e) => {
     const t = e.target;
+    if (st.kind === 'html' && html.onInput(t)) return;
     const f = form();
     if (t.dataset.f) { f[t.dataset.f] = t.type === 'checkbox' ? t.checked : t.value; saveDraft(); summary(); }
     if (t.dataset.guide) { f.guide[t.dataset.guide] = t.value; saveDraft(); summary(); }
@@ -584,7 +611,7 @@ export function initStudio(deps) {
   });
 
   return {
-    async show() { renderControls(); await reload(); },
+    async show() { renderControls(); await reload(); if (st.kind === 'html') renderStage(); },
     async open(id) { await reload(); st.current = id; const i = currentItem(); if (i && i.kind !== st.kind) { st.kind = i.kind; store.set('media:kind', i.kind); renderControls(); } select(id); },
     async animate(id) { const i = await library.get(id); if (i?.blob) await useAs(i, 'start', 'video'); },
     refresh: renderControls,

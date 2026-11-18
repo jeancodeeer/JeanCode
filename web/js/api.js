@@ -94,7 +94,7 @@ export function serverMessage(body) {
     let j = JSON.parse(raw);
     if (Array.isArray(j)) j = j[0] || {}; // Gemini envuelve el error en una lista
     const m = typeof j.error === 'string' ? j.error : (j.error?.message || j.message || j.detail);
-    if (m) return maskKeys(String(m)).slice(0, 300);
+    if (m) return maskKeys(typeof m === 'string' ? m : JSON.stringify(m)).slice(0, 300); // NVIDIA detalla los campos en una lista
   } catch { /* no es JSON */ }
   return /<html|<!doctype/i.test(raw) ? '' : maskKeys(raw).slice(0, 200);
 }
@@ -192,23 +192,23 @@ function corsHint(ep) {
 }
 
 /** Google pide la clave en su propia cabecera: `auth` sustituye a la de Bearer. */
-const withAuth = (headers, auth) => {
-  if (!auth) return headers;
+const withAuth = (headers, auth, extra) => {
+  if (!auth) return extra ? { ...headers, ...extra } : headers;
   const { Authorization: _bearer, ...rest } = headers;
-  return { ...rest, ...auth };
+  return { ...rest, ...auth, ...extra };
 };
 
 async function request(ep, path, init = {}) {
   const b = bridge();
   const timeout = init.timeout ?? ep.timeout ?? 60000;
   if (b?.http) {
-    const r = await b.http({ url: ep.url + path, method: init.method || 'GET', headers: withAuth(headersFor(ep), init.auth), body: init.body, timeout });
+    const r = await b.http({ url: ep.url + path, method: init.method || 'GET', headers: withAuth(headersFor(ep), init.auth, init.headers), body: init.body, timeout });
     if (r.error) throw new ApiError(networkHint(ep) + ` (${r.error})`, 0, '', /a tiempo/.test(r.error) ? 'timeout' : 'network');
     if (r.status >= 400) throw new ApiError(explain(r.status, r.body, ep), r.status, serverMessage(r.body));
     try { return JSON.parse(r.body); } catch { throw notApi(ep, r.body); }
   }
   const rt = routeOf(ep, path);
-  rt.headers = withAuth(rt.headers, init.auth);
+  rt.headers = withAuth(rt.headers, init.auth, init.headers);
   if (rt.via === 'native') return nativeRequest(ep, rt.url, { method: init.method, headers: rt.headers, body: init.body, timeout });
   let res;
   try {
@@ -244,14 +244,39 @@ export function isPrivateTarget(url) {
 }
 
 /** Llamada JSON a la API de imagen o vídeo de un proveedor. base = otra raíz del mismo proveedor (…/v2). */
-export function mediaCall(ep, path, { method = 'GET', body, base, auth, timeout = 300000, signal } = {}) {
-  const job = request(base ? { ...ep, url: base } : ep, path, { method, body: body === undefined ? undefined : JSON.stringify(body), auth, timeout, signal });
+export function mediaCall(ep, path, { method = 'GET', body, base, auth, headers, timeout = 300000, signal } = {}) {
+  const job = request(base ? { ...ep, url: base } : ep, path, { method, body: body === undefined ? undefined : JSON.stringify(body), auth, headers, timeout, signal });
   if (!signal) return job;
   // el puente del escritorio y la red nativa no se cancelan a medias: Parar responde igualmente al momento
   return Promise.race([job, new Promise((_, reject) => {
     const stop = () => reject(new DOMException('aborted', 'AbortError'));
     if (signal.aborted) stop(); else signal.addEventListener('abort', stop, { once: true });
   })]);
+}
+
+/** POST que responde con el archivo (Hugging Face). */
+export async function mediaBytes(ep, path, { body, base, timeout = 300000, signal } = {}) {
+  const url = `${base || ep.url}${path}`;
+  const headers = { ...headersFor(ep), Accept: 'image/png' };
+  const payload = JSON.stringify(body);
+  const fail = (status, text) => new ApiError(explain(status, text, ep), status, serverMessage(text));
+  const toBlob = (b64, type) => { const bin = atob(String(b64).replace(/\s/g, '')); const a = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) a[i] = bin.charCodeAt(i); return new Blob([a], { type }); };
+  const b = bridge();
+  if (b?.http) {
+    const r = await b.http({ url, method: 'POST', headers, body: payload, timeout, binary: true, publicOnly: !isPrivateTarget(url) });
+    if (r.error) throw new ApiError(networkHint(ep) + ` (${r.error})`, 0);
+    if (r.status >= 400) throw fail(r.status, r.b64 ? atob(r.b64) : '');
+    return toBlob(r.b64, r.type || 'image/jpeg');
+  }
+  const native = nativeHttp();
+  if (native) {
+    const r = await native.request({ url, method: 'POST', headers, data: body, responseType: 'blob', connectTimeout: 30000, readTimeout: timeout });
+    if (r.status >= 400) throw fail(r.status, typeof r.data === 'string' ? r.data : JSON.stringify(r.data));
+    return toBlob(r.data, r.headers?.['Content-Type'] || r.headers?.['content-type'] || 'image/jpeg');
+  }
+  const res = await fetch(url, { method: 'POST', headers, body: payload, signal });
+  if (!res.ok) throw fail(res.status, await res.text().catch(() => ''));
+  return res.blob();
 }
 
 /**
@@ -284,6 +309,36 @@ export async function fetchMediaBlob(ep, url, { auth = false, mime = '', signal 
     return fromB64(r.b64, r.type);
   }
   const native = nativeHttp();
+  // Android: el DNS del teléfono se comprueba en cada salto y la conexión va a esas IP (plugin JeanDevice, sin Shizuku)
+  const device = native && window.Capacitor?.getPlatform?.() === 'android' ? window.Capacitor.Plugins?.JeanDevice : null;
+  if (device?.fetch) {
+    let at = u;
+    let sent = headers;
+    for (let hop = 0; hop <= 5; hop++) {
+      const host = at.hostname.replace(/^\[|\]$/g, '');
+      const literal = /^[\d.]+$/.test(host) || host.includes(':');
+      const addresses = literal ? [host] : (await device.resolve({ host })).addresses || [];
+      if (remoteApi && addresses.some((a) => isPrivateTarget(`http://${a.includes(':') ? `[${a}]` : a}/`))) refuse(new URL('http://localhost/'));
+      const r = await device.fetch({ url: at.href, addresses, headers: sent, binary: true });
+      if (r.status >= 300 && r.status < 400 && r.location) {
+        const next = new URL(r.location, at);
+        refuse(next);
+        if (next.origin !== at.origin) sent = {};
+        at = next;
+        continue;
+      }
+      if (r.status >= 400) throw new ApiError(`No se pudo descargar el resultado (${r.status}).`, r.status);
+      return fromB64(r.b64, r.type);
+    }
+    throw new ApiError('Demasiadas redirecciones al descargar el resultado.', -1, '', 'format');
+  }
+  // iPhone: una URL ajena se pide como en la web (el navegador no deja leer una red privada); solo la API propia va por la red nativa
+  if (native && !auth) {
+    const res = await fetch(url, { signal });
+    if (res.url) refuse(new URL(res.url));
+    if (!res.ok) throw new ApiError(`No se pudo descargar el resultado (${res.status}).`, res.status);
+    return res.blob();
+  }
   if (native) {
     // las redirecciones se siguen a mano para comprobar cada destino; la clave no cambia de origen
     let r;
@@ -303,6 +358,7 @@ export async function fetchMediaBlob(ep, url, { auth = false, mime = '', signal 
     return fromB64(String(r.data).replace(/\s/g, ''), r.headers?.['Content-Type'] || r.headers?.['content-type']);
   }
   const res = await fetch(url, { headers, signal });
+  if (res.url) refuse(new URL(res.url)); // el navegador sigue las redirecciones solo: su destino final tampoco se acepta
   if (!res.ok) throw new ApiError(`No se pudo descargar el resultado (${res.status}).`, res.status);
   return res.blob();
 }

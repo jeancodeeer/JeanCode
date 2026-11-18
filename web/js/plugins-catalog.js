@@ -7,6 +7,10 @@ export const PLUGIN_CATALOG = [
     desc: 'Arnés de ingeniería completo: más de 300 skills (TDD, revisión, seguridad, lenguajes y frameworks), 72 subagentes especializados (planner, code-reviewer, security-reviewer…) y 98 comandos (/ecc:plan, /ecc:tdd…).',
   },
   {
+    id: 'hyperframes', name: 'HyperFrames · vídeo con HTML', repo: 'heygen-com/hyperframes', license: 'Apache-2.0',
+    desc: 'De HeyGen. Skills para escribir composiciones de vídeo en HTML. Sus composiciones siguen el formato que la pestaña Imagen → HTML y la herramienta render_html_video convierten en MP4.',
+  },
+  {
     id: 'egm', name: 'EGM · Elephant-Goldfish Model', repo: 'google/elephant-goldfish-model', license: 'Apache-2.0',
     desc: 'De Google. El "elefante" (con contexto) desarrolla la idea y escribe el documento de diseño; los "peces" (subagentes sin la conversación previa) lo revisan con ojos nuevos. Skills egm-brainstorm, egm-draft, egm-review, egm-resolve…',
   },

@@ -1448,10 +1448,12 @@ test('imagen y vídeo: qué modelos sirven y no se cuelan en el chat', () => {
   }
   for (const id of ['MiniMax-H3', 'grok-imagine-video-1.5', 'Wan-AI/Wan2.2-T2V-A14B', 'bytedance/seedance-2.5', 'kling-v2']) assert.equal(ME.mediaKindOf(ep('together'), id), 'video', id);
   for (const id of ['gpt-5', 'claude-sonnet', 'gemini-2.5-pro', 'jean-marvel', 'qwen3-coder', 'wandb-helper']) { assert.equal(ME.mediaKindOf(ep('openai'), id), null, id); assert.notEqual(CAP.capsOf(ep('openai'), id).chat, false, id); }
-  assert.equal(ME.protocolOf(ep('openai'), 'video'), null, 'OpenAI cerró su API de vídeo');
+  assert.equal(ME.protocolOf(ep('openai'), 'video'), 'openai');
+  assert.equal(ME.protocolOf(ep('deepinfra'), 'video'), 'generic', 'lo no catalogado usa el formato de OpenAI');
   assert.equal(ME.protocolOf(ep('anthropic'), 'image'), null);
   assert.equal(ME.protocolOf(ep('custom'), 'image'), 'generic');
-  assert.deepEqual(ME.controlsFor(ep('openai'), 'gpt-image-2', 'image').ratios, ['1:1', '3:2', '2:3']);
+  assert.deepEqual(ME.controlsFor(ep('openai'), 'gpt-image-1.5', 'image').ratios, ['1:1', '3:2', '2:3']);
+  assert.ok(ME.controlsFor(ep('openai'), 'gpt-image-2.6-sunburst', 'image').ratios.includes('16:9'), 'la familia nueva admite medidas libres');
   assert.equal(ME.controlsFor(ep('openai'), 'gpt-image-2', 'image').mask, true);
   assert.equal(ME.controlsFor(ep('together'), 'x', 'image').negative, true);
   assert.equal(ME.controlsFor(ep('xai'), 'grok-imagine-video', 'video').resolutions.includes('1080p'), false);
@@ -1535,7 +1537,10 @@ test('vídeo: crear y seguir el trabajo en cada proveedor', async () => {
   assert.deepEqual(f.calls[0].body.content[0], { type: 'text', text: 'olas' });
   f = await flow('xai', 'https://api.x.ai/v1', { request_id: 'r2' }, [{ status: 'failed', error: 'bloqueado' }]);
   assert.equal(f.st.error, 'bloqueado');
-  await assert.rejects(async () => ME.submitVideo({ model: 'sora-2', prompt: 'x' }, { ep: { id: 'e', url: 'https://api.openai.com/v1', key: 'k', provider: 'openai' } }), /no ofrece una API de vídeo/);
+  const gone = Object.assign(new Error('gone'), { status: 410 });
+  await assert.rejects(ME.submitVideo({ model: 'sora-2', prompt: 'x' }, { ep: { id: 'e', url: 'https://api.openai.com/v1', key: 'k', provider: 'openai' }, call: async () => { throw gone; } }), /cerró su API de vídeo/);
+  f = await flow('openai', 'https://pasarela.example/v1', { id: 'v9' }, [{ status: 'in_progress' }, { status: 'completed' }], { model: 'sora-2' });
+  assert.deepEqual(f.st.items[0], { url: 'https://pasarela.example/v1/videos/v9/content', auth: true, mime: 'video/mp4' }, 'las pasarelas compatibles siguen funcionando');
 });
 
 test('imagen y vídeo: pedirlo en el chat sin confundir preguntas de programación', () => {
@@ -1644,4 +1649,123 @@ test('escritorio: la descarga de resultados comprueba cada salto y corta al pasa
   await assert.rejects(tools.downloadBinary(`http://api.invalid:${port}/grande`, { check, max: 1024 }), /pasa de/);
   await assert.rejects(tools.downloadBinary(`http://127.0.0.1:${port}/fin`), /red local o privada/);
   assert.equal((await tools.downloadBinary(`http://127.0.0.1:${port}/fin`, { publicOnly: false })).status, 200);
+});
+
+test('imagen: NVIDIA, Hugging Face, Alibaba, Z.ai y la familia nueva de OpenAI', async () => {
+  const run = async (provider, req, reply, url = 'https://api.example/v1') => {
+    const calls = [];
+    const net = { ep: { id: 'e', url, key: 'K', provider }, call: async (path, o = {}) => { calls.push({ path, ...o }); return reply; }, bytes: async (path, o = {}) => { calls.push({ path, ...o }); return reply; } };
+    return { items: await ME.generateImage({ kind: 'image', model: 'm', prompt: 'gato', ratio: '16:9', count: 1, ...req }, net), call: calls[0], calls };
+  };
+  const nv = { id: 'nv', url: 'https://integrate.api.nvidia.com/v1', key: 'k', provider: 'nvidia' };
+  assert.ok(ME.knownModels(nv).some((m) => m.id === 'black-forest-labs/flux.1-dev' && m.kind === 'image'), 'su /models no los lista');
+  assert.equal(ME.mediaKindOf(nv, 'black-forest-labs/flux.1-dev'), 'image');
+  let r = await run('nvidia', { model: 'black-forest-labs/flux.1-dev', steps: '30', guidance: '4' }, { artifacts: [{ base64: 'QUJD', finishReason: 'SUCCESS' }] });
+  assert.equal(r.call.base, 'https://ai.api.nvidia.com/v1/genai');
+  assert.equal(r.call.path, '/black-forest-labs/flux.1-dev');
+  assert.deepEqual(r.call.body, { prompt: 'gato', width: 1344, height: 768, steps: 30, cfg_scale: 4 });
+  assert.deepEqual(r.items[0], { b64: 'QUJD', mime: 'image/jpeg' });
+  await assert.rejects(run('nvidia', { model: 'x/flux.1-dev' }, { artifacts: [{ base64: '', finishReason: 'CONTENT_FILTERED' }] }), /filtro de contenido/);
+  await assert.rejects(run('nvidia', { model: 'x/flux.1-kontext-dev' }, {}), /imagen de referencia/);
+  r = await run('nvidia', { model: 'x/flux.2-klein-4b', refs: ['data:image/png;base64,AA'] }, { artifacts: [{ base64: 'QUJD' }] });
+  assert.equal(r.call.body.mode, 'Image Editing');
+  // NVIDIA rechaza con 422 los campos que no conoce: se repite sin ellos
+  const seen = [];
+  await ME.generateImage({ kind: 'image', model: 'x/nuevo', prompt: 'p', ratio: '1:1', seed: '5' }, { ep: nv, call: async (_p, o) => {
+    seen.push(o.body);
+    if ('seed' in o.body) throw Object.assign(new Error('extra field seed not permitted'), { status: 422 });
+    return { artifacts: [{ base64: 'QUJD' }] };
+  } });
+  assert.equal(seen.length, 2);
+  const blob = new Blob([new Uint8Array([1])], { type: 'image/jpeg' });
+  r = await run('huggingface', { model: 'org/modelo', negative: 'n' }, blob);
+  assert.equal(r.call.base, 'https://router.huggingface.co/hf-inference');
+  assert.deepEqual([r.call.path, r.call.body.inputs, r.call.body.parameters.negative_prompt], ['/models/org/modelo', 'gato', 'n']);
+  assert.equal(r.items[0].blob, blob);
+  r = await run('dashscope', {}, { output: { choices: [{ message: { content: [{ image: 'https://oss.example/a.png' }] } }] } }, 'https://dashscope-intl.aliyuncs.com/compatible-mode/v1');
+  assert.equal(r.call.base, 'https://dashscope-intl.aliyuncs.com/api/v1');
+  assert.match(r.call.body.parameters.size, /^\d+\*\d+$/);
+  assert.equal(r.items[0].url, 'https://oss.example/a.png');
+  r = await run('zai', { quality: 'hd' }, { data: [{ url: 'https://cdn.example/z.png' }] });
+  assert.deepEqual([r.call.body.size, r.call.body.quality], ['1728x960', 'hd']);
+  r = await run('openai', { model: 'gpt-image-2.6-sunburst', resolution: '2K', quality: 'xhigh' }, { data: [{ b64_json: 'QUJD' }] });
+  assert.deepEqual([r.call.body.size, r.call.body.quality], ['2736x1536', 'xhigh']);
+  r = await run('xai', { resolution: '2k' }, { data: [{ b64_json: 'QUJD' }] });
+  assert.equal(r.call.body.resolution, '2k');
+  await assert.rejects(ME.generateImage({ kind: 'image', model: 'm', prompt: 'p', ratio: '1:1' }, { ep: { id: 'e', url: 'https://x.example/v1', key: 'k', provider: 'fireworks' }, call: async () => { throw Object.assign(new Error('404'), { status: 404, detail: '' }); } }), /no tiene una API de imágenes/);
+});
+
+test('vídeo: Alibaba y Z.ai', async () => {
+  let calls = [];
+  let replies = [{ output: { task_id: 't1' } }, { output: { task_status: 'RUNNING' } }, { output: { task_status: 'SUCCEEDED', video_url: 'https://oss.example/v.mp4' } }];
+  let net = { ep: { id: 'e', url: 'https://dashscope-intl.aliyuncs.com/compatible-mode/v1', key: 'K', provider: 'dashscope' }, call: async (p, o = {}) => { calls.push({ p, ...o }); return replies.shift(); } };
+  const ref = await ME.submitVideo({ model: 'wan2.7-t2v', prompt: 'mar', ratio: '16:9', resolution: '720P', duration: 5 }, net);
+  assert.deepEqual(calls[0].headers, { 'X-DashScope-Async': 'enable' });
+  assert.deepEqual(calls[0].body.parameters, { resolution: '720P', ratio: '16:9', duration: 5 });
+  assert.equal((await ME.pollVideo(ref, net)).done, false);
+  assert.equal((await ME.pollVideo(ref, net)).items[0].url, 'https://oss.example/v.mp4');
+  calls = [];
+  replies = [{ id: 'z1', task_status: 'PROCESSING' }, { task_status: 'SUCCESS', video_result: [{ url: 'https://cdn.example/z.mp4' }] }];
+  net = { ep: { id: 'e', url: 'https://api.z.ai/api/paas/v4', key: 'K', provider: 'zai' }, call: async (p, o = {}) => { calls.push({ p, ...o }); return replies.shift(); } };
+  const z = await ME.submitVideo({ model: 'cogvideox-3', prompt: 'mar', ratio: '9:16', duration: 5, start: 'data:image/png;base64,AA' }, net);
+  assert.deepEqual([calls[0].body.size, calls[0].body.image_url], ['1080x1920', 'data:image/png;base64,AA']);
+  assert.equal((await ME.pollVideo(z, net)).items[0].url, 'https://cdn.example/z.mp4');
+  assert.equal(calls[1].p, '/async-result/z1');
+});
+
+test('vídeo HTML: contrato de la composición, aislamiento y MP4', async () => {
+  const HV = await import('../web/js/media/htmlvideo.js');
+  const { muxMp4 } = await import('../web/js/media/mp4.js');
+  const good = '<div id="stage" data-composition-id="main" data-start="0" data-duration="5" data-width="1920" data-height="1080"><h1 class="clip" data-start="0" data-duration="5">Hola</h1></div><script>const tl = gsap.timeline({ paused: true }); tl.from("h1", { opacity: 0 }); window.__timelines["main"] = tl;</script>';
+  assert.deepEqual(HV.lintComposition(good), []);
+  const codes = (h) => HV.lintComposition(h).map((x) => x.code);
+  assert.ok(codes('<div>hola</div>').includes('root'));
+  for (const [snippet, code] of [['<script>Date.now()</script>', 'clock'], ['<script>Math.random()</script>', 'random'], ['<script>setTimeout(f, 1)</script>', 'timers'], ['<script>tl.to("a",{repeat:-1})</script>', 'infinite'], ['<script src="https://cdn.example/x.js"></script>', 'script-src'], ['<link rel="stylesheet" href="x.css">', 'link'], ['<img src="https://x.example/a.png">', 'remote'], ['<video></video>', 'media']])
+    assert.ok(codes(good + snippet).includes(code), code);
+  assert.equal(HV.extractHtml('Aquí va:\n```html\n<div>x</div>\n```\nListo'), '<div>x</div>');
+  assert.equal(HV.extractHtml('no hay nada'), '');
+  const doc = HV.buildCompositionDoc(`${good}<script src="https://mal.example/x.js"></script><meta http-equiv="refresh" content="0;url=https://mal.example"><iframe src="https://mal.example"></iframe><base href="https://mal.example/">`, { width: 1920, height: 1080, duration: 5, token: 'tok' });
+  assert.match(doc, /default-src 'none'/);
+  assert.doesNotMatch(doc, /mal\.example/, 'lo externo se elimina aunque el modelo lo escriba');
+  assert.ok(doc.indexOf('Content-Security-Policy') < doc.indexOf('<script'), 'la política va antes de cualquier script');
+  assert.deepEqual(ME.detectMediaIntent('crea un vídeo en HTML de mi cafetería'), { kind: 'html', prompt: 'crea un vídeo en HTML de mi cafetería' });
+  assert.equal(ME.detectMediaIntent('crea una página HTML con un vídeo'), null);
+  const samples = [{ data: new Uint8Array([1, 2, 3]), key: true }, { data: new Uint8Array([4, 5]), key: false }];
+  const file = muxMp4({ codec: 'avc1', width: 640, height: 360, fps: 30, description: new Uint8Array([1, 100, 0, 40]), samples });
+  const text = Buffer.from(file).toString('latin1');
+  for (const b of ['ftyp', 'moov', 'mvhd', 'trak', 'avcC', 'stts', 'stss', 'stsz', 'stco', 'mdat']) assert.ok(text.includes(b), b);
+  const view = new DataView(file.buffer);
+  const stco = text.indexOf('stco');
+  const offset = view.getUint32(stco + 12);
+  assert.deepEqual([...file.subarray(offset, offset + 5)], [1, 2, 3, 4, 5], 'el índice apunta a los datos');
+  assert.throws(() => muxMp4({ codec: 'avc1', width: 2, height: 2, fps: 30, samples: [] }), /no hay fotogramas/);
+});
+
+test('android: cada salto de una descarga se resuelve, se comprueba y se fija a su IP', async (t) => {
+  const calls = [];
+  const dns = { 'cdn.example': ['93.184.215.14'], 'otro.example': ['93.184.215.15'], 'trampa.example': ['8.8.8.8', '10.0.0.7'] };
+  const pages = {
+    'https://api.example/v1/ok': { status: 302, location: 'https://cdn.example/a.mp4' },
+    'https://cdn.example/a.mp4': { status: 200, b64: 'QUJD', type: 'video/mp4' },
+    'https://cdn.example/lan': { status: 302, location: 'http://192.168.1.1/secreto' },
+    'https://cdn.example/nombre': { status: 302, location: 'https://trampa.example/x' },
+  };
+  globalThis.window = { Capacitor: { isNativePlatform: () => true, getPlatform: () => 'android', Plugins: { CapacitorHttp: {}, JeanDevice: {
+    resolve: async ({ host }) => ({ addresses: dns[host] || [] }),
+    fetch: async (o) => { calls.push(o); return pages[o.url]; },
+  } } } };
+  t.after(() => { delete globalThis.window; });
+  const ep = { id: 'e', url: 'https://api.example/v1', key: 'SECRETA', provider: 'custom' };
+  dns['api.example'] = ['93.184.215.20'];
+  const blob = await API.fetchMediaBlob(ep, 'https://api.example/v1/ok', { auth: true });
+  assert.equal(await blob.text(), 'ABC');
+  assert.deepEqual(calls.map((c) => c.addresses), [['93.184.215.20'], ['93.184.215.14']], 'cada salto va a la IP comprobada');
+  assert.equal(calls[0].headers.Authorization, 'Bearer SECRETA');
+  assert.deepEqual(calls[1].headers, {}, 'la clave no cambia de origen');
+  calls.length = 0;
+  await assert.rejects(API.fetchMediaBlob(ep, 'https://cdn.example/lan'), /red local/);
+  assert.equal(calls.length, 1, 'la dirección privada no se llega a pedir');
+  calls.length = 0;
+  await assert.rejects(API.fetchMediaBlob(ep, 'https://cdn.example/nombre'), /red local/);
+  assert.equal(calls.length, 1, 'basta con UNA dirección privada entre las que resuelve');
 });

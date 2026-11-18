@@ -180,6 +180,7 @@ public class JeanDevicePlugin extends Plugin {
     }
 
     private static final int MAX_FETCH = 5 * 1024 * 1024;
+    private static final long MAX_DOWNLOAD = 150L * 1024 * 1024;
     private static final java.util.regex.Pattern IP_LITERAL = java.util.regex.Pattern.compile("^([0-9]{1,3}([.][0-9]{1,3}){3}|[0-9a-fA-F:.]*:[0-9a-fA-F:.]*)$");
     private final okhttp3.OkHttpClient http = new okhttp3.OkHttpClient.Builder()
         .followRedirects(false).followSslRedirects(false) // webfetch sigue y comprueba cada redirección
@@ -196,6 +197,8 @@ public class JeanDevicePlugin extends Plugin {
     public void fetch(PluginCall call) {
         String url = call.getString("url", "");
         com.getcapacitor.JSArray list = call.getArray("addresses", new com.getcapacitor.JSArray());
+        JSObject extra = call.getObject("headers", new JSObject());
+        boolean binary = Boolean.TRUE.equals(call.getBoolean("binary", false));
         async(call, () -> {
             okhttp3.HttpUrl u = okhttp3.HttpUrl.parse(url);
             if (u == null || !(u.scheme().equals("http") || u.scheme().equals("https"))) throw new IllegalArgumentException("solo http y https");
@@ -212,13 +215,27 @@ public class JeanDevicePlugin extends Plugin {
                 if (!h.equalsIgnoreCase(host)) throw new java.net.UnknownHostException("nombre no comprobado: " + h);
                 return pinned;
             }).build();
-            okhttp3.Request req = new okhttp3.Request.Builder().url(u).header("User-Agent", "JeanCode").header("Accept", "*/*").get().build();
+            okhttp3.Request.Builder builder = new okhttp3.Request.Builder().url(u).header("User-Agent", "JeanCode").header("Accept", "*/*");
+            for (java.util.Iterator<String> it = extra.keys(); it.hasNext();) { String k = it.next(); builder.header(k, extra.getString(k)); }
+            okhttp3.Request req = builder.get().build();
             try (okhttp3.Response res = client.newCall(req).execute()) {
                 JSObject r = new JSObject();
                 r.put("status", res.code());
                 r.put("location", res.header("Location", ""));
                 r.put("type", res.header("Content-Type", ""));
                 okhttp3.ResponseBody body = res.body();
+                if (binary) {
+                    // imagen o vídeo generado: con tope para no agotar la memoria del teléfono
+                    byte[] data = new byte[0];
+                    if (body != null && res.isSuccessful()) {
+                        if (body.contentLength() > MAX_DOWNLOAD) throw new IllegalStateException("el archivo pasa de 150 MB");
+                        okio.BufferedSource src = body.source();
+                        if (src.request(MAX_DOWNLOAD + 1L)) throw new IllegalStateException("el archivo pasa de 150 MB");
+                        data = src.getBuffer().readByteArray();
+                    }
+                    r.put("b64", Base64.encodeToString(data, Base64.NO_WRAP));
+                    return r;
+                }
                 String text = "";
                 if (body != null) {
                     okio.BufferedSource src = body.source();
