@@ -1,6 +1,6 @@
 // Versión de JeanCode. Fuente única: la cambia `node scripts/version.mjs X.Y.Z`
 // (también actualiza desktop/package.json y la caché del service worker).
-export const VERSION = '1.2.3';
+export const VERSION = '1.3.0';
 
 /** true si la etiqueta `tag` (p. ej. "v1.2.0") es más nueva que `current`. */
 export function isNewer(tag, current = VERSION) {
