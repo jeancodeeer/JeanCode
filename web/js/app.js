@@ -3678,7 +3678,12 @@ function hideBoot() {
   setTimeout(() => pruneAttachments().catch(() => {}), 8000);
   $('#splash-remote')?.addEventListener('click', async () => { await enterApp(); setMode('remote'); });
   setTimeout(() => checkUpdate(), 1500); // escritorio y móvil, también antes de conectar una API
-})();
+})().catch((e) => {
+  // un arranque roto se ve: sin esto quedaría la pantalla de arranque o un fondo negro
+  console.error('arranque', e);
+  hideBoot();
+  toast(`NO SE PUDO INICIAR: ${String(e?.message || e).slice(0, 120)}`);
+});
 
 // la tarjeta de ruta se recalcula al abrirla (la conversación pudo crecer y cambiar lo que cabe)
 $('#route-menu').addEventListener('toggle', (e) => { if (e.target.open) renderRouteCard(); });
