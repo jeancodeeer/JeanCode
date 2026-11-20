@@ -339,6 +339,14 @@ export async function fetchMediaBlob(ep, url, { auth = false, authHost = '', mim
     if (!res.ok) throw new ApiError(`No se pudo descargar el resultado (${res.status}).`, res.status);
     return res.blob();
   }
+  // iPhone: la red nativa no comprueba a qué IP resuelve cada nombre. Solo se usa con el servidor de TU API (lo elegiste tú);
+  // cualquier otro destino va por la red del navegador, que no deja leer tu red local
+  const apiOrigin = new URL(ep.url).origin;
+  if (native && remoteApi && u.origin !== apiOrigin) {
+    const res = await fetch(url, { signal, redirect: 'error' });
+    if (!res.ok) throw new ApiError(`No se pudo descargar el resultado (${res.status}).`, res.status);
+    return res.blob();
+  }
   if (native) {
     // las redirecciones se siguen a mano para comprobar cada destino; la clave no cambia de origen
     let r;
@@ -351,6 +359,11 @@ export async function fetchMediaBlob(ep, url, { auth = false, authHost = '', mim
       if (hop >= 5) throw new ApiError('Demasiadas redirecciones al descargar el resultado.', -1, '', 'format');
       const next = new URL(loc, at);
       refuse(next);
+      if (remoteApi && next.origin !== apiOrigin) {
+        const res = await fetch(next.href, { signal, redirect: 'error' });
+        if (!res.ok) throw new ApiError(`No se pudo descargar el resultado (${res.status}).`, res.status);
+        return res.blob();
+      }
       if (next.origin !== at.origin) sent = {};
       at = next;
     }

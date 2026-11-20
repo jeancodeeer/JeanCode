@@ -142,6 +142,7 @@ textarea { resize: vertical; }
 .upd-from b { color: var(--ink); font-weight: 500; }
 .upd-notes { max-height: 34vh; overflow: auto; padding: var(--s3) var(--s4); border: 1px solid var(--line); background: var(--raise); font-size: 14px; color: var(--smoke); }
 .upd-notes:empty { display: none; }
+.note-video { display: block; width: 100%; max-height: 60vh; margin: var(--s3) 0; background: #000; border: 1px solid var(--line); }
 .upd-notes h1, .upd-notes h2, .upd-notes h3 { font: 600 13px/1.3 var(--mono); letter-spacing: .08em; text-transform: uppercase; color: var(--ink); margin: var(--s3) 0 var(--s2); }
 .upd-actions { display: flex; flex-wrap: wrap; gap: var(--s2); }
 .upd-actions .btn.primary { flex: 1 1 220px; }
