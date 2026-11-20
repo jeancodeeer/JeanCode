@@ -76,7 +76,9 @@ export const needsTerminalApproval = (tool, env = {}) => INPUT_TOOLS.includes(to
 export const describeAction = (tool, args = {}) => (BY_NAME[tool] ? BY_NAME[tool].label(args) : tool);
 
 /** Comandos de terminal destructivos o que cambian el sistema: confirmación siempre, aunque estén en la lista de permitidos. */
-export const DESTRUCTIVE_COMMAND = /\b(rm\s+-[a-z]*[rf]|rmdir\s+\/s|del\s+\/[sfq]|rd\s+\/s|format(\.com)?\s+[a-z]:|diskpart|mkfs|dd\s+if=|shutdown|restart-computer|stop-computer|remove-item\b[^\n]*-recurse|reg(\.exe)?\s+(add|delete)|set-itemproperty\s+.*hk(lm|cu)|bcdedit|netsh\s+(advfirewall|firewall)|sc(\.exe)?\s+(delete|config)|takeown|icacls\s+.*\/(grant|remove)|cipher\s+\/w|vssadmin\s+delete|git\s+(reset\s+--hard|clean\s+-[a-z]*f|push\s+[^\n]*--force)|chmod\s+-R\s+777|:\(\)\s*\{)/i;
+export const DESTRUCTIVE_COMMAND = /\b(rm\s+-[a-z]*[rf]|rmdir\s+\/s|del\s+\/[sfq]|rd\s+\/s|format(\.com)?\s+[a-z]:|diskpart|mkfs|dd\s+if=|shutdown|restart-computer|stop-computer|remove-item\b[^\n]*-recurse|reg(\.exe)?\s+(add|delete)|set-itemproperty\s+.*hk(lm|cu)|bcdedit|netsh\s+(advfirewall|firewall)|sc(\.exe)?\s+(delete|config)|takeown|icacls\s+.*\/(grant|remove)|cipher\s+\/w|vssadmin\s+delete|git\s+(reset\s+--hard|clean\s+-[a-z]*f|push\s+[^\n]*--force)|chmod\s+-R\s+777|:\(\)\s*\{|pm\s+(uninstall|clear|disable|hide|suspend|reset-permissions)|cmd\s+package\s+(uninstall|clear)|reboot\b|svc\s+power|setprop\s|wipe\b|settings\s+(put|delete)\s+(secure|global)|locksettings|dpm\s|uicache\b|launchctl\s+(unload|remove|bootout)|killall\s+-9\s+(springboard|backboardd))/i;
+// las últimas alternativas son de los teléfonos (mini agente del móvil): desinstalar o borrar datos de apps,
+// reiniciar, propiedades del sistema, ajustes de seguridad, bloqueo, administración del dispositivo y servicios de iOS
 
 /**
  * Política de permisos (Ajustes → Control del equipo). Por nivel:

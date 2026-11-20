@@ -78,10 +78,10 @@ There are excellent coding agents already ([OpenCode](https://github.com/sst/ope
 | PLATFORM | GET IT | MODES |
 |---|---|---|
 | **Web** (any phone or computer) | [jeancodeeer.github.io/JeanCode](https://jeancodeeer.github.io/JeanCode/) — installable PWA, works offline | CHAT · CODE |
-| **Android** | `JeanCode-x.y.z-android.apk` from the [latest release](https://github.com/jeancodeeer/JeanCode/releases/latest) | CHAT · CODE |
-| **iOS / iPadOS** | `JeanCode-x.y.z-ios-unsigned.ipa` — install with [AltStore](https://altstore.io) or [Sideloadly](https://sideloadly.io) using your own Apple ID | CHAT · CODE |
+| **Android** | `JeanCode-x.y.z-android.apk` from the [latest release](https://github.com/jeancodeeer/JeanCode/releases/latest) | CHAT |
+| **iOS / iPadOS** | `JeanCode-x.y.z-ios-unsigned.ipa` — install with [AltStore](https://altstore.io) or [Sideloadly](https://sideloadly.io) using your own Apple ID | CHAT |
 | **Python + pygame** (any OS, and PyKernel) | `JeanCode-x.y.z-pygame.zip` from the [latest release](https://github.com/jeancodeeer/JeanCode/releases/latest) → `pip install pygame-ce` → `python jeancode_pygame.py`. See [pygame/README.md](pygame/README.md) | CHAT |
-| **Windows · macOS · Linux** | `.exe` · `.dmg` · `.AppImage` from the [latest release](https://github.com/jeancodeeer/JeanCode/releases/latest) | CHAT · CODE · **AGENT** · computer control |
+| **Windows · macOS · Linux** | `.exe` · `.dmg` · `.AppImage` from the [latest release](https://github.com/jeancodeeer/JeanCode/releases/latest) | CHAT · **AGENT** · computer control |
 
 The phone apps are the same web app compiled with Capacitor. The Android APK is signed with a debug key (allow "install unknown apps"); the iOS build is unsigned because App Store distribution needs a paid Apple developer account.
 
@@ -198,7 +198,7 @@ To see the window QEMU needs a graphical display (in WSL: `sudo apt install qemu
 <table>
 <tr>
 <td width="33%" valign="top"><b>CHAT</b> · web + desktop<br>Streaming Markdown, code blocks, collapsible reasoning, per-answer token usage.</td>
-<td width="33%" valign="top"><b>CODE</b> · web + desktop<br>Describe a project; every file is written for you. File tree, <b>RUN</b> the whole project (HTML with its JS/CSS, Python, JavaScript, Batch… sandboxed; on desktop, any installed language, with your permission), download as <code>.zip</code>.</td>
+<td width="33%" valign="top"><b>CODE</b> · web<br>Describe a project; every file is written for you. File tree, <b>RUN</b> the whole project (HTML with its JS/CSS, Python, JavaScript, Batch… sandboxed; on desktop, any installed language, with your permission), download as <code>.zip</code>.</td>
 <td width="33%" valign="top"><b>AGENT</b> · desktop<br>A coding agent in the style of Claude Code and OpenCode, working inside the folder you choose.</td>
 </tr>
 </table>

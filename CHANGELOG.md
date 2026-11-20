@@ -2,6 +2,48 @@
 
 JeanCode 1.0 reúne en una sola versión todo lo que se publicó por partes entre la 0.1 y la 0.4. Las releases antiguas se retiraron de GitHub para que solo quede una descarga oficial. Su código sigue completo en las etiquetas de git (`v0.1.0` … `v0.4.2`), así que cualquier build anterior se puede reconstruir con `git checkout vX.Y.Z && cd desktop && npm ci && npm run dist`.
 
+## 1.3.0 — 19 de noviembre de 2026
+
+**Mini agente del móvil (Android con modo desarrollador, iPhone con jailbreak)**
+- Nueva pestaña **Móvil** en las apps: el agente de JeanCode trabaja dentro del teléfono con el modelo que tengas conectado. Lee y escribe archivos, ejecuta comandos y, en Android, maneja la pantalla (abrir apps, tocar, deslizar, escribir, capturas).
+- Android: con **Shizuku** (se activa con la depuración inalámbrica del modo desarrollador) el agente tiene permisos de shell, como `adb shell`, sin root.
+- iPhone: un ayudante en Python (`mobile/ios-helper`, se instala con `sudo sh install.sh`) que escucha solo en el propio iPhone y exige un token. Archivos y comandos; pantalla **experimental** con `jeancode-hid`, que se compila en el propio iPhone (capturas, toques, deslizar, teclas, abrir apps; necesita un modelo que vea imágenes).
+- Procesos en segundo plano y `webfetch` también en el móvil.
+- **Imagen y vídeo:** nueva pestaña Imagen con prompt libre o guiado, variantes, controles según el modelo, retoque con IA y máscara, ajustes, recorte y paso de imagen a vídeo. También se genera desde el chat (`/imagen`, `/video` o pidiéndolo) y desde el agente (`generate_image`, `generate_video`). Compatible con OpenAI, NVIDIA, OpenRouter, xAI, Together, SiliconFlow, Google, MiniMax, Hugging Face, Alibaba, Z.ai y cualquier API con el formato de OpenAI.
+- **Vídeo con HTML:** crea vídeos a MP4 en tu dispositivo, sin gastar créditos de vídeo: seis estilos, música y efectos, y un modo libre compatible con HyperFrames.
+- **Modelos locales:** Ollama con contexto real, datos reales de Ollama y LM Studio, agente más ligero y generación de imágenes con Stable Diffusion WebUI, Forge y ComfyUI.
+- **30 proveedores nuevos**, entre ellos Vercel AI Gateway, Poe, Venice, fal.ai, Replicate, Black Forest Labs, Recraft y Luma.
+- **Adjuntar imágenes** en el chat y el agente cuando el modelo puede verlas (PNG, JPG, WebP o GIF; se reducen solas si son grandes).
+- **Mascota y pantalla de arranque.** La mascota reacciona a lo que hace la app y se puede ocultar en Ajustes.
+- Errores más claros, con reintento automático en fallos pasajeros, y arranque más rápido.
+- `webfetch` (PC y móvil) se conecta solo a las direcciones IP ya comprobadas: un DNS que cambie de respuesta (*DNS rebinding*) ya no puede llevarlo a la red local. También rechaza URL con usuario y contraseña, y en el móvil, más rangos privados de IPv6.
+- Los comandos peligrosos de los teléfonos (desinstalar o borrar datos de apps, reiniciar, ajustes de seguridad, bloqueo…) piden confirmación siempre.
+
+
+**Control remoto: maneja el agente del PC desde el móvil**
+- Nueva pestaña **PC** en la web y en las apps de Android e iOS: ves las conversaciones del agente de tu PC en vivo, le escribes, lo paras, cambias PLAN/BUILD y los permisos, y apruebas sus diálogos de permiso (vale la primera respuesta, en el PC o en el móvil). No hace falta API en el móvil.
+- Emparejamiento con QR o enlace de un solo uso (10 min) y confirmación en el PC; cada móvil tiene su propia clave, revocable en **Ajustes → Comportamiento → Control desde el móvil**.
+- Conexión directa por la Wi-Fi; desde fuera, P2P (WebRTC) con tu Worker de Cloudflare como punto de encuentro y, si la red bloquea WebRTC, relay por el mismo Worker. Todo cifrado de extremo a extremo (AES-256-GCM): ni la red ni el Worker pueden leer nada.
+- El Worker de `relay/` incluye la sala del control remoto: vuelve a desplegarlo si ya lo usabas.
+
+
+**El modo CODE queda solo en la web**
+- En el escritorio (Windows, macOS, Linux) y en las apps de Android e iOS desaparece la pestaña CODE, su atajo (Ctrl+2) y su entrada en la paleta. En el escritorio se trabaja con AGENT, sobre tus carpetas; en el móvil queda CHAT. La web conserva CHAT y CODE como hasta ahora.
+- Las conversaciones de CODE que hubiera en el escritorio o el móvil no se borran, pero no se muestran allí.
+
+**Automatizaciones idénticas a las de Claude (escritorio)**
+- **Hooks con el formato de Claude Code**: `settings.json` del usuario y `.claude/settings*.json` / `.jeancode/settings*.json` del proyecto. Doce eventos (`PreToolUse`, `PermissionRequest`, `PostToolUse`, `PostToolUseFailure`, `UserPromptSubmit`, `Notification`, `Stop`, `SubagentStart`, `SubagentStop`, `PreCompact`, `SessionStart`, `SessionEnd`), matchers, la misma entrada (`tool_name`, `tool_input` con los campos de Claude, `transcript_path`, `permission_mode`…) y salida (`permissionDecision`, `updatedInput`, `additionalContext`, `continue`, `systemMessage`, código 2), hooks de tipo `prompt`, ejecución en paralelo y `CLAUDE_PROJECT_DIR`. Los hooks de Claude Code funcionan tal cual. `/hooks` muestra los activos. El formato antiguo (`pre_tool`, `post_edit`…) se sigue leyendo.
+- **Tareas programadas** con expresión cron (zona horaria con `CRON_TZ=`), una sola vez o manuales; modelo, permisos, conversación nueva o la misma de siempre y notificación por tarea; historial de las últimas 20 ejecuciones; editar; ejecutar ahora con instrucciones extra. Corren con los hooks. Las tareas de la versión anterior se convierten solas.
+- **El agente programa**: `schedule_task` (crear, cambiar, borrar o lanzar tareas, siempre con tu permiso), `send_later` (un mensaje que vuelve a la conversación más tarde) y `/loop <mensaje>` sin intervalo, en el que el agente decide cuándo repetir (`schedule_wakeup`).
+- `/compact` acepta instrucciones para el resumen.
+
+
+**Plugins con formato de Claude Code (escritorio)**
+- Nuevo panel **Plugins**: instala plugins de Claude Code (`.claude-plugin/plugin.json`) desde el catálogo, una URL git o una carpeta. Cada plugin aporta skills, subagentes y comandos; se puede desactivar o quitar.
+- En el catálogo: **ECC · Everything Claude Code** (327 skills, 72 subagentes, 98 comandos) y **EGM · Elephant-Goldfish Model** de Google (diseño con contexto y revisión con subagentes «sin memoria»).
+- Comandos de plugin con prefijo: `/ecc:plan`, `/ecc:tdd`… Los plugins grandes no llenan el contexto: el agente pide su índice con `load_skill`.
+- Seguridad: de un plugin solo se usa su texto. Sus hooks, servidores MCP y scripts no se ejecutan.
+
 ## 1.2.3 — 16 de noviembre de 2026
 
 **CODE: pestaña EJECUTAR (web, móvil y escritorio)**

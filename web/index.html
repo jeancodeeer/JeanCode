@@ -11,6 +11,7 @@
 <link rel="icon" href="favicon.svg" type="image/svg+xml">
 <link rel="apple-touch-icon" href="icons/icon-192.png">
 <link rel="manifest" href="manifest.webmanifest">
+<link rel="preload" href="fonts/IBMPlexSansCondensed-700.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="stylesheet" href="css/fonts.css">
 <link rel="stylesheet" href="css/jeancode.css">
 </head>
@@ -26,6 +27,15 @@
       <feTurbulence type="fractalNoise" baseFrequency="0.02 0.6" numOctaves="1" seed="3" result="w"/>
       <feDisplacementMap in="eaten" in2="w" scale="5" xChannelSelector="R" yChannelSelector="G"/>
     </filter>
+    <symbol id="i-clip" viewBox="0 0 24 24"><path d="M20 11.5l-8.5 8.5a5 5 0 0 1-7-7L13 4.500a3.300 3.300 0 0 1 4.700 4.700L9.200 17.700a1.600 1.600 0 0 1-2.300-2.300L14.500 7.800"/></symbol>
+    <symbol id="i-play" viewBox="0 0 24 24"><path d="M7 4l13 8-13 8z"/></symbol>
+    <symbol id="i-brush" viewBox="0 0 24 24"><path d="M14 4l6 6-9 9H5v-6z"/><path d="M12 6l6 6"/></symbol>
+    <symbol id="i-film" viewBox="0 0 24 24"><path d="M3 5h18v14H3z"/><path d="M7 5v14M17 5v14M3 12h4M17 12h4"/></symbol>
+    <symbol id="i-image" viewBox="0 0 24 24"><path d="M3 5h18v14H3z"/><path d="M3 16l5-5 4 4 3-3 6 6"/></symbol>
+    <symbol id="i-spark" viewBox="0 0 24 24"><path d="M12 3v6M12 15v6M3 12h6M15 12h6"/></symbol>
+    <symbol id="i-rotate" viewBox="0 0 24 24"><path d="M20 12a8 8 0 1 1-2.4-5.7L20 9"/><path d="M20 3v6h-6"/></symbol>
+    <symbol id="i-flip" viewBox="0 0 24 24"><path d="M12 3v18"/><path d="M8 7L3 17h5zM16 7l5 10h-5z"/></symbol>
+    <symbol id="i-trash" viewBox="0 0 24 24"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13"/></symbol>
     <symbol id="i-menu" viewBox="0 0 24 24"><path d="M3 6h18M3 12h18M3 18h18"/></symbol>
     <symbol id="i-close" viewBox="0 0 24 24"><path d="M5 5l14 14M19 5L5 19"/></symbol>
     <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 4v16M4 12h16"/></symbol>
@@ -39,6 +49,18 @@
     <symbol id="i-eye" viewBox="0 0 24 24"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z"/><path d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6z"/></symbol>
   </defs>
 </svg>
+
+<!-- ARRANQUE: visible desde el primer instante, hasta que la app está lista (app.js) -->
+<div id="boot" class="boot" role="status" aria-label="Iniciando JeanCode">
+  <div class="boot-col">
+    <svg class="wordmark boot-mark" viewBox="0 0 1000 300" aria-hidden="true">
+      <text class="wm-ghost" x="14" y="264" textLength="986" lengthAdjust="spacingAndGlyphs" style="font-size:300px">JEAN CODE</text>
+      <text class="wm-ink" x="0" y="250" textLength="986" lengthAdjust="spacingAndGlyphs" style="font-size:300px" filter="url(#xerox)">JEAN CODE</text>
+    </svg>
+    <p class="boot-sub">AI Development Environment</p>
+  </div>
+</div>
+<script>setTimeout(function () { var b = document.getElementById('boot'); if (b) b.remove(); }, 45000);</script>
 
 <!-- SPLASH: este equipo no tiene una API registrada -->
 <!-- VERSIÓN NUEVA (escritorio y móvil): update.js decide, app.js la muestra -->
@@ -90,6 +112,7 @@
       <div id="splash-msg" class="msg" role="status" aria-live="polite"></div>
       <button class="btn primary big" type="submit" id="splash-go">Conectar</button>
       <button class="btn quiet" type="button" id="splash-local">Usar modelos de esta PC</button>
+      <button class="btn quiet remote-only" type="button" id="splash-remote">Solo quiero controlar mi PC</button>
     </form>
 
     <details class="fold">
@@ -128,14 +151,18 @@
 
     <nav class="modes" role="tablist" aria-label="Modo">
       <button class="mode active" data-mode="chat" role="tab" aria-selected="true">Chat</button>
-      <button class="mode" data-mode="code" role="tab" aria-selected="false">Code</button>
+      <button class="mode web-only" data-mode="code" role="tab" aria-selected="false">Code</button>
       <button class="mode desktop-only" data-mode="agent" role="tab" aria-selected="false" hidden>Agent</button>
+      <button class="mode remote-only" data-mode="remote" role="tab" aria-selected="false">PC</button>
+      <button class="mode native-only" data-mode="device" role="tab" aria-selected="false" hidden>Móvil</button>
+      <button class="mode" data-mode="image" role="tab" aria-selected="false">Imagen</button>
     </nav>
 
     <button class="btn new" id="new-thread"><svg class="i"><use href="#i-plus"/></svg>Nueva conversación</button>
 
     <input class="thread-search" id="thread-search" type="search" placeholder="Buscar en el historial" aria-label="Buscar en el historial" spellcheck="false">
     <div class="threads" id="threads" aria-label="Historial"></div>
+    <div class="st-gallery" id="media-gallery" aria-label="Galería" hidden></div>
 
     <div class="rail-foot">
       <details class="menu up" id="more-menu">
@@ -258,6 +285,7 @@
           <summary aria-label="Más acciones del agente"><svg class="i"><use href="#i-more"/></svg></summary>
           <div class="menu-list" role="menu">
             <button role="menuitem" data-panel="skills">Skills</button>
+            <button role="menuitem" class="desktop-only" data-panel="plugins" hidden>Plugins</button>
             <button role="menuitem" data-news>Novedades</button>
             <button role="menuitem" class="desktop-only" data-panel="automations" hidden>Automatizaciones</button>
             <button role="menuitem" id="undo-btn">Deshacer el último cambio</button>
@@ -275,12 +303,99 @@
       </div>
     </section>
 
+    <!-- CONTROL REMOTO: manejar desde el móvil el agente de JeanCode en tu PC -->
+    <section class="view" id="view-remote" hidden>
+      <div class="rm-bar">
+        <span class="rm-status" id="rm-status" role="status" aria-live="polite" data-kind="off">Sin conectar</span>
+        <button class="btn sm" type="button" id="rm-connect" hidden>Conectar</button>
+        <button class="btn ghost sm" type="button" id="rm-disconnect" hidden>Desconectar</button>
+      </div>
+      <div class="rm-pair" id="rm-pair">
+        <h2 class="empty-title">Controla tu PC</h2>
+        <p class="muted">Maneja desde aquí el agente de JeanCode que corre en tu PC: ves lo que hace en vivo, le escribes, lo paras y apruebas sus permisos. En el PC: <strong>Ajustes → Control desde el móvil → Emparejar un móvil</strong>, y escanea el QR con la cámara (o pega el enlace). En la misma Wi-Fi la conexión es directa; desde fuera, P2P cifrado.</p>
+        <ul class="rows" id="rm-pcs"></ul>
+        <div class="row gap wrap">
+          <button class="btn" type="button" id="rm-scan">Escanear QR</button>
+          <form id="rm-pair-form" class="add-form grow">
+            <input id="rm-code" type="text" placeholder="Pega el enlace o el código de emparejamiento" spellcheck="false" autocomplete="off" aria-label="Código de emparejamiento">
+            <button class="btn primary" type="submit">Emparejar</button>
+          </form>
+        </div>
+        <video id="rm-video" class="rm-video" playsinline muted hidden></video>
+      </div>
+      <div class="rm-main" id="rm-main" hidden>
+        <div class="rm-head row gap wrap">
+          <select id="rm-threads" aria-label="Conversación" class="grow"></select>
+          <button class="btn ghost sm" type="button" id="rm-new">Nueva</button>
+        </div>
+        <div class="rm-head row gap wrap">
+          <span class="fine mono grow" id="rm-folder"></span><span class="fine mono" id="rm-model"></span>
+          <select id="rm-agent" aria-label="Modo del agente"><option value="build">BUILD</option><option value="plan">PLAN</option></select>
+          <select id="rm-perm" aria-label="Permisos"><option value="ask">Preguntar todo</option><option value="auto-edit">Editar sin preguntar</option></select>
+        </div>
+        <ul class="rm-todos" id="rm-todos" hidden></ul>
+        <div class="stream rm-stream" id="rm-stream"></div>
+        <div id="rm-confirms" class="rm-confirms" aria-live="assertive"></div>
+        <form class="rm-form row gap" id="rm-form">
+          <textarea id="rm-input" rows="2" class="grow" placeholder="Escribe al agente de tu PC…" aria-label="Mensaje para el PC"></textarea>
+          <span class="fine mono" id="rm-busy" hidden>TRABAJANDO…</span>
+          <button class="btn" type="button" id="rm-stop" hidden>Parar</button>
+          <button class="btn primary" type="submit" id="rm-send">Enviar</button>
+        </form>
+      </div>
+    </section>
+
+    <!-- MINI AGENTE DEL MÓVIL: el agente trabajando dentro del propio teléfono (solo apps de Android/iOS) -->
+    <section class="view" id="view-device" hidden>
+      <div class="rm-bar">
+        <span class="rm-status" id="dv-ready" role="status" aria-live="polite" data-kind="off">SIN CONFIGURAR</span>
+        <button class="btn ghost sm" type="button" id="dv-check">Comprobar</button>
+      </div>
+      <div class="rm-pair" id="dv-setup">
+        <h2 class="empty-title">Agente en este móvil</h2>
+        <p class="muted">El agente de JeanCode trabajando dentro del teléfono: archivos, comandos y, en Android, la pantalla (abrir apps, tocar, escribir). Una app normal no puede hacer eso: hace falta el <strong>modo desarrollador con Shizuku</strong> en Android o un <strong>jailbreak</strong> en iPhone. Usa el modelo que tengas conectado en Ajustes. Lo destructivo (desinstalar, borrar datos, reiniciar, ajustes de seguridad) pregunta siempre.</p>
+        <ol class="dv-steps" id="dv-steps"></ol>
+        <button class="btn primary" type="button" id="dv-grant" hidden>Dar permiso en Shizuku</button>
+        <div class="row gap wrap" id="dv-ios" hidden>
+          <input id="dv-token" type="password" class="grow" placeholder="Token del ayudante (lo imprime install.sh)" spellcheck="false" autocomplete="off" aria-label="Token del ayudante del iPhone">
+          <button class="btn primary" type="button" id="dv-ios-save">Conectar</button>
+        </div>
+      </div>
+      <div class="rm-main" id="dv-main" hidden>
+        <div class="rm-head row gap wrap">
+          <input id="dv-root" type="text" class="grow mono" spellcheck="false" aria-label="Carpeta de trabajo en el teléfono">
+          <select id="dv-perm" aria-label="Permisos"><option value="ask">Preguntar todo</option><option value="auto-edit">Editar sin preguntar</option></select>
+          <button class="btn ghost sm" type="button" id="dv-clear">Nueva</button>
+        </div>
+        <div class="rm-head row gap wrap">
+          <span class="fine mono grow" id="dv-info"></span>
+          <label class="check" id="dv-screen-row"><input type="checkbox" id="dv-screen"> Controlar la pantalla</label>
+        </div>
+        <ul class="rm-todos" id="dv-todos" hidden></ul>
+        <div class="stream rm-stream" id="dv-stream"></div>
+        <form class="rm-form row gap" id="dv-form">
+          <textarea id="dv-input" rows="2" class="grow" placeholder="Pídele algo a tu teléfono…" aria-label="Mensaje para el agente del móvil"></textarea>
+          <span class="fine mono" id="dv-busy" hidden>TRABAJANDO…</span>
+          <button class="btn" type="button" id="dv-stop" hidden>Parar</button>
+          <button class="btn primary" type="submit" id="dv-send">Enviar</button>
+        </form>
+      </div>
+    </section>
+
+    <!-- IMAGEN: estudio de imagen y vídeo (media/studio.js) -->
+    <section class="view studio" id="view-image" hidden></section>
+
     <!-- COMPOSER -->
     <form class="composer" id="composer">
       <ul class="popup" id="popup" role="listbox" hidden></ul>
       <div class="composer-box">
+        <ul class="att-list" id="att-list" aria-label="Imágenes adjuntas" hidden></ul>
         <textarea id="input" rows="1" placeholder="Escribe a Jean…" aria-label="Mensaje" aria-autocomplete="list" aria-controls="popup"></textarea>
         <div class="composer-row">
+          <label class="icon-btn att-btn" id="att-btn" title="Adjuntar imágenes" hidden>
+            <svg class="i" aria-hidden="true"><use href="#i-clip"/></svg><span class="sr">Adjuntar imágenes</span>
+            <input type="file" id="att-input" accept="image/png,image/jpeg,image/webp,image/gif" multiple>
+          </label>
           <!-- modo de razonamiento: solo lo que admite el modelo elegido (reasoning.js) -->
           <details class="menu up reason-menu" id="reason-menu">
             <summary class="toggle" id="think-btn" title="Cuánto razona el modelo antes de responder">Normal</summary>
@@ -327,7 +442,7 @@
       <p>JeanCode es el cliente de los modelos <strong>Jean</strong> (Grey, Marvel y Fénix) y de otras APIs compatibles con OpenAI.</p>
       <ul>
         <li><strong>Chat</strong>: conversación con respuestas en streaming.</li>
-        <li><strong>Code</strong>: Jean escribe todos los archivos de un proyecto; los editas, ves la vista previa y descargas el .zip. No toca tu PC.</li>
+        <li class="web-only"><strong>Code</strong> (web): Jean escribe todos los archivos de un proyecto; los editas, ves la vista previa y descargas el .zip. No toca tu PC.</li>
         <li><strong>Agent</strong> (escritorio): un agente que trabaja dentro de una carpeta de tu PC.</li>
       </ul>
       <p><a href="https://github.com/jeancodeeer/JeanCode" target="_blank" rel="noopener" id="repo-link">Código fuente en GitHub</a></p>
@@ -429,6 +544,7 @@
         <select id="length-select"><option value="auto">Según la tarea</option><option value="short">Corta</option><option value="long">Larga y detallada</option></select>
       </label>
     </div>
+    <label class="check"><input type="checkbox" id="mascot-on" checked> Mostrar la mascota</label>
     <label class="check"><input type="checkbox" id="auto-compact" checked> Resumir sola la conversación al llegar al 85 % del contexto (te muestra el resumen)</label>
     <label class="field"><span class="label">Estilo de respuesta</span>
       <select id="style-select">
@@ -445,10 +561,31 @@
       <textarea id="sys-chat" rows="3" spellcheck="false"></textarea>
     </label>
     <label class="check desktop-only" hidden><input type="checkbox" id="auto-diag" checked> Revisar cada archivo que edite el agente (errores de sintaxis al momento)</label>
-    <h3 class="desktop-only" hidden>Hooks globales</h3>
-    <p class="note desktop-only" hidden>Comandos que se ejecutan solos en momentos del agente, en todos tus proyectos (como en Claude Code). Eventos: <code>session_start</code>, <code>user_prompt</code>, <code>pre_tool</code>, <code>post_tool</code>, <code>post_edit</code>, <code>stop</code>, <code>post_turn</code>. Reciben JSON por la entrada estándar; salir con código 2 bloquea. <a href="https://github.com/jeancodeeer/JeanCode/blob/main/docs/automations.md" target="_blank" rel="noopener">Guía y ejemplos</a>.</p>
-    <label class="field desktop-only" hidden><span class="label">hooks.json</span>
-      <textarea id="global-hooks" rows="6" spellcheck="false" placeholder='{ "pre_tool": [{ "matcher": "run_command", "command": "node ~/hooks/revisa-comando.js" }] }'></textarea>
+    <h3 class="desktop-only" hidden>Control desde el móvil</h3>
+    <div class="desktop-only" id="remote-host" hidden>
+      <p class="note">Maneja el agente de este PC desde tu móvil (web o app de JeanCode), como Remote Control de Claude Code. Todo va cifrado de extremo a extremo con una clave por móvil. En la misma Wi-Fi la conexión es directa; para usarlo desde fuera hace falta tu <strong>Worker</strong> de Cloudflare (el de la carpeta <code>relay/</code>): intenta P2P y, si la red no lo deja, pasa por él (sin poder leer nada). Solo funciona con JeanCode abierto.</p>
+      <label class="check"><input type="checkbox" id="remote-enabled"> Permitir el control desde móviles emparejados</label>
+      <label class="check"><input type="checkbox" id="remote-lan" checked> Conexión directa en la misma Wi-Fi</label>
+      <div class="row gap wrap">
+        <input id="remote-worker" type="url" class="grow" placeholder="Worker para conectar desde fuera: https://jeancode-relay.tu-usuario.workers.dev" spellcheck="false" aria-label="URL del Worker">
+        <input id="remote-wkey" type="password" placeholder="RELAY_KEY del Worker" spellcheck="false" autocomplete="off" aria-label="Clave del Worker">
+        <button class="btn" type="button" id="remote-save">Guardar</button>
+      </div>
+      <p class="fine mono" id="remote-status" role="status" aria-live="polite"></p>
+      <div class="row gap wrap"><button class="btn primary" type="button" id="remote-pair">Emparejar un móvil</button></div>
+      <div class="remote-qr" id="remote-qr" hidden>
+        <img id="remote-qr-img" alt="Código QR para emparejar el móvil" width="240" height="240">
+        <div>
+          <p class="note">Escanéalo con la cámara del móvil (abre JeanCode web) o, en la app, con <strong>PC → Escanear QR</strong>. También puedes copiar el enlace. Caduca a los 10 minutos y sirve una sola vez; al usarlo, el PC te pedirá confirmación.</p>
+          <div class="row gap wrap"><button class="btn sm" type="button" id="remote-copy">Copiar enlace</button><button class="btn ghost sm" type="button" id="remote-cancel">Cancelar</button><span class="fine mono" id="remote-exp"></span></div>
+        </div>
+      </div>
+      <ul class="rows" id="remote-devices"></ul>
+    </div>
+    <h3 class="desktop-only" hidden>Hooks del usuario</h3>
+    <p class="note desktop-only" hidden>Comandos que se ejecutan solos en momentos del agente, en todos tus proyectos, con el mismo formato que el <code>settings.json</code> de Claude Code: eventos <code>PreToolUse</code>, <code>PermissionRequest</code>, <code>PostToolUse</code>, <code>PostToolUseFailure</code>, <code>UserPromptSubmit</code>, <code>Notification</code>, <code>Stop</code>, <code>SubagentStart</code>, <code>SubagentStop</code>, <code>PreCompact</code>, <code>SessionStart</code> y <code>SessionEnd</code>. Las herramientas se llaman como en Claude Code (<code>Bash</code>, <code>Read</code>, <code>Write</code>, <code>Edit</code>…), así que tus hooks de Claude funcionan tal cual. Escribe <code>/hooks</code> en el agente para ver los activos. <a href="https://github.com/jeancodeeer/JeanCode/blob/main/docs/automations.md" target="_blank" rel="noopener">Guía y ejemplos</a>.</p>
+    <label class="field desktop-only" hidden><span class="label">settings.json</span>
+      <textarea id="global-hooks" rows="8" spellcheck="false" placeholder='{ "hooks": { "PreToolUse": [ { "matcher": "Bash", "hooks": [ { "type": "command", "command": "node ~/hooks/revisa-comando.js" } ] } ] } }'></textarea>
     </label>
     <div class="row gap desktop-only" hidden><button class="btn" id="global-hooks-save" type="button">Guardar hooks</button><span class="msg" id="global-hooks-msg" role="status" aria-live="polite"></span></div>
     <h3>Comandos permitidos del agente</h3>
@@ -530,26 +667,57 @@
   <div id="skill-catalog"></div>
 </dialog>
 
+<dialog class="panel wide" id="panel-plugins">
+  <div class="panel-head"><h2>Plugins</h2><button class="icon-btn" data-close aria-label="Cerrar"><svg class="i"><use href="#i-close"/></svg></button></div>
+  <p class="note">Un plugin agrupa skills, subagentes y comandos con el formato de los plugins de Claude Code (<code>.claude-plugin/plugin.json</code>). Sus skills se cargan con <code>load_skill</code>, sus subagentes con <code>spawn_subagent</code> y sus comandos se escriben como <code>/plugin:comando</code>. Solo se usa su texto: los hooks, servidores MCP y scripts del plugin no se ejecutan.</p>
+  <ul class="rows" id="plugin-list"></ul>
+  <div class="row gap wrap">
+    <button class="btn" id="plugin-folder" type="button">Instalar desde carpeta</button>
+    <form id="plugin-url-form" class="add-form grow">
+      <input id="plugin-url" type="url" placeholder="URL https de un repo git con .claude-plugin/plugin.json" spellcheck="false">
+      <button class="btn" type="submit">Instalar</button>
+    </form>
+  </div>
+  <h3>Catálogo</h3>
+  <p class="note">Se descargan de GitHub al instalarlos (clon superficial; ECC tarda un poco, son miles de archivos).</p>
+  <div id="plugin-catalog"></div>
+</dialog>
+
 <dialog class="panel wide" id="panel-automations">
   <div class="panel-head"><h2>Automatizaciones</h2><button class="icon-btn" data-close aria-label="Cerrar"><svg class="i"><use href="#i-close"/></svg></button></div>
-  <p class="note">Tareas que el agente hace solo, cada cierto tiempo o a una hora fija, mientras JeanCode está abierto (si se perdió una con la app cerrada, se hace al abrirla). Nadie puede aprobar nada durante una ejecución: lo que pediría permiso se deniega y se cuenta en el resultado. Solo corren los comandos que ya marcaste como «permitir siempre» en esa carpeta.</p>
+  <p class="note">Tareas que el agente hace solo, como las tareas programadas de Claude: con una expresión cron, una sola vez o a mano. Corren mientras JeanCode está abierto; si se perdió una con la app cerrada, se hace una vez al abrirla. Nadie puede aprobar nada durante una ejecución: lo que pediría permiso se deniega y queda en el historial. Solo corren los comandos que ya marcaste como «permitir siempre» en esa carpeta, y los hooks del usuario y los del proyecto en los que ya confiaste. También puedes pedírselo al agente: «cada lunes a las 9 revisa las dependencias».</p>
   <ul class="rows" id="auto-list"></ul>
-  <h3>Nueva tarea</h3>
+  <h3 id="auto-form-title">Nueva tarea</h3>
   <form id="auto-form" class="auto-form">
-    <input id="auto-name" type="text" placeholder="Nombre (p. ej. Revisar dependencias)" spellcheck="false">
-    <textarea id="auto-prompt" rows="3" placeholder="Qué debe hacer: «Ejecuta npm outdated y resume qué conviene actualizar»"></textarea>
+    <input id="auto-name" type="text" placeholder="Nombre (p. ej. Revisar dependencias)" spellcheck="false" aria-label="Nombre">
+    <textarea id="auto-prompt" rows="3" placeholder="Qué debe hacer: «Ejecuta npm outdated y resume qué conviene actualizar»" aria-label="Instrucciones"></textarea>
     <div class="row gap wrap">
-      <input id="auto-folder" type="text" placeholder="Carpeta de trabajo" spellcheck="false" class="grow">
+      <input id="auto-folder" type="text" placeholder="Carpeta de trabajo" spellcheck="false" class="grow" aria-label="Carpeta de trabajo">
       <button class="btn ghost" id="auto-pick" type="button">Elegir…</button>
     </div>
     <div class="row gap wrap">
       <select id="auto-when" aria-label="Frecuencia"></select>
-      <input id="auto-time" type="time" value="09:00" hidden aria-label="Hora">
+      <select id="auto-day" aria-label="Día de la semana" hidden></select>
+      <input id="auto-time" type="time" value="09:00" aria-label="Hora">
+      <input id="auto-at" type="datetime-local" aria-label="Fecha y hora" hidden>
+      <input id="auto-cron" type="text" class="grow mono" placeholder="30 8 * * 1-5" spellcheck="false" aria-label="Expresión cron" hidden>
+    </div>
+    <p class="fine mono" id="auto-cron-help" role="status" aria-live="polite" hidden></p>
+    <div class="row gap wrap">
+      <select id="auto-model" aria-label="Modelo"></select>
       <select id="auto-perm" aria-label="Permisos">
-        <option value="read">Solo lectura (investigar, revisar, informar)</option>
+        <option value="read">Solo lectura</option>
         <option value="edit">Puede editar archivos</option>
       </select>
-      <button class="btn primary" type="submit">Programar</button>
+      <select id="auto-target" aria-label="Conversación">
+        <option value="new">Conversación nueva cada vez</option>
+        <option value="same">Siempre la misma conversación</option>
+      </select>
+      <label class="check"><input type="checkbox" id="auto-notify" checked> Notificar al terminar</label>
+    </div>
+    <div class="row gap wrap end">
+      <button class="btn ghost" id="auto-cancel" type="button" hidden>Cancelar edición</button>
+      <button class="btn primary" id="auto-submit" type="submit">Programar</button>
     </div>
   </form>
 </dialog>

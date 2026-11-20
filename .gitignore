@@ -5,3 +5,7 @@ desktop/dist/
 .DS_Store
 Thumbs.db
 .impeccable/review/
+relay/.wrangler/
+relay/node_modules/
+relay/.dev.vars
+mobile/ios-helper/__pycache__/

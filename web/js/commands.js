@@ -3,7 +3,11 @@
 export const BUILTIN = [
   { name: 'new', desc: 'Nueva conversación', modes: ['chat', 'code', 'agent'] },
   { name: 'clear', desc: 'Vacía la conversación actual', modes: ['chat', 'code', 'agent'] },
-  { name: 'compact', desc: 'Resume la conversación para liberar contexto', modes: ['chat', 'code', 'agent'] },
+  { name: 'compact', desc: 'Resume la conversación para liberar contexto: /compact [instrucciones]', modes: ['chat', 'code', 'agent'], arg: true },
+  { name: 'hooks', desc: 'Hooks activos aquí y de dónde vienen', modes: ['agent'] },
+  { name: 'imagen', desc: 'Genera una imagen: /imagen un faro al amanecer', modes: ['chat', 'agent'], arg: true },
+  { name: 'video', desc: 'Genera un vídeo: /video olas a cámara lenta', modes: ['chat', 'agent'], arg: true },
+  { name: 'videohtml', desc: 'Crea un vídeo animado con HTML, sin modelo de vídeo: /videohtml anuncio de 10 s', modes: ['chat', 'agent'], arg: true },
   { name: 'model', desc: 'Cambia de modelo: /model jean-marvel', modes: ['chat', 'code', 'agent'], arg: true },
   { name: 'export', desc: 'Exporta la conversación: /export md · json · pdf', modes: ['chat', 'code', 'agent'] },
   { name: 'help', desc: 'Comandos y atajos de teclado', modes: ['chat', 'code', 'agent'] },
@@ -30,12 +34,13 @@ export function matchCommands(query, mode, custom = []) {
     ...BUILTIN.filter((c) => c.modes.includes(mode)),
     ...(mode === 'agent' ? custom.map((c) => ({ name: c.name, desc: c.description || 'comando del proyecto', custom: true })) : []),
   ];
-  return all.filter((c) => c.name.startsWith(q)).slice(0, 12);
+  // los de plugins van con prefijo (ecc:plan): "/plan" también los encuentra
+  return all.filter((c) => c.name.startsWith(q) || c.name.split(':')[1]?.startsWith(q)).slice(0, 12);
 }
 
-/** "/model jean-grey" -> { name: 'model', args: 'jean-grey' } */
+/** "/model jean-grey" -> { name: 'model', args: 'jean-grey' } · "/ecc:plan x" -> { name: 'ecc:plan', args: 'x' } */
 export function parseCommand(text) {
-  const m = text.trim().match(/^\/([\w-]+)\s*([\s\S]*)$/);
+  const m = text.trim().match(/^\/([\w-]+(?::[\w-]+)?)\s*([\s\S]*)$/);
   return m ? { name: m[1].toLowerCase(), args: m[2].trim() } : null;
 }
 

@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>io.github.jeancodeeer.helper</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>@PREFIX@/usr/bin/python3</string>
+		<string>@PREFIX@/usr/libexec/jeancode/jeancode_helper.py</string>
+	</array>
+	<!-- como el usuario mobile: lee y escribe tus archivos y ejecuta comandos, sin ser root -->
+	<key>UserName</key>
+	<string>mobile</string>
+	<key>EnvironmentVariables</key>
+	<dict>
+		<key>HOME</key>
+		<string>/var/mobile</string>
+	</dict>
+	<key>RunAtLoad</key>
+	<true/>
+	<key>KeepAlive</key>
+	<true/>
+</dict>
+</plist>

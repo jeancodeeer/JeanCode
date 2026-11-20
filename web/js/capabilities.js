@@ -12,14 +12,20 @@ import { providerOf } from './providers.js';
 /** Campos de una ficha. true/false = sabido; null = desconocido. */
 const EMPTY = {
   chat: null, code: null, tools: null, vision: null, streaming: null, structured: null, embeddings: null,
-  reasoning: null, context: null, maxOutput: null, local: null, billing: null, price: null, source: [],
+  reasoning: null, context: null, maxOutput: null, local: null, billing: null, price: null, image: null, video: null, source: [],
 };
+
+// Modelos que generan imagen o vídeo (por su nombre, cuando el proveedor no lo informa). No son de chat.
+export const VIDEO_MODEL = /grok-imagine-video|minimax-h\d|hailuo|seedance|\bveo-?\d|kling|\bwan-?\d|wan2\.|ltx-?(video|\d)|cogvideo|mochi-?\d|pixverse|vidu|runway|gen-?4-turbo|hunyuan-?video|\bsora-?\d|text-to-video|image-to-video|[-_/](t2v|i2v)([-_/]|$)/i;
+export const IMAGE_MODEL = /gpt-image|chatgpt-image|dall-e|flux|stable-?diffusion|sdxl|\bsd-?[123](\.\d)?([-_]|$)|^image-01|grok-imagine-image|grok-2-image|qwen-image|z-image|glm-image|cogview|seedream|recraft|ideogram|hidream|playground-v|juggernaut|dreamshaper|kolors|nano-banana|gemini-[\w.-]*image/i;
 
 /*
  * Familias conocidas (id del modelo, sin distinguir mayúsculas). Solo hechos públicos y estables.
  * Para agregar una familia: una línea más. context = ventana documentada por el fabricante.
  */
 const FAMILIES = [
+  { re: VIDEO_MODEL, caps: { chat: false, video: true } },
+  { re: IMAGE_MODEL, caps: { chat: false, image: true } },
   // Jean: plantillas Qwen con tool calls. El CONTEXTO no va aquí: depende de quién lo sirve (serve.sh
   // usa -c 131072; Ollama usa su propio num_ctx). Lo informa el adaptador de cada proveedor.
   { re: /^jean-(grey|marvel)/, caps: { chat: true, code: true, tools: true, vision: false, streaming: true } },
@@ -29,10 +35,12 @@ const FAMILIES = [
   { re: /^claude-/, caps: { chat: true, code: true, tools: true, vision: true, streaming: true } },
   { re: /^gemini-/, caps: { chat: true, code: true, tools: true, vision: true, streaming: true } },
   { re: /qwen2\.5-coder|qwen3.*coder|deepseek-coder|codestral|codellama|starcoder/, caps: { chat: true, code: true, streaming: true } },
+  // modelos abiertos que ven imágenes
+  { re: /llava|moondream|pixtral|internvl|minicpm-v|qwen[\d.]*-?vl|[-_]vl([-_:]|$)|vision|llama-?4|gemma-?[34]([-:]|$)|glm-[\d.]+v|[-_]omni[-_]/, caps: { chat: true, vision: true, streaming: true } },
   { re: /llama-?3|mistral|mixtral|qwen|deepseek|gemma|phi-?[34]/, caps: { chat: true, streaming: true } },
   // modelos que NO son de chat: se ocultan del selector
   { re: /embed|embedding|bge-|e5-|nomic-embed/, caps: { chat: false, embeddings: true } },
-  { re: /whisper|transcribe|tts|text-to-speech|dall-e|gpt-image|moderation|rerank|^babbage|^davinci/, caps: { chat: false } },
+  { re: /whisper|transcribe|tts|text-to-speech|moderation|rerank|^babbage|^davinci/, caps: { chat: false } },
 ];
 
 const learned = new Map();   // `${ep.id}|${model}` -> caps aprendidas en uso

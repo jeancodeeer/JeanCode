@@ -6,6 +6,10 @@ import { mkdtempSync, mkdirSync, writeFileSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
+import * as ME from '../web/js/media/engine.js';
+import * as MX from '../web/js/media/edit.js';
+import * as CAP from '../web/js/capabilities.js';
+import * as API from '../web/js/api.js';
 import { VERSION, isNewer } from '../web/js/version.js';
 import { parseFiles, safePath, buildPreview } from '../web/js/code.js';
 import { parseToolCalls, stripToolBlocks } from '../web/js/agent.js';
@@ -568,66 +572,213 @@ test('agente + apps (MCP): permiso por uso, solo lectura en PLAN, permitir siemp
   assert.ok(names.includes('mcp__github__create_issue'));
 });
 
-test('automatizaciones: calendario, tareas pendientes y /loop', async () => {
-  const AU = await import('../web/js/automations.js');
-  const lunes9 = new Date(2026, 10, 9, 9, 0).getTime(); // lunes 9 nov 2026, 09:00
-  assert.equal(AU.nextRun({ kind: 'every', minutes: 30 }, lunes9), lunes9 + 30 * 60000);
-  assert.equal(AU.nextRun({ kind: 'every', minutes: 1 }, lunes9), lunes9 + 5 * 60000, 'mínimo 5 minutos');
-  assert.equal(new Date(AU.nextRun({ kind: 'daily', time: '08:30' }, lunes9)).getDate(), 10, 'las 08:30 ya pasaron: mañana');
-  assert.equal(new Date(AU.nextRun({ kind: 'daily', time: '18:00' }, lunes9)).getHours(), 18);
-  const viernes20 = new Date(2026, 10, 13, 20, 0).getTime();
-  assert.equal(new Date(AU.nextRun({ kind: 'weekdays', time: '09:00' }, viernes20)).getDay(), 1, 'después del viernes, el lunes');
-  assert.equal(new Date(AU.nextRun({ kind: 'weekly', time: '09:00' }, lunes9 + 60000)).getDate(), 16, 'el lunes siguiente');
-  assert.deepEqual(AU.dueTasks([{ id: 'a', next: 1 }, { id: 'b', next: Date.now() + 1e6 }, { id: 'c', next: 1, enabled: false }]).map((t) => t.id), ['a']);
-  assert.equal(AU.parseInterval('10m'), 600000);
-  assert.equal(AU.parseInterval('5s'), 60000, 'mínimo 1 minuto');
-  assert.equal(AU.parseInterval('mañana'), null);
-  assert.throws(() => AU.parseSchedule('daily', ''), /hora/);
+test('cron: campos, nombres, pasos, @macros, zonas horarias, día del mes O de la semana y cambio de hora', async () => {
+  const C = await import('../web/js/cron.js');
+  const iso = (ms) => new Date(ms).toISOString();
+  const base = Date.UTC(2026, 10, 16, 21, 7); // lunes 16-nov-2026 21:07Z
+  assert.equal(iso(C.nextCron('CRON_TZ=UTC */15 * * * *', base)), '2026-11-16T21:15:00.000Z');
+  assert.equal(iso(C.nextCron('CRON_TZ=UTC 30 8 * * MON-FRI', base)), '2026-11-17T08:30:00.000Z');
+  assert.equal(iso(C.nextCron('CRON_TZ=UTC @daily', base)), '2026-11-17T00:00:00.000Z');
+  assert.equal(iso(C.nextCron('CRON_TZ=UTC 0 0 29 2 *', base)), '2028-02-29T00:00:00.000Z', 'el próximo 29 de febrero');
+  assert.equal(iso(C.nextCron('CRON_TZ=UTC 0 12 13 * 5', base)), '2026-11-20T12:00:00.000Z', 'día 13 O viernes (Vixie)');
+  assert.equal(iso(C.nextCron('CRON_TZ=UTC 0 9 * * 7', base)), '2026-11-22T09:00:00.000Z', '7 = domingo');
+  assert.equal(iso(C.nextCron('CRON_TZ=Europe/Madrid 30 3 * * *', Date.UTC(2026, 2, 28, 12))), '2026-03-29T01:30:00.000Z', 'tras el cambio a horario de verano');
+  assert.equal(C.nextCron('CRON_TZ=UTC 0 0 31 2 *', base), null, 'fecha imposible: null');
+  assert.match(C.cronError('61 * * * *'), /fuera de rango en minuto/);
+  assert.match(C.cronError('* * *'), /5 campos/);
+  assert.match(C.cronError('CRON_TZ=Marte/Base * * * * *'), /zona horaria/);
+  assert.equal(C.cronError('0 9 * * 1-5'), '');
+  assert.equal(C.describeCron('30 8 * * 1-5'), 'De lunes a viernes a las 08:30');
+  assert.equal(C.describeCron('*/10 * * * *'), 'Cada 10 minutos');
+  assert.equal(C.presetCron('hourly', { minute: 17 }), '17 * * * *', 'cada hora anclada al minuto de creación');
+  assert.equal(C.presetCron('weekly', { time: '10:05', day: 0 }), '5 10 * * 0');
+  const t0 = Date.now(); for (let i = 0; i < 50; i++) C.nextCron('CRON_TZ=UTC 0 0 29 2 *', base);
+  assert.ok(Date.now() - t0 < 2000, 'rápido aunque la fecha esté lejos');
 });
 
-test('hooks: bloquear con salida 2, aprobar con JSON, contexto, matcher y post_tool', async () => {
-  const { createHooks } = await import('../web/js/hooks.js');
-  const ran = [];
-  const fake = async (command, input) => {
-    ran.push([command, input.event, input.tool]);
-    if (command === 'bloquea') return { code: 2, stdout: '', stderr: 'no se puede tocar .env' };
-    if (command === 'aprueba') return { code: 0, stdout: '{"decision":"allow"}', stderr: '' };
-    if (command === 'contexto') return { code: 0, stdout: 'rama: main', stderr: '' };
-    if (command === 'falla') return { code: 1, stdout: '', stderr: 'roto' };
-    return { code: 0, stdout: '', stderr: '' };
+test('tareas: validar, migrar, una sola vez, historial y pendientes', async () => {
+  const A = await import('../web/js/automations.js');
+  const now = Date.UTC(2026, 10, 16, 21, 7);
+  assert.throws(() => A.validateTask({ prompt: '', folder: 'C:\\p' }, now), /qué debe hacer/);
+  assert.throws(() => A.validateTask({ prompt: 'x', folder: '' }, now), /carpeta/);
+  assert.throws(() => A.validateTask({ prompt: 'x', folder: 'p', schedule: { type: 'cron', cron: '99 * * * *' } }, now), /cron:/);
+  assert.throws(() => A.validateTask({ prompt: 'x', folder: 'p', schedule: { type: 'once', at: now - 1 } }, now), /ya pasó/);
+  const cron = A.validateTask({ name: 'Deps', prompt: 'npm outdated', folder: 'p', schedule: { type: 'cron', cron: 'CRON_TZ=UTC 0 9 * * 1-5' } }, now);
+  assert.equal(new Date(cron.next).toISOString(), '2026-11-17T09:00:00.000Z');
+  assert.deepEqual([cron.perm, cron.target, cron.notify, cron.enabled], ['read', 'new', true, true], 'valores por defecto');
+  const manual = A.validateTask({ prompt: 'x', folder: 'p' }, now);
+  assert.equal(manual.next, null, 'manual: sin próxima');
+  const once = A.validateTask({ prompt: 'x', folder: 'p', schedule: { type: 'once', at: now + 60000 } }, now);
+  assert.deepEqual(A.dueTasks([once, cron, manual], now + 61000).map((t) => t.id), [once.id]);
+  const done = A.recordRun(once, { status: 'ok', start: now + 61000, trigger: 'schedule' }, now + 62000);
+  assert.equal(done.enabled, false, 'una sola vez: queda en pausa al ejecutarse');
+  assert.equal(done.next, null);
+  const manualRun = A.recordRun(once, { status: 'ok', start: now, trigger: 'manual' }, now);
+  assert.equal(manualRun.enabled, true, 'ejecutarla a mano no consume la ejecución programada');
+  let t = cron;
+  for (let i = 0; i < A.MAX_RUNS + 5; i++) t = A.recordRun(t, { status: 'ok', start: now + i, trigger: 'schedule' }, now + 86400000 * 3);
+  assert.equal(t.runs.length, A.MAX_RUNS, 'historial acotado');
+  assert.ok(t.next > now + 86400000 * 3, 'la próxima se calcula desde ahora: no se repite lo perdido');
+  // tareas de la versión anterior
+  const old = A.migrateTask({ id: 'a', name: 'x', prompt: 'p', folder: 'f', schedule: { kind: 'weekdays', time: '08:30' }, perm: 'edit', enabled: true, lastRun: 5, lastOk: false, lastThread: 'th' });
+  assert.deepEqual(old.schedule, { type: 'cron', cron: '30 8 * * 1-5' });
+  assert.equal(old.runs[0].status, 'error'); assert.equal(old.runs[0].thread, 'th');
+  assert.equal(old.lastRun, undefined);
+  assert.equal(A.migrateTask({ schedule: { kind: 'every', minutes: 15 } }).schedule.cron, '*/15 * * * *');
+  assert.equal(A.migrateTask(old), old, 'ya migrada: igual');
+  assert.match(A.taskSummary(cron), /Deps · De lunes a viernes a las 09:00.*\(CRON_TZ=UTC 0 9 \* \* 1-5\).*solo lectura/);
+  assert.equal(A.parseInterval('10m'), 600000);
+  assert.equal(A.parseInterval('5s'), 60000, 'mínimo 1 minuto');
+  assert.equal(A.parseInterval('revisa'), null);
+});
+
+test('agente: schedule_task pide permiso para crear y en PLAN solo lista; send_later y schedule_wakeup', async () => {
+  const calls = [];
+  const scheduler = {
+    list: () => 'LISTA', runs: (id) => `RUNS ${id}`,
+    act: async (action, a, ask) => { const ok = await ask({ title: 'PROGRAMAR TAREA', command: a.name }); calls.push([action, ok]); return ok ? 'creada' : 'RECHAZADO por el usuario.'; },
+    sendLater: (a) => `luego: ${a.message}`, wakeup: (a) => `en ${a.delaySeconds}`,
+  };
+  const r1 = await runScripted([{ tool: 'schedule_task', args: { action: 'create', name: 'Deps', prompt: 'x', cron: '0 9 * * 1' } }, { tool: 'send_later', args: { message: 'revisa CI', delay_minutes: 30 } }, { tool: 'schedule_wakeup', args: { delaySeconds: 300 } }], { ctx: { scheduler } });
+  assert.deepEqual(r1.log.confirms, ['PROGRAMAR TAREA'], 'crear pide permiso');
+  assert.deepEqual(calls, [['create', true]]);
+  assert.ok(r1.msgs.some((m) => m.role === 'tool' && m.content === 'luego: revisa CI'));
+  assert.ok(r1.msgs.some((m) => m.role === 'tool' && m.content === 'en 300'));
+  const r2 = await runScripted([{ tool: 'schedule_task', args: { action: 'list' } }, { tool: 'schedule_task', args: { action: 'delete', id: 'a' } }], { ctx: { scheduler, mode: 'plan' } });
+  assert.ok(r2.msgs.some((m) => m.role === 'tool' && m.content === 'LISTA'));
+  assert.ok(r2.msgs.some((m) => m.role === 'tool' && /DENEGADO: modo PLAN/.test(m.content)), 'en PLAN no se borra');
+  const r3 = await runScripted([{ tool: 'schedule_task', args: { action: 'list' } }], {});
+  assert.ok(r3.msgs.some((m) => m.role === 'tool' && /solo están en la app de escritorio/.test(m.content)));
+});
+
+test('hooks: configuración con el esquema de Claude Code y conversión del formato antiguo', () => {
+  const HC = require('../desktop/lib/hookconfig.js');
+  const claude = HC.normalize({ permissions: { allow: [] }, hooks: {
+    PreToolUse: [{ matcher: 'Bash', hooks: [{ type: 'command', command: 'a', timeout: 9999 }] }],
+    Stop: [{ hooks: [{ type: 'prompt', prompt: '¿terminó? $ARGUMENTS' }] }],
+  } });
+  assert.deepEqual(claude.hooks.PreToolUse, [{ matcher: 'Bash', hooks: [{ type: 'command', command: 'a', timeout: 600 }] }], 'timeout acotado a 600 s');
+  assert.equal(claude.hooks.Stop[0].hooks[0].type, 'prompt');
+  const legacy = HC.normalize({ pre_tool: [{ matcher: 'run_command', command: 'x' }], post_edit: ['fmt {path}'], session_start: ['ctx'] });
+  assert.equal(legacy.hooks.PreToolUse[0].matcher, 'run_command');
+  assert.equal(legacy.hooks.PostToolUse[0].matcher, 'Write|Edit', 'post_edit = PostToolUse sobre Write|Edit');
+  assert.equal(legacy.hooks.SessionStart[0].hooks[0].command, 'ctx');
+  assert.equal(HC.normalize({ disableAllHooks: true }).disableAll, true);
+  assert.throws(() => HC.normalize({ hooks: { PreToolUze: [] } }), /desconocido/);
+  assert.throws(() => HC.normalize({ hooks: { PreToolUse: [{ matcher: '(', hooks: [] }] } }), /matcher inválido/);
+  assert.throws(() => HC.normalize({ hooks: { Stop: [{ hooks: [{ type: 'http' }] }] } }), /tipo de hook desconocido/);
+});
+
+test('hooks: entrada y salida como Claude Code (nombres, campos, código 2, deny > ask > allow, updatedInput, continue)', async () => {
+  const { createHooks, toolInput, fromToolInput, claudeToolName } = await import('../web/js/hooks.js');
+  assert.equal(claudeToolName('run_command'), 'Bash');
+  assert.deepEqual(toolInput('edit_file', { path: 'src/a.js', old: 'x', new: 'y' }, 'C:\\proj'), { file_path: 'C:\\proj\\src\\a.js', old_string: 'x', new_string: 'y' });
+  assert.deepEqual(fromToolInput('edit_file', { file_path: 'C:\\proj\\src\\b.js' }, 'C:\\proj', { path: 'src/a.js', old: 'x', new: 'y' }), { path: 'src\\b.js', old: 'x', new: 'y' });
+  const seen = [];
+  const out = {
+    bloquea: { code: 2, stderr: 'no se toca .env' },
+    permite: { code: 0, stdout: JSON.stringify({ hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'allow' } }) },
+    pregunta: { code: 0, stdout: JSON.stringify({ hookSpecificOutput: { permissionDecision: 'ask', permissionDecisionReason: 'revisa' } }) },
+    reescribe: { code: 0, stdout: JSON.stringify({ hookSpecificOutput: { permissionDecision: 'allow', updatedInput: { command: 'npm test -- --ci' } } }) },
+    contexto: { code: 0, stdout: 'rama: main' },
+    adicional: { code: 0, stdout: JSON.stringify({ hookSpecificOutput: { additionalContext: 'lint ok' }, systemMessage: 'formateado' }) },
+    para: { code: 0, stdout: JSON.stringify({ continue: false, stopReason: 'cuota agotada' }) },
+    falla: { code: 1, stderr: 'roto' },
+    texto: { code: 0, stdout: 'hecho' },
   };
   const H = createHooks([
-    { label: 'globales', hooks: { pre_tool: [{ matcher: 'write_file|edit_file', command: 'bloquea' }, { matcher: 'run_command', command: 'aprueba' }], session_start: [{ command: 'contexto' }] } },
-    { label: 'proyecto', hooks: { post_tool: [{ command: 'falla' }], post_edit: [{ command: 'fmt {path}' }] } },
-  ], fake);
-  const b = await H.run('pre_tool', { tool: 'write_file', args: {} });
-  assert.equal(b.blocked, true);
-  assert.equal(b.reason, 'no se puede tocar .env');
-  assert.equal((await H.run('pre_tool', { tool: 'run_command' })).allow, true);
-  assert.equal((await H.run('pre_tool', { tool: 'read_file' })).blocked, false, 'el matcher no coincide');
-  assert.equal((await H.run('pre_tool', { tool: 'xwrite_file' })).blocked, false, 'el matcher es exacto');
-  assert.equal((await H.run('session_start', {})).context, 'rama: main');
-  assert.match((await H.run('post_tool', { tool: 'x' })).notes[0], /salida 1/);
-  assert.match((await H.run('post_edit', { path: 'a; rm -rf /' })).notes[0], /omitido/);
-  await H.run('post_edit', { path: 'src/a.js' });
-  assert.deepEqual(ran.at(-1), ['fmt src/a.js', 'post_edit', undefined]);
-  assert.equal(H.has('stop'), false);
+    { label: 'usuario', hooks: { PreToolUse: [{ matcher: 'Write|Edit', hooks: [{ type: 'command', command: 'bloquea' }] }, { matcher: 'Bash', hooks: [{ type: 'command', command: 'permite' }, { type: 'command', command: 'pregunta' }] }],
+      SessionStart: [{ matcher: 'startup', hooks: [{ type: 'command', command: 'contexto' }] }] } },
+    { label: '.claude/settings.json', hooks: { PostToolUse: [{ matcher: '', hooks: [{ type: 'command', command: 'adicional' }, { type: 'command', command: 'texto' }, { type: 'command', command: 'falla' }] }],
+      PreToolUse: [{ matcher: 'mcp__github__.*', hooks: [{ type: 'command', command: 'reescribe' }] }, { matcher: 'Bash', hooks: [{ type: 'command', command: 'permite' }] }],
+      UserPromptSubmit: [{ hooks: [{ type: 'command', command: 'para' }] }] } },
+  ], { exec: async (cmd, input) => { seen.push([cmd, input.hook_event_name, input.tool_name, input.cwd]); return out[cmd]; }, base: () => ({ cwd: 'C:\\proj', session_id: 's1', permission_mode: 'default' }) });
+
+  const w = await H.run('PreToolUse', { tool_name: 'Write', jeancode_tool: 'write_file' });
+  assert.equal(w.blocked, true); assert.equal(w.decision, 'deny'); assert.equal(w.reason, 'no se toca .env');
+  assert.deepEqual(seen.at(-1), ['bloquea', 'PreToolUse', 'Write', 'C:\\proj'], 'entrada con hook_event_name, tool_name y cwd');
+  const b = await H.run('PreToolUse', { tool_name: 'Bash', jeancode_tool: 'run_command' });
+  assert.equal(b.decision, 'ask', 'ask gana a allow'); assert.equal(b.decisionReason, 'revisa');
+  assert.equal(seen.filter((x) => x[0] === 'permite').length, 1, 'el mismo comando en dos fuentes corre una vez');
+  assert.equal((await H.run('PreToolUse', { tool_name: 'Read', jeancode_tool: 'read_file' })).ran, 0, 'matcher exacto: Read no casa con Write|Edit');
+  assert.equal((await H.run('PreToolUse', { tool_name: 'x', jeancode_tool: 'edit_file' })).ran, 0);
+  const m = await H.run('PreToolUse', { tool_name: 'mcp__github__create_issue' });
+  assert.deepEqual(m.updatedInput, { command: 'npm test -- --ci' });
+  assert.equal((await H.run('SessionStart', { source: 'startup' })).context, 'rama: main', 'texto de SessionStart = contexto');
+  assert.equal((await H.run('SessionStart', { source: 'resume' })).ran, 0, 'matcher de SessionStart sobre source');
+  const post = await H.run('PostToolUse', { tool_name: 'Bash' });
+  assert.equal(post.context, 'lint ok'); assert.deepEqual(post.messages.slice(0, 1), ['formateado']);
+  assert.deepEqual(post.outputs, ['hecho'], 'el texto de PostToolUse va al registro, no al modelo');
+  assert.match(post.messages[1], /falló con código 1: roto/);
+  const up = await H.run('UserPromptSubmit', { prompt: 'hola' });
+  assert.equal(up.stop, true); assert.equal(up.stopReason, 'cuota agotada');
+  assert.equal(H.has('SessionEnd'), false);
+  assert.equal(H.list().length, 10, 'list() para /hooks: todos los configurados');
 });
 
-test('agente + hooks: pre_tool bloquea la herramienta, stop obliga a seguir', async () => {
-  const blocked = [];
+test('hooks: PermissionRequest y hooks de tipo prompt', async () => {
+  const { createHooks } = await import('../web/js/hooks.js');
+  const H = createHooks([{ label: 'u', hooks: {
+    PermissionRequest: [{ matcher: 'WebFetch', hooks: [{ type: 'command', command: 'pr' }] }],
+    Stop: [{ hooks: [{ type: 'prompt', prompt: '¿Están las pruebas en verde? $ARGUMENTS' }] }],
+    Notification: [{ hooks: [{ type: 'prompt', prompt: 'x' }] }],
+  } }], {
+    exec: async () => ({ code: 0, stdout: JSON.stringify({ hookSpecificOutput: { decision: { behavior: 'deny', message: 'sin internet' } } }) }),
+    llm: async (prompt) => (prompt.includes('"last_assistant_message": "listo"') ? '```json\n{"ok": false, "reason": "no ejecutaste npm test"}\n```' : '{"ok": true}'),
+  });
+  const pr = await H.run('PermissionRequest', { tool_name: 'WebFetch' });
+  assert.equal(pr.decision, 'deny'); assert.equal(pr.reason, 'sin internet');
+  const st = await H.run('Stop', { stop_hook_active: false, last_assistant_message: 'listo' });
+  assert.equal(st.blocked, true); assert.equal(st.reason, 'no ejecutaste npm test');
+  assert.equal((await H.run('Stop', { last_assistant_message: 'pruebas: 12 ok' })).blocked, false);
+  assert.match((await H.run('Notification', {})).messages[0], /no admite hooks de tipo prompt/);
+});
+
+test('agente + hooks: PreToolUse bloquea, Stop obliga a seguir con stop_hook_active y SubagentStart da contexto', async () => {
+  const calls = [];
+  const R = (o = {}) => ({ blocked: false, reason: '', decision: null, decisionReason: '', updatedInput: null, context: '', stop: false, stopReason: '', messages: [], outputs: [], ran: 1, ...o });
   const hooks = {
-    has: (e) => e === 'pre_tool' || e === 'stop',
+    has: (e) => ['PreToolUse', 'Stop'].includes(e),
     run: async (e, p) => {
-      if (e === 'pre_tool') { blocked.push(p.tool); return { blocked: p.tool === 'run_command', reason: 'comandos prohibidos por la política', allow: false, context: '', notes: [] }; }
-      return { blocked: hooks.stops++ === 0, reason: 'falta ejecutar las pruebas', allow: false, context: '', notes: [] };
+      calls.push([e, p.tool_name, p.stop_hook_active, p.tool_input]);
+      if (e === 'PreToolUse') return R(p.tool_name === 'Bash' ? { blocked: true, decision: 'deny', reason: 'comandos prohibidos por la política' } : {});
+      return R({ blocked: hooks.stops++ === 0, reason: 'falta ejecutar las pruebas' });
     },
     stops: 0,
   };
   const { log, msgs } = await runScripted([{ tool: 'run_command', args: { command: 'npm test' } }], { ctx: { hooks } });
   assert.deepEqual(log.ran, [], 'el comando no se ejecutó');
+  assert.deepEqual(calls[0], ['PreToolUse', 'Bash', undefined, { command: 'npm test' }], 'nombre y campos de Claude Code');
   assert.ok(msgs.some((m) => m.role === 'tool' && /BLOQUEADO por un hook: comandos prohibidos/.test(m.content)));
-  assert.ok(msgs.some((m) => m.role === 'user' && /UN HOOK PIDE CONTINUAR.*pruebas/.test(m.content)), 'stop hizo seguir una vez');
+  assert.ok(msgs.some((m) => m.role === 'user' && /PIDE CONTINUAR.*pruebas/.test(m.content)), 'Stop hizo seguir una vez');
+  assert.deepEqual(calls.filter((c) => c[0] === 'Stop').map((c) => c[2]), [false, true], 'stop_hook_active la segunda vez');
+});
+
+test('hooks del proyecto: .claude/settings.json, .jeancode/settings.local.json y hooks.json antiguo, con huella', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'jc-hooks-'));
+  mkdirSync(join(root, '.claude')); mkdirSync(join(root, '.jeancode'));
+  writeFileSync(join(root, '.claude', 'settings.json'), JSON.stringify({ hooks: { PreToolUse: [{ matcher: 'Bash', hooks: [{ type: 'command', command: 'a' }] }] } }));
+  writeFileSync(join(root, '.jeancode', 'settings.local.json'), JSON.stringify({ hooks: { Stop: [{ hooks: [{ type: 'command', command: 'b' }] }] } }));
+  writeFileSync(join(root, '.jeancode', 'hooks.json'), JSON.stringify({ post_edit: ['fmt {path}'] }));
+  const h = await tools.hooks(root);
+  assert.deepEqual(h.sources.map((s) => s.file), ['.claude/settings.json', '.jeancode/settings.local.json', '.jeancode/hooks.json']);
+  assert.match(h.hash, /^[0-9a-f]{64}$/);
+  writeFileSync(join(root, '.jeancode', 'settings.local.json'), '{ roto');
+  assert.match((await tools.hooks(root)).error, /settings\.local\.json no es válido/);
+  // disableAllHooks entra en la huella: añadirlo o quitarlo vuelve a pedir confianza
+  writeFileSync(join(root, '.jeancode', 'settings.local.json'), JSON.stringify({ hooks: { Stop: [{ hooks: [{ type: 'command', command: 'b' }] }] } }));
+  const before = (await tools.hooks(root)).hash;
+  writeFileSync(join(root, '.jeancode', 'settings.local.json'), JSON.stringify({ disableAllHooks: true, hooks: { Stop: [{ hooks: [{ type: 'command', command: 'b' }] }] } }));
+  const after = await tools.hooks(root);
+  assert.equal(after.disableAll, true);
+  assert.notEqual(after.hash, before, 'activar disableAllHooks cambia la huella');
+  const solo = mkdtempSync(join(tmpdir(), 'jc-hooks-off-'));
+  mkdirSync(join(solo, '.claude'));
+  writeFileSync(join(solo, '.claude', 'settings.json'), JSON.stringify({ disableAllHooks: true }));
+  const off = await tools.hooks(solo);
+  assert.deepEqual([off.sources.length, off.disableAll, /^[0-9a-f]{64}$/.test(off.hash)], [0, true, true], 'solo disableAllHooks también tiene huella (pide confianza)');
+  const r = await tools.execHook(root, process.platform === 'win32' ? 'echo %CLAUDE_PROJECT_DIR%' : 'echo $CLAUDE_PROJECT_DIR', { hook_event_name: 'Stop' }, 10);
+  assert.equal(r.stdout.trim().toLowerCase(), require('node:fs').realpathSync(root).toLowerCase(), 'CLAUDE_PROJECT_DIR como en Claude Code');
 });
 
 test('control: buscar controles por nombre (sin tildes, por etiqueta vecina) y sugerencias', async () => {
@@ -842,4 +993,957 @@ test('versión nueva: plataforma, descarga y tipo de salto', () => {
   assert.equal(updateFrom(rel, { platform: 'win', current: '1.3.0' }), null, 'misma versión');
   assert.equal(updateFrom(rel, { platform: 'win', current: '1.2.2', skipped: '1.3.0' }), null, 'omitida');
   assert.equal(updateFrom({ ...rel, prerelease: true }, { platform: 'win', current: '1.2.2' }), null);
+});
+
+/* ---------------- plugins (formato de Claude Code) ---------------- */
+const pluginsLib = require('../desktop/lib/plugins.js');
+const { catalogLines, PLUGIN_INLINE_MAX } = await import('../web/js/agent.js');
+
+function fakePlugin(skills = 2) {
+  const src = mkdtempSync(join(tmpdir(), 'jc-plugin-src-'));
+  const w = (rel, text) => { mkdirSync(join(src, rel, '..'), { recursive: true }); writeFileSync(join(src, rel), text); };
+  w('.claude-plugin/plugin.json', JSON.stringify({ name: 'demo', displayName: 'Demo', version: '1.0.0', license: 'MIT', agents: ['./.claude-plugin/agents/critic.md'] }));
+  for (let i = 0; i < skills; i++) w(`skills/s${i}/SKILL.md`, `---\nname: s${i}\ndescription: skill ${i}\n---\nCuerpo ${i}. Ver \${CLAUDE_PLUGIN_ROOT}/docs/guia.md`);
+  w('skills/s0/resources/extra.md', 'EXTRA');
+  w('.claude-plugin/agents/critic.md', '---\nname: demo-critic\ndescription: Crítico\ntools: [Read, Grep]\n---\nLee `${CLAUDE_PLUGIN_ROOT}/docs/persona.md`.');
+  w('commands/plan.md', '---\ndescription: Planifica\n---\nPlan para: $ARGUMENTS');
+  w('docs/persona.md', 'PERSONA COMPLETA');
+  w('docs/guia.md', 'GUIA');
+  w('hooks/hooks.json', '{}');
+  w('node_modules/x/index.js', 'malo');
+  return src;
+}
+
+test('plugins: instala solo el texto útil y expone skills, subagentes y comandos', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'jc-plugins-'));
+  const p = pluginsLib.create(dir);
+  const r = await p.installFrom(fakePlugin(), 'https://example.test/demo.git');
+  assert.deepEqual(r.counts, { skills: 2, agents: 1, commands: 1 });
+  const fsx = require('node:fs');
+  assert.ok(!fsx.existsSync(join(dir, 'demo', 'hooks')), 'los hooks no se copian');
+  assert.ok(!fsx.existsSync(join(dir, 'demo', 'node_modules')), 'node_modules no se copia');
+
+  const [agent] = await p.agents();
+  assert.equal(agent.name, 'demo-critic');
+  assert.equal(agent.write, false, 'tools [Read, Grep] = solo lectura');
+  assert.match(agent.prompt, /PERSONA COMPLETA/, 'la persona citada con ${CLAUDE_PLUGIN_ROOT} va dentro del prompt');
+  assert.doesNotMatch(agent.prompt, /CLAUDE_PLUGIN_ROOT/);
+
+  const [cmd] = await p.commands();
+  assert.equal(cmd.name, 'demo:plan');
+  assert.equal(expandCustom(cmd.body, 'login'), 'Plan para: login');
+
+  assert.match(await p.read('s0'), /Cuerpo 0[\s\S]*GUIA/);
+  assert.equal(await p.read('s0', 'resources/extra.md'), 'EXTRA', 'archivo relativo a la skill');
+  assert.equal(await p.read('demo', 'docs/guia.md'), 'GUIA', 'archivo relativo al plugin');
+  await assert.rejects(p.read('demo', '../../secreto.txt'), /no existe en el plugin/);
+  assert.match(await p.read('demo'), /SKILLS \(2\)[\s\S]*SUBAGENTES \(1\)[\s\S]*\/demo:plan/);
+  assert.equal(await p.read('otra-cosa'), null);
+
+  await p.setEnabled('demo', false);
+  assert.equal((await p.skills()).length, 0, 'desactivado = no aporta nada');
+  assert.equal(await p.read('s0'), null);
+  await p.setEnabled('demo', true);
+  await p.installFrom(fakePlugin(), 'x');
+  assert.equal((await p.list())[0].enabled, true, 'reinstalar conserva el estado');
+  await p.remove('demo');
+  assert.deepEqual(await p.list(), []);
+});
+
+test('plugins: rechaza carpetas sin manifiesto y tools ausente = todas', async () => {
+  const p = pluginsLib.create(mkdtempSync(join(tmpdir(), 'jc-plugins-')));
+  await assert.rejects(p.installFrom(mkdtempSync(join(tmpdir(), 'jc-vacio-'))), /no es un plugin/);
+  assert.equal(pluginsLib.canWrite(undefined), true);
+  assert.equal(pluginsLib.canWrite('Read, Grep, Glob'), false);
+  assert.equal(pluginsLib.canWrite('Read, Edit, Bash'), true);
+});
+
+test('plugins: los grandes se resumen en el prompt y los comandos llevan prefijo', () => {
+  const many = Array.from({ length: PLUGIN_INLINE_MAX + 5 }, (_, i) => ({ name: `k${i}`, description: 'd', plugin: 'big' }));
+  const text = catalogLines([{ name: 'propia', description: 'mía' }, ...many, { name: 'e1', description: 'x', plugin: 'egm' }], 'skills');
+  assert.match(text, /- propia: mía/);
+  assert.match(text, /PLUGIN big: 30 skills[\s\S]*load_skill \{"name": "big"\}/);
+  assert.doesNotMatch(text, /- k29/);
+  assert.match(text, /PLUGIN egm:\n- e1: x/);
+  assert.deepEqual(parseCommand('/ecc:plan añadir login'), { name: 'ecc:plan', args: 'añadir login' });
+  assert.deepEqual(matchCommands('pla', 'agent', [{ name: 'ecc:plan', description: 'p' }]).filter((c) => c.custom).map((c) => c.name), ['ecc:plan']);
+});
+
+test('plugins: un "name" malicioso no sale de la carpeta de plugins', async () => {
+  const fsx = require('node:fs');
+  const parent = mkdtempSync(join(tmpdir(), 'jc-padre-'));
+  const dir = join(parent, 'plugins');
+  writeFileSync(join(parent, 'centinela.txt'), 'no me borres');
+  const p = pluginsLib.create(dir);
+  for (const name of ['..', '.', '../..', '.git', '-..']) {
+    const src = mkdtempSync(join(tmpdir(), 'jc-evil-'));
+    mkdirSync(join(src, '.claude-plugin'));
+    writeFileSync(join(src, '.claude-plugin', 'plugin.json'), JSON.stringify({ name }));
+    const r = await p.installFrom(src).catch((e) => e);
+    if (!(r instanceof Error)) assert.equal(require('node:path').dirname(join(dir, r.id)), dir, `id ${r.id} queda dentro`);
+    assert.ok(fsx.existsSync(join(parent, 'centinela.txt')), `"${name}" no borra la carpeta padre`);
+  }
+  await p.remove('..'); // slug('..') = 'plugin': nunca la carpeta padre
+  assert.ok(fsx.existsSync(join(parent, 'centinela.txt')));
+});
+/* ---------------- control remoto: cifrado, sesión y transportes ---------------- */
+const RC = await import('../web/js/remote/crypto.js');
+const RL = await import('../web/js/remote/link.js');
+
+test('remoto: cifrado E2E, saludo, secuencia, manipulación y otra sala', async () => {
+  const secret = RC.b64u(RC.randomBytes(32));
+  const a = await RC.deriveKeys(secret);
+  const b = await RC.deriveKeys(RC.unb64u(secret));
+  assert.equal(a.room, b.room); assert.match(a.room, /^[0-9a-f]{32}$/);
+  assert.notEqual(a.room, (await RC.deriveKeys(RC.randomBytes(32))).room);
+  const phone = new RC.Session(a.key, 'phone');
+  const host = new RC.Session(b.key, 'host');
+  const [h, welcome] = await host.accept(await phone.hello({ name: 'Pixel' }));
+  assert.equal(h.name, 'Pixel');
+  await phone.welcome(welcome);
+  const f1 = await phone.wrap({ type: 'send', text: 'hola' });
+  assert.ok(!JSON.stringify(f1).includes('hola'), 'el contenido no viaja en claro');
+  assert.deepEqual(await host.unwrap(f1), { type: 'send', text: 'hola' });
+  await assert.rejects(host.unwrap(f1), /repetido/, 'un marco grabado no se puede repetir');
+  await assert.rejects(phone.unwrap(f1), /./, 'ni devolverse en sentido contrario');
+  const f2 = await phone.wrap({ type: 'stop' });
+  const tampered = { ...f2, ct: f2.ct.slice(0, -4) + (f2.ct.endsWith('AAAA') ? 'BBBB' : 'AAAA') };
+  await assert.rejects(host.unwrap(tampered), /./, 'manipulado: se rechaza');
+  // otra conexión con la misma clave no acepta marcos de esta
+  const host2 = new RC.Session(b.key, 'host');
+  const phone2 = new RC.Session(a.key, 'phone');
+  await phone2.welcome((await host2.accept(await phone2.hello()))[1]);
+  await assert.rejects(host2.unwrap(await phone.wrap({ type: 'x' })), /./, 'marcos de otra sesión: rechazados');
+  // saludo caducado
+  const old = new RC.Session(a.key, 'phone');
+  const realNow = Date.now; Date.now = () => realNow() - 10 * 60000;
+  const stale = await old.hello();
+  Date.now = realNow;
+  await assert.rejects(new RC.Session(b.key, 'host').accept(stale), /caducado/);
+  // emparejamiento
+  const code = RC.encodePairing({ host: 'h1', name: 'PC', secret, lan: ['ws://192.168.1.5:47321', 'javascript:alert(1)'], worker: 'https://x.workers.dev', exp: Date.now() + 60000 });
+  const p = RC.decodePairing(`https://jeancodeeer.github.io/JeanCode/#pair=${code}`);
+  assert.deepEqual(p.lan, ['ws://192.168.1.5:47321'], 'solo URLs ws(s) válidas');
+  assert.equal(p.worker, 'https://x.workers.dev');
+  assert.throws(() => RC.decodePairing(RC.encodePairing({ host: 'h', secret, exp: Date.now() - 1 })), /caducó/);
+  assert.throws(() => RC.decodePairing('basura'), /no es válido/);
+});
+
+/** WebSocket simulado: las URLs se resuelven contra `servers` (url → (serverPipe) => void). */
+function fakeNet(servers) {
+  return class FakeWS {
+    constructor(url) {
+      this.readyState = 0;
+      const route = Object.keys(servers).find((k) => url.startsWith(k));
+      setTimeout(() => {
+        if (!route) { this.onerror?.(); this.onclose?.(); return; }
+        const server = new RL.Pipe('lan');
+        server.send = (obj) => setTimeout(() => this.onmessage?.({ data: JSON.stringify(obj) }), 0);
+        server.close = () => { this.readyState = 3; this.onclose?.(); server.ended(); };
+        this.toServer = (text) => setTimeout(() => server.deliver(text), 0);
+        this.serverPipe = server;
+        this.readyState = 1;
+        servers[route](server, url);
+        this.onopen?.();
+      }, 1);
+    }
+    send(text) { this.toServer(text); }
+    close() { this.readyState = 3; this.serverPipe?.ended(); this.onclose?.(); }
+  };
+}
+
+test('remoto: el móvil prueba la Wi-Fi y si no, el relay; mensajes en los dos sentidos y reconexión', async () => {
+  const secret = RC.randomBytes(32);
+  const { key, room } = await RC.deriveKeys(secret);
+  const got = [];
+  const acceptor = new RL.HostAcceptor({
+    rooms: async (r) => (r === room ? { key, id: 'dev1' } : null),
+    onLink: (link, hello) => { got.push(['link', link.kind, hello.name]); link.on('message', (m) => { got.push(['msg', m.type]); link.send({ type: 'echo', of: m.type }); }); },
+    RTC: null,
+  });
+  const lanWS = fakeNet({ 'ws://192.168.1.5:1/r/': (pipe, url) => acceptor.accept(pipe, url.split('/r/')[1]) });
+  const link = await RL.phoneConnect({ secret: RC.b64u(secret), lan: ['ws://192.168.1.9:1', 'ws://192.168.1.5:1'] }, { hello: { name: 'Pixel' }, WS: lanWS, p2p: false });
+  assert.equal(link.kind, 'lan');
+  const echo = new Promise((r) => link.on('message', r));
+  await link.send({ type: 'ping' });
+  assert.deepEqual(await echo, { type: 'echo', of: 'ping' });
+  assert.deepEqual(got.slice(0, 2), [['link', 'lan', 'Pixel'], ['msg', 'ping']]);
+  // sala equivocada: el PC no responde
+  const wrong = await RC.deriveKeys(RC.randomBytes(32));
+  await assert.rejects(RL.phoneConnect({ secret: RC.b64u(RC.randomBytes(32)), lan: ['ws://192.168.1.5:1'] }, { WS: lanWS, p2p: false }).catch((e) => { throw e; }), /./);
+  void wrong;
+  // sin Wi-Fi: relay por el Worker (una sala con un único tubo hacia el PC, como el Durable Object)
+  let hostPipe = null;
+  const relayWS = fakeNet({ 'wss://w.example/remote/': (pipe) => { hostPipe = pipe; acceptor.accept(pipe, room); } });
+  const r1 = await RL.phoneConnect({ secret: RC.b64u(secret), lan: [], worker: 'https://w.example' }, { hello: { name: 'Pixel' }, WS: relayWS, p2p: false });
+  assert.equal(r1.kind, 'relay');
+  const e1 = new Promise((r) => r1.on('message', r));
+  await r1.send({ type: 'state' });
+  assert.equal((await e1).of, 'state');
+  assert.ok(hostPipe);
+  // aviso del Worker: el móvil se fue → la conexión del PC se cierra
+  const closed = new Promise((r) => [...acceptor.links].at(-1).on('close', r));
+  hostPipe.deliver(JSON.stringify({ t: 'peer', state: 'leave' }));
+  await closed;
+  assert.equal(RL.relayUrl('https://w.example', 'abc', 'host', 'k1'), 'wss://w.example/remote/abc?role=host&k=k1');
+  await assert.rejects(RL.phoneConnect({ secret: RC.b64u(secret), lan: [] }, { WS: relayWS }), /Worker/);
+});
+
+test('remoto: el servidor de la Wi-Fi cierra lo que no se identifica y limita las conexiones por dirección', async () => {
+  const lanLib = require('../desktop/lib/remote-lan.js');
+  const WS = require('../desktop/node_modules/ws');
+  const events = [];
+  const lan = lanLib.create({ onEvent: (e) => events.push(e), helloMs: 400 });
+  const st = await lan.start(0);
+  const url = `ws://127.0.0.1:${st.port}/r/${'a'.repeat(32)}`;
+  const open = (u) => new Promise((resolve) => { const ws = new WS(u); ws.on('open', () => resolve(ws)); ws.on('error', () => resolve(ws)); });
+  const closedIn = (ws, ms) => new Promise((resolve) => { if (ws.readyState === 3) return resolve(true); const t = setTimeout(() => resolve(false), ms); ws.on('close', () => { clearTimeout(t); resolve(true); }); });
+  try {
+    const bad = await open(`ws://127.0.0.1:${st.port}/otra-cosa`);
+    assert.equal(await closedIn(bad, 1000), true, 'ruta no válida: fuera');
+    const a = await open(url), b = await open(url), c = await open(url);
+    const d = await open(url);
+    assert.equal(await closedIn(d, 1000), true, 'cuarta conexión desde la misma dirección: fuera');
+    // la interfaz responde a "a" (saludo válido): queda identificada; b y c no dicen nada y caen solas
+    const aOpen = events.find((e) => e.type === 'open');
+    lan.send(aOpen.conn, '{"t":"welcome"}');
+    assert.equal(await closedIn(b, 1500), true, 'sin identificarse en el plazo: fuera');
+    assert.equal(await closedIn(c, 1500), true);
+    assert.equal(await closedIn(a, 800), false, 'la identificada sigue abierta');
+    assert.equal(lan.status().connections, 1);
+    a.close();
+  } finally { lan.stop(); }
+});
+
+/* ---------------- mini agente del móvil ---------------- */
+const MD = await import('../web/js/mobile/device.js');
+const MS = await import('../web/js/mobile/shim.js');
+
+test('móvil: rutas confinadas, glob, texto de input y volcado de uiautomator', () => {
+  assert.equal(MS.insidePath('/sdcard/JeanCode', 'a/b.txt'), '/sdcard/JeanCode/a/b.txt');
+  assert.equal(MS.insidePath('/sdcard/JeanCode', './a/../b'), '/sdcard/JeanCode/b');
+  assert.throws(() => MS.insidePath('/sdcard/JeanCode', '../secreto'), /fuera/);
+  assert.throws(() => MS.insidePath('/sdcard/JeanCode', '/data/data/x'), /fuera/);
+  assert.equal(MS.insidePath('/sdcard/JeanCode', '/sdcard/JeanCode/x'), '/sdcard/JeanCode/x');
+  assert.ok(MS.globToRegex('src/**/*.js').test('src/a/b/c.js') && MS.globToRegex('src/**/*.js').test('src/c.js') && !MS.globToRegex('*.js').test('a/b.js'));
+  assert.equal(MD.sq("it's $(rm -rf /)"), "'it'\\''s $(rm -rf /)'");
+  assert.equal(MS.inputText('hola mundo & $x'), 'hola%smundo%s\\&%s\\$x');
+  const xml = '<hierarchy><node text="" content-desc="Ajustes" class="android.widget.ImageView" package="p" clickable="true" bounds="[0,0][100,100]"/><node text="Wi&#39;Fi &amp; red" resource-id="android:id/title" class="android.widget.TextView" clickable="false" bounds="[10,200][310,260]"/><node class="android.widget.EditText" text="" clickable="true" bounds="[0,300][1080,400]"/><node class="x" bounds="[5,5][5,5]"/></hierarchy>';
+  const nodes = MS.parseUiDump(xml);
+  assert.equal(nodes.length, 3);
+  assert.deepEqual([nodes[0].desc, nodes[0].x, nodes[0].y], ['Ajustes', 50, 50]);
+  assert.equal(nodes[1].text, "Wi'Fi & red");
+  assert.equal(MS.findNode(nodes, { name: 'ajustes' }).id, 1);
+  assert.equal(MS.findNode(nodes, { name: 'wi' }).id, 2, 'empieza por');
+  assert.equal(MS.findNode(nodes, { name: 'title' }).id, 2, 'por resource-id');
+  assert.equal(MS.findNode(nodes, { id: 3 }).editable, true);
+});
+
+test('móvil: el agente usa el ayudante del iPhone (Python real) para archivos y comandos, sin inyección', async (t) => {
+  const { spawn, execFileSync } = require('node:child_process');
+  const fsx = require('node:fs');
+  const tmp = mkdtempSync(join(tmpdir(), 'jc-ioshelper-'));
+  const port = 47400 + Math.floor(Math.random() * 500);
+  const win = process.platform === 'win32';
+  const env = { ...process.env, JEANCODE_HELPER_PORT: String(port), JEANCODE_HELPER_TOKEN_FILE: join(tmp, 'token'), JEANCODE_HELPER_SHELL: win ? 'C:\\Program Files\\Git\\bin\\bash.exe' : '/bin/sh' };
+  const py = win ? 'python' : 'python3';
+  const token = execFileSync(py, ['mobile/ios-helper/jeancode_helper.py', '--token'], { env }).toString().trim();
+  const proc = spawn(py, ['mobile/ios-helper/jeancode_helper.py'], { env });
+  t.after(() => proc.kill());
+  await new Promise((r) => proc.stdout.once('data', r));
+  const http = (url, body, headers) => fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json', ...headers }, body: JSON.stringify(body) }).then(async (r) => (r.status === 401 ? { error: 'token' } : r.json()));
+  const bad = MD.iosBackend({ url: `http://127.0.0.1:${port}`, token: 'x'.repeat(43), http });
+  assert.equal((await bad.status()).ready, false, 'sin el token no hay nada');
+  const evil = await fetch(`http://127.0.0.1:${port}/exec`, { method: 'POST', headers: { Authorization: `Bearer ${token}`, Origin: 'https://atacante.example' }, body: '{"cmd":"echo hola"}' });
+  assert.equal(evil.status, 403, 'una página web ajena no puede usarlo aunque tuviera el token');
+  const dev = MD.iosBackend({ url: `http://127.0.0.1:${port}`, token, http });
+  assert.equal((await dev.status()).ready, true);
+  // en Windows, Git Bash usa rutas /c/... y Python C:/...: en un iPhone son la misma ruta
+  const root = win ? tmp.replace(/\\/g, '/').replace(/^([A-Za-z]):/, (m, c) => `/${c.toLowerCase()}`) : tmp;
+  const sys = (p) => (win ? p.replace(/^\/([a-z])\//, (m, c) => `${c.toUpperCase()}:/`) : p);
+  const d = MS.createPhoneDesktop({ ...dev, readFile: (p) => dev.readFile(sys(p)), writeFile: (p, b) => dev.writeFile(sys(p), b) });
+  const name = "nota 'rara' $(touch PWNED).txt";
+  assert.match(await d.fs.write(root, `docs/${name}`, 'línea 1\nlínea dos'), /Creado/);
+  assert.ok(!fsx.existsSync(join(tmp, 'docs', 'PWNED')) && !fsx.existsSync(join(tmp, 'PWNED')), 'el nombre no se ejecutó');
+  assert.match(await d.fs.read(root, `docs/${name}`), /2 líneas\)\n {4}1 {2}línea 1\n {4}2 {2}línea dos/);
+  assert.match(await d.fs.list(root, 'docs'), /nota 'rara' \$\(touch PWNED\)\.txt {2}\(\d+ B\)/);
+  await d.fs.edit(root, `docs/${name}`, 'dos', '2');
+  assert.equal(await d.fs.peek(root, `docs/${name}`), 'línea 1\nlínea 2');
+  assert.deepEqual(await d.fs.glob(root, '**/*.txt'), [`docs/${name}`]);
+  assert.match(await d.fs.search(root, 'línea 2'), /docs\/nota 'rara'.*:2:línea 2/);
+  assert.match(await d.shell.run(root, 'echo "$((6*7))"; pwd'), /^\$ echo[^\n]*\n\(salida 0\)\n42\n/);
+  await assert.rejects(d.fs.read(root, '../fuera.txt'), /fuera de la carpeta/);
+  assert.match(await d.fs.trash(root, `docs/${name}`), /papelera/);
+  assert.equal(fsx.readdirSync(join(tmp, '.papelera')).length, 1);
+});
+
+test('móvil: webfetch con la red nativa, como el del escritorio, sin direcciones privadas', async () => {
+  for (const h of ['localhost', '127.0.0.1', '10.1.2.3', '192.168.1.5', '172.20.0.1', '169.254.169.254', '[::1]', 'fd00::1', 'impresora.local', '100.64.0.1']) assert.equal(MS.isPrivateHost(h), true, h);
+  for (const h of ['example.com', '8.8.8.8', '172.32.0.1', 'docs.python.org']) assert.equal(MS.isPrivateHost(h), false, h);
+  const html = '<html><head><style>p{}</style><script>alert(1)</script></head><body><h1>Título</h1><p>Uno &amp; dos</p></body></html>';
+  const pages = {
+    'https://docs.example.com/x': { status: 200, type: 'text/html', text: html },
+    'https://corto.example/r': { status: 302, location: 'http://192.168.1.1/admin' },
+    'https://salto.example/a': { status: 301, location: '/b' },
+    'https://salto.example/b': { status: 302, location: 'https://docs.example.com/x' },
+    'https://bucle.example/': { status: 302, location: 'https://bucle.example/' },
+    'https://cuela.example/r': { status: 302, location: 'https://interno.example/' },
+  };
+  const asked = [];
+  const pinned = [];
+  const fetchText = async (u, addrs) => { asked.push(u); pinned.push(addrs); return pages[u]; };
+  // DNS: interno.example y rebind.nip.io apuntan a direcciones privadas
+  const dns = { 'docs.example.com': ['93.184.215.14'], 'corto.example': ['93.184.215.15'], 'salto.example': ['93.184.215.16'], 'bucle.example': ['93.184.215.17'],
+    'cuela.example': ['93.184.215.18'], 'interno.example': ['8.8.8.8', '10.0.0.5'], '127.0.0.1.nip.io': ['127.0.0.1'] };
+  const resolve = async (h) => dns[h] || [];
+  assert.equal(await MS.webfetch('https://docs.example.com/x', fetchText, resolve), '200 https://docs.example.com/x\n\nTítulo\n Uno & dos');
+  assert.match(await MS.webfetch('http://192.168.1.1/admin', fetchText, resolve), /redes privadas/);
+  assert.match(await MS.webfetch('https://127.0.0.1.nip.io/', fetchText, resolve), /redes privadas: 127\.0\.0\.1\.nip\.io apunta a 127\.0\.0\.1\./, 'un nombre que resuelve a una IP local');
+  asked.length = 0;
+  assert.match(await MS.webfetch('https://corto.example/r', fetchText, resolve), /redirigió a una dirección privada/);
+  assert.deepEqual(asked, ['https://corto.example/r'], 'la dirección privada de la redirección NO se llega a pedir');
+  asked.length = 0;
+  assert.match(await MS.webfetch('https://cuela.example/r', fetchText, resolve), /interno\.example apunta a 10\.0\.0\.5/, 'basta con UNA dirección privada');
+  assert.deepEqual(asked, ['https://cuela.example/r']);
+  assert.equal(await MS.webfetch('https://salto.example/a', fetchText, resolve), '200 https://docs.example.com/x\n\nTítulo\n Uno & dos', 'redirecciones públicas: se siguen');
+  assert.match(await MS.webfetch('https://bucle.example/', fetchText, resolve), /demasiadas redirecciones/);
+  assert.match(await MS.webfetch('https://no-existe.example/', fetchText, resolve), /no existe/);
+  assert.match(await MS.webfetch('file:///etc/passwd', fetchText, resolve), /solo http/);
+  assert.match(await MS.webfetch('https://x.example', null, resolve), /no está disponible/);
+  assert.match(await MS.webfetch('https://yo:clave@docs.example.com/x', fetchText, resolve), /usuario o contraseña/);
+  for (const h of ['ff02::1', '64:ff9b::a00:1', '2002:a00:1::1', '198.18.0.1', '192.0.0.8']) assert.equal(MS.isPrivateHost(h), true, h);
+  // DNS rebinding: el DNS responde una IP pública al comprobar y una privada después. La petición se conecta a la
+  // dirección COMPROBADA (no vuelve a resolver), así que la segunda respuesta nunca se usa.
+  let calls = 0;
+  const rebind = async () => (calls++ ? ['127.0.0.1'] : ['93.184.215.14']);
+  pinned.length = 0;
+  pages['https://rebind.example/'] = { status: 200, type: 'text/plain', text: 'pública' };
+  assert.equal(await MS.webfetch('https://rebind.example/', fetchText, rebind), '200 https://rebind.example/\n\npública');
+  assert.deepEqual(pinned, [['93.184.215.14']], 'la conexión va a la IP comprobada');
+  assert.equal(calls, 1, 'el nombre se resuelve una sola vez');
+  pinned.length = 0;
+  pages['https://8.8.8.8/'] = { status: 200, type: 'text/plain', text: 'ip' };
+  await MS.webfetch('https://8.8.8.8/', fetchText, resolve);
+  assert.deepEqual(pinned, [['8.8.8.8']], 'una IP escrita en la URL se fija a sí misma');
+  assert.match(await MS.webfetch('https://docs.example.com/x', async () => { throw new Error('certificado no válido'); }, resolve), /^ERROR: certificado no válido/);
+});
+
+test('escritorio: webfetch se conecta a la IP comprobada (sin DNS rebinding), sin seguir solo las redirecciones', async (t) => {
+  const http = require('node:http');
+  const zlib = require('node:zlib');
+  const seen = [];
+  const server = http.createServer((req, res) => {
+    seen.push(`${req.headers.host} ${req.url}`);
+    if (req.url === '/r') { res.writeHead(302, { Location: 'http://127.0.0.1/' }); return res.end(); }
+    res.writeHead(200, { 'Content-Type': 'text/html', 'Content-Encoding': 'gzip' });
+    res.end(zlib.gzipSync('<p>hola &amp; adiós</p>'));
+  });
+  await new Promise((r) => server.listen(0, '127.0.0.1', r));
+  t.after(() => server.close());
+  const port = server.address().port;
+  // rebind.invalid no existe en ningún DNS: si llega al servidor, es que la conexión usó la IP fijada
+  const r = await tools.pinnedGet(new URL(`http://rebind.invalid:${port}/p?q=1`), [{ address: '127.0.0.1', family: 4 }]);
+  assert.equal(r.status, 200);
+  assert.equal(r.text, '<p>hola &amp; adiós</p>', 'gzip descomprimido');
+  assert.deepEqual(seen, [`rebind.invalid:${port} /p?q=1`], 'Host con el nombre real, conexión a la IP fijada');
+  const red = await tools.pinnedGet(new URL(`http://rebind.invalid:${port}/r`), [{ address: '127.0.0.1', family: 4 }]);
+  assert.equal(red.status, 302);
+  assert.equal(red.location, 'http://127.0.0.1/', 'las redirecciones no se siguen solas');
+  // webfetch: un nombre que resuelve a una IP privada (o con UNA privada entre varias) no se abre
+  const lookup = async (h) => ({ 'interno.example': [{ address: '8.8.8.8', family: 4 }, { address: '10.0.0.5', family: 4 }] })[h] || [{ address: '127.0.0.1', family: 4 }];
+  await assert.rejects(tools.webfetch(`http://local.example:${port}/p`, { lookup }), /red local o privada/);
+  await assert.rejects(tools.webfetch('http://interno.example/', { lookup }), /red local o privada/);
+  await assert.rejects(tools.webfetch(`http://127.0.0.1:${port}/p`), /red local o privada/);
+  await assert.rejects(tools.webfetch('http://yo:clave@example.com/'), /usuario o contraseña/);
+});
+
+test('móvil: procesos en segundo plano (arrancar, salida, código de salida y parar el grupo)', async (t) => {
+  const { spawn, execFileSync } = require('node:child_process');
+  const tmp = mkdtempSync(join(tmpdir(), 'jc-proc-'));
+  const port = 47900 + Math.floor(Math.random() * 90);
+  const win = process.platform === 'win32';
+  const env = { ...process.env, JEANCODE_HELPER_PORT: String(port), JEANCODE_HELPER_TOKEN_FILE: join(tmp, 'token'), JEANCODE_HELPER_SHELL: win ? 'C:\\Program Files\\Git\\bin\\bash.exe' : '/bin/sh' };
+  const py = win ? 'python' : 'python3';
+  const token = execFileSync(py, ['mobile/ios-helper/jeancode_helper.py', '--token'], { env }).toString().trim();
+  const helper = spawn(py, ['mobile/ios-helper/jeancode_helper.py'], { env });
+  t.after(() => helper.kill());
+  await new Promise((r) => helper.stdout.once('data', r));
+  const http = (url, body, headers) => fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json', ...headers }, body: JSON.stringify(body) }).then((r) => r.json());
+  const dev = MD.iosBackend({ url: `http://127.0.0.1:${port}`, token, http });
+  const d = MS.createPhoneDesktop(dev);
+  const root = win ? tmp.replace(/\\/g, '/') : tmp; // C:/… vale para bash (Git) y para Python
+  const started = await d.proc.start(root, 'i=0; while true; do echo "tick$i"; i=$((i+1)); sleep 0.3; done');
+  assert.match(started, /^p1 iniciado: .*\ntick0/);
+  await new Promise((r) => setTimeout(r, 1200));
+  const out = await d.proc.output('p1');
+  assert.match(out, /^p1 \(en marcha\)/);
+  assert.ok((out.match(/tick\d+/g) || []).length >= 5, 'la salida sigue llegando');
+  assert.match(await d.proc.stop('p1'), /^p1 detenido\./);
+  assert.match(await d.proc.output('p1'), /^ERROR: no hay ningún proceso p1/);
+  const quick = await d.proc.start(root, 'echo listo; exit 3');
+  assert.match(quick, /^p2 iniciado: .*\n\(terminó enseguida, salida 3\)\nlisto$/);
+  assert.match(await d.proc.output('p2'), /^p2 \(terminado, salida 3\)/);
+  // DNS real a través del ayudante (webfetch comprueba cada dirección antes de pedir)
+  assert.ok((await dev.resolve('localhost')).some((a) => a === '127.0.0.1' || a === '::1'));
+  await assert.rejects(dev.resolve('no-existe.invalid'), /no se pudo resolver/);
+  // /fetch del ayudante: se conecta a la IP fijada (rebind.invalid no existe en el DNS) y no sigue redirecciones
+  const seen = [];
+  const web = require('node:http').createServer((req, res) => {
+    seen.push(`${req.headers.host} ${req.url}`);
+    if (req.url === '/r') { res.writeHead(302, { Location: 'http://10.0.0.1/' }); return res.end(); }
+    res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8', 'Content-Encoding': 'gzip' });
+    res.end(require('node:zlib').gzipSync('página fijada'));
+  });
+  await new Promise((r) => web.listen(0, '127.0.0.1', r));
+  t.after(() => web.close());
+  const wp = web.address().port;
+  const got = await dev.fetch(`http://rebind.invalid:${wp}/x?a=1`, ['127.0.0.1']);
+  assert.deepEqual([got.status, got.text, got.type], [200, 'página fijada', 'text/plain; charset=utf-8']);
+  assert.deepEqual(seen, [`rebind.invalid:${wp} /x?a=1`]);
+  const moved = await dev.fetch(`http://rebind.invalid:${wp}/r`, ['127.0.0.1']);
+  assert.deepEqual([moved.status, moved.location], [302, 'http://10.0.0.1/']);
+  await assert.rejects(dev.fetch(`http://rebind.invalid:${wp}/x`, ['localhost']), /dirección no válida/, 'solo IP, nunca nombres');
+  await assert.rejects(dev.fetch(`http://rebind.invalid:${wp}/x`, []), /sin direcciones/);
+  // el flujo completo: webfetch resuelve, comprueba y fija; localhost se rechaza antes de pedir
+  assert.match(await d.web.fetch(`http://localhost:${wp}/x`), /redes privadas/);
+});
+
+test('móvil: pantalla del iPhone (jeancode-hid y uiopen): coordenadas, escapes y apps', async () => {
+  const cmds = [];
+  const dev = {
+    exec: async (cmd) => {
+      cmds.push(cmd);
+      if (cmd === 'jeancode-hid size') return { code: 0, out: '390 844 3\n', err: '' };
+      if (cmd.startsWith('uicache -l')) return { code: 0, out: 'com.apple.Preferences : /Applications/Preferences.app\ncom.apple.mobilesafari : /Applications/MobileSafari.app\n', err: '' };
+      return { code: 0, out: '', err: '' };
+    },
+    screenshot: async () => ({ b64: 'AAAA', mime: 'image/jpeg', width: 540, height: 1169 }),
+  };
+  const s = MS.createIosScreen(dev, { permit: async () => true });
+  await s.refresh();
+  assert.equal(s.screen.modelHeight, 1169, '390×844 puntos → 540×1169 en el modelo');
+  assert.equal((await s.act('screenshot')).image, 'data:image/jpeg;base64,AAAA');
+  await s.act('mouse_click', { x: 270, y: 584 });
+  assert.equal(cmds.at(-1), 'jeancode-hid tap 195.0 421.6', 'el centro de la captura es el centro de la pantalla en puntos');
+  await s.act('type_text', { text: "hola 'mundo' $(reboot)" });
+  assert.equal(cmds.at(-1), `jeancode-hid text 'hola '\\''mundo'\\'' $(reboot)'`, 'el texto va entre comillas: no se ejecuta');
+  await s.act('key_press', { keys: ['home'] });
+  assert.equal(cmds.at(-1), 'jeancode-hid key home');
+  assert.match(await s.act('key_press', { keys: ['ctrl', 'c'] }), /solo hay teclas sueltas/);
+  await s.act('open_application', { target: 'Safari' });
+  assert.equal(cmds.at(-1), "uiopen --bundleid 'com.apple.mobilesafari'", 'por nombre, con la lista de uicache');
+  await s.act('open_application', { target: 'https://example.com' });
+  assert.equal(cmds.at(-1), "uiopen 'https://example.com'");
+  assert.match(await s.act('inspect_screen'), /no se pueden leer los controles/);
+  const broken = MS.createIosScreen({ exec: async () => ({ code: 4, out: '', err: 'falta IOHIDEventSystemClientCreate en esta versión de iOS' }), screenshot: async () => null }, {});
+  assert.match(await broken.act('mouse_click', { x: 1, y: 1 }), /ERROR: jeancode-hid: falta IOHIDEventSystemClientCreate/, 'si el binario falla, el agente recibe el motivo');
+});
+
+/* ------------------------------------------------------------------ imagen y vídeo */
+test('imagen y vídeo: qué modelos sirven y no se cuelan en el chat', () => {
+  const ep = (provider) => ({ id: provider, url: 'https://x.example/v1', key: 'k', provider });
+  for (const id of ['gpt-image-2', 'black-forest-labs/FLUX.1-schnell', 'grok-imagine-image-2.0', 'gemini-3.1-flash-image', 'Qwen/Qwen-Image', 'image-01']) {
+    assert.equal(ME.mediaKindOf(ep('openai'), id), 'image', id);
+    assert.equal(CAP.capsOf(ep('openai'), id).chat, false, id);
+  }
+  for (const id of ['MiniMax-H3', 'grok-imagine-video-1.5', 'Wan-AI/Wan2.2-T2V-A14B', 'bytedance/seedance-2.5', 'kling-v2']) assert.equal(ME.mediaKindOf(ep('together'), id), 'video', id);
+  for (const id of ['gpt-5', 'claude-sonnet', 'gemini-2.5-pro', 'jean-marvel', 'qwen3-coder', 'wandb-helper']) { assert.equal(ME.mediaKindOf(ep('openai'), id), null, id); assert.notEqual(CAP.capsOf(ep('openai'), id).chat, false, id); }
+  assert.equal(ME.protocolOf(ep('openai'), 'video'), 'openai');
+  assert.equal(ME.protocolOf(ep('deepinfra'), 'video'), 'generic', 'lo no catalogado usa el formato de OpenAI');
+  assert.equal(ME.protocolOf(ep('anthropic'), 'image'), null);
+  assert.equal(ME.protocolOf(ep('custom'), 'image'), 'generic');
+  assert.deepEqual(ME.controlsFor(ep('openai'), 'gpt-image-1.5', 'image').ratios, ['1:1', '3:2', '2:3']);
+  assert.ok(ME.controlsFor(ep('openai'), 'gpt-image-2.6-sunburst', 'image').ratios.includes('16:9'), 'la familia nueva admite medidas libres');
+  assert.equal(ME.controlsFor(ep('openai'), 'gpt-image-2', 'image').mask, true);
+  assert.equal(ME.controlsFor(ep('together'), 'x', 'image').negative, true);
+  assert.equal(ME.controlsFor(ep('xai'), 'grok-imagine-video', 'video').resolutions.includes('1080p'), false);
+  assert.deepEqual(ME.sizeFor('16:9'), { width: 1360, height: 768 });
+});
+
+test('imagen: cada proveedor recibe su formato y se entiende su respuesta', async () => {
+  const run = async (provider, req, reply, url = 'https://api.example/v1') => {
+    const calls = [];
+    const net = { ep: { id: 'e', url, key: 'K', provider }, call: async (path, o = {}) => { calls.push({ path, ...o }); return reply; } };
+    return { items: await ME.generateImage({ kind: 'image', model: 'm', prompt: 'gato', ratio: '16:9', count: 1, ...req }, net), call: calls[0] };
+  };
+  const png = 'iVBORw0KGgo=';
+  let r = await run('openai', { ratio: '3:2', quality: 'high' }, { data: [{ b64_json: png }] });
+  assert.equal(r.call.path, '/images/generations');
+  assert.deepEqual([r.call.body.size, r.call.body.quality, r.items[0].b64], ['1536x1024', 'high', png]);
+  r = await run('openai', { ratio: '1:1', refs: ['data:image/png;base64,AA'], mask: 'data:image/png;base64,BB' }, { data: [{ b64_json: png }] });
+  assert.equal(r.call.path, '/images/edits');
+  assert.deepEqual(r.call.body.images, [{ image_url: 'data:image/png;base64,AA' }]);
+  assert.deepEqual(r.call.body.mask, { image_url: 'data:image/png;base64,BB' });
+  r = await run('openrouter', { resolution: '2K', seed: '7', refs: ['data:image/png;base64,AA'] }, { data: [{ b64_json: png }] });
+  assert.equal(r.call.path, '/images');
+  assert.deepEqual([r.call.body.aspect_ratio, r.call.body.resolution, r.call.body.seed], ['16:9', '2K', 7]);
+  assert.equal(r.call.body.input_references[0].image_url.url, 'data:image/png;base64,AA');
+  r = await run('together', { negative: 'borroso', steps: '20' }, { data: [{ index: 0, url: 'https://cdn.example/a.png', type: 'url' }] });
+  assert.deepEqual([r.call.body.width, r.call.body.height, r.call.body.negative_prompt, r.call.body.steps], [1360, 768, 'borroso', 20]);
+  assert.equal(r.items[0].url, 'https://cdn.example/a.png');
+  r = await run('siliconflow', {}, { images: [{ url: 'https://cdn.example/b.png' }] });
+  assert.equal(r.call.body.image_size, '1360x768');
+  assert.equal(r.items[0].url, 'https://cdn.example/b.png');
+  r = await run('minimax', {}, { data: { image_base64: [png] }, base_resp: { status_code: 0 } });
+  assert.deepEqual([r.call.path, r.call.body.response_format, r.items[0].b64], ['/image_generation', 'base64', png]);
+  await assert.rejects(run('minimax', {}, { base_resp: { status_code: 1026, status_msg: 'contenido sensible' } }), /contenido sensible/);
+  r = await run('gemini', { resolution: '2K' }, { steps: [{ type: 'model_output', content: [{ type: 'text', text: 'ok' }, { type: 'image', data: png }] }] }, 'https://generativelanguage.googleapis.com/v1beta/openai');
+  assert.equal(r.call.base, 'https://generativelanguage.googleapis.com/v1beta');
+  assert.deepEqual(r.call.auth, { 'x-goog-api-key': 'K' });
+  assert.deepEqual(r.call.body.response_format, { type: 'image', aspect_ratio: '16:9', image_size: '2K' });
+  assert.equal(r.items[0].b64, png);
+  await assert.rejects(run('openai', {}, { data: [] }), /filtro de contenido/);
+  // una API genérica que rechaza un parámetro opcional: se repite sin él
+  const seen = [];
+  const net = { ep: { id: 'e', url: 'http://localhost:9/v1', key: 'k', provider: 'custom' }, call: async (_p, o) => {
+    seen.push(Object.keys(o.body));
+    if ('negative_prompt' in o.body) throw Object.assign(new Error('unknown field negative_prompt'), { status: 400 });
+    return { data: [{ b64_json: png }] };
+  } };
+  await ME.generateImage({ kind: 'image', model: 'm', prompt: 'x', ratio: '1:1', count: 1, negative: 'y' }, net);
+  assert.equal(seen.length, 2);
+  assert.equal(seen[1].includes('negative_prompt'), false);
+});
+
+test('vídeo: crear y seguir el trabajo en cada proveedor', async () => {
+  const flow = async (provider, url, submitReply, polls, req = {}) => {
+    const calls = [];
+    let i = 0;
+    const net = { ep: { id: 'e', url, key: 'K', provider }, call: async (path, o = {}) => { calls.push({ path, ...o }); return calls.length === 1 ? submitReply : polls[Math.min(i++, polls.length - 1)]; } };
+    const ref = await ME.submitVideo({ kind: 'video', model: 'm', prompt: 'olas', ratio: '16:9', duration: 6, resolution: '720p', ...req }, net);
+    let st = await ME.pollVideo(ref, net);
+    while (!st.done) st = await ME.pollVideo(ref, net);
+    return { ref, st, calls };
+  };
+  let f = await flow('openrouter', 'https://openrouter.ai/api/v1', { id: 'j1', status: 'pending' }, [{ status: 'in_progress' }, { status: 'completed', unsigned_urls: ['https://openrouter.ai/api/v1/videos/j1/content?index=0'] }], { start: 'data:image/png;base64,AA', audio: false });
+  assert.deepEqual(f.calls[0].body.frame_images[0].frame_type, 'first_frame');
+  assert.equal(f.calls[0].body.generate_audio, false);
+  assert.deepEqual(f.st.items[0], { url: 'https://openrouter.ai/api/v1/videos/j1/content?index=0', auth: true, mime: 'video/mp4' });
+  f = await flow('xai', 'https://api.x.ai/v1', { request_id: 'r1' }, [{ status: 'pending' }, { status: 'done', video: { url: 'https://vidgen.x.ai/a.mp4' } }]);
+  assert.equal(f.calls[0].path, '/videos/generations');
+  assert.equal(f.st.items[0].url, 'https://vidgen.x.ai/a.mp4');
+  f = await flow('together', 'https://api.together.xyz/v1', { id: 't1' }, [{ status: 'in_progress' }, { status: 'completed', outputs: { video_url: 'https://cdn/t.mp4' } }]);
+  assert.equal(f.calls[0].base, 'https://api.together.xyz/v2');
+  assert.equal(f.calls[0].body.seconds, '6');
+  f = await flow('siliconflow', 'https://api.siliconflow.com/v1', { requestId: 's1' }, [{ status: 'InQueue' }, { status: 'Succeed', results: { videos: [{ url: 'https://cdn/s.mp4' }] } }]);
+  assert.deepEqual(f.calls[1].body, { requestId: 's1' });
+  f = await flow('gemini', 'https://generativelanguage.googleapis.com/v1beta/openai', { name: 'models/veo/operations/o1' }, [{ done: false }, { done: true, response: { generateVideoResponse: { generatedSamples: [{ video: { uri: 'https://generativelanguage.googleapis.com/v1beta/files/a:download' } }] } } }]);
+  assert.equal(f.calls[0].path, '/models/m:predictLongRunning');
+  assert.equal(f.calls[0].body.parameters.durationSeconds, '6');
+  assert.equal(f.calls[1].path, '/models/veo/operations/o1');
+  assert.deepEqual(f.st.items[0].auth, { 'x-goog-api-key': true });
+  f = await flow('minimax', 'https://api.minimax.io/v1', { task_id: 'm1' }, [{ task: { status: 'running' } }, { task: { status: 'succeeded', content: { url: 'https://cdn/m.mp4' } } }], { resolution: '768P' });
+  assert.equal(f.calls[0].base, 'https://api.minimax.io/v2');
+  assert.deepEqual(f.calls[0].body.content[0], { type: 'text', text: 'olas' });
+  f = await flow('xai', 'https://api.x.ai/v1', { request_id: 'r2' }, [{ status: 'failed', error: 'bloqueado' }]);
+  assert.equal(f.st.error, 'bloqueado');
+  const gone = Object.assign(new Error('gone'), { status: 410 });
+  await assert.rejects(ME.submitVideo({ model: 'sora-2', prompt: 'x' }, { ep: { id: 'e', url: 'https://api.openai.com/v1', key: 'k', provider: 'openai' }, call: async () => { throw gone; } }), /cerró su API de vídeo/);
+  f = await flow('openai', 'https://pasarela.example/v1', { id: 'v9' }, [{ status: 'in_progress' }, { status: 'completed' }], { model: 'sora-2' });
+  assert.deepEqual(f.st.items[0], { url: 'https://pasarela.example/v1/videos/v9/content', auth: true, mime: 'video/mp4' }, 'las pasarelas compatibles siguen funcionando');
+});
+
+test('imagen y vídeo: pedirlo en el chat sin confundir preguntas de programación', () => {
+  const yes = [
+    ['genera una imagen de un faro al amanecer', 'image', 'un faro al amanecer'],
+    ['Por favor, créame una foto de un gato con gafas', 'image', 'un gato con gafas'],
+    ['hazme un logo de una cafetería minimalista', 'image', 'logo de una cafetería minimalista'],
+    ['Dibuja un retrato de una astronauta', 'image', 'retrato de una astronauta'],
+    ['create an image of a red fox', 'image', 'a red fox'],
+    ['genera un vídeo de olas a cámara lenta', 'video', 'olas a cámara lenta'],
+    ['¿me puedes crear una animación de un cohete despegando?', 'video', 'un cohete despegando'],
+  ];
+  for (const [t, kind, prompt] of yes) assert.deepEqual(ME.detectMediaIntent(t), { kind, prompt }, t);
+  for (const t of ['crea una imagen de docker para node', 'genera una imagen en base64 con python', '¿cómo creo una imagen de disco?', 'explica cómo generar un vídeo con ffmpeg', 'haz un script que descargue imágenes', 'qué modelo genera imágenes', 'crea un componente de video en react', '/imagen hola'])
+    assert.equal(ME.detectMediaIntent(t), null, t);
+  const last = { kind: 'image' };
+  assert.deepEqual(ME.detectMediaIntent('hazla más azul', { last }), { kind: 'image', prompt: 'hazla más azul', from: 'edit' });
+  assert.deepEqual(ME.detectMediaIntent('ahora anímala', { last }), { kind: 'video', prompt: 'ahora anímala', from: 'animate' });
+  assert.equal(ME.detectMediaIntent('hazla más azul'), null, 'sin imagen previa no hay nada que editar');
+});
+
+test('imagen: prompts guiados, variantes y retoque local', () => {
+  assert.deepEqual(ME.expandPrompt('un coche {rojo|azul} en {París|Lima}'), ['un coche rojo en París', 'un coche rojo en Lima', 'un coche azul en París', 'un coche azul en Lima']);
+  assert.deepEqual(ME.expandPrompt('sin variantes'), ['sin variantes']);
+  assert.equal(ME.expandPrompt('{a|b|c} {d|e|f} {g|h|i}').length, 8, 'con tope: cada variante cuesta');
+  assert.equal(ME.composePrompt({ subject: 'un zorro', action: 'corriendo', place: 'en la nieve', style: 'óleo', light: 'hora dorada' }), 'un zorro, corriendo. en la nieve. Estilo: óleo. Luz: hora dorada');
+  assert.equal(ME.composePrompt({}), '');
+  const px = new Uint8ClampedArray([100, 150, 200, 255]);
+  MX.applyAdjust(px, {});
+  assert.deepEqual([...px], [100, 150, 200, 255], 'sin cambios: los píxeles quedan igual');
+  const gray = new Uint8ClampedArray([100, 150, 200, 128]);
+  MX.applyAdjust(gray, { saturation: -100 });
+  assert.equal(gray[0], gray[1]);
+  assert.equal(gray[1], gray[2]);
+  assert.equal(gray[3], 128, 'el alfa no se toca');
+  const light = new Uint8ClampedArray([100, 100, 100, 255]);
+  MX.applyAdjust(light, { brightness: 50 });
+  assert.ok(light[0] > 150);
+  assert.deepEqual(MX.cropRect({ x: 10, y: 10 }, { x: 210, y: 110 }, 400, 400, 'free'), { x: 10, y: 10, width: 200, height: 100 });
+  assert.deepEqual(MX.cropRect({ x: 210, y: 110 }, { x: 10, y: 10 }, 400, 400, '1:1'), { x: 10, y: 10, width: 100, height: 100 });
+  assert.deepEqual(MX.cropRect({ x: -50, y: 0 }, { x: 999, y: 999 }, 300, 200, 'free'), { x: 0, y: 0, width: 300, height: 200 });
+});
+
+test('imagen: la clave solo viaja al origen de la API', async (t) => {
+  const seen = [];
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async (url, o) => { seen.push([String(url), o.headers]); return new Response(new Uint8Array([1, 2, 3]), { status: 200 }); };
+  t.after(() => { globalThis.fetch = realFetch; });
+  const ep = { id: 'e', url: 'https://openrouter.ai/api/v1', key: 'SECRETA', provider: 'openrouter' };
+  await API.fetchMediaBlob(ep, 'https://openrouter.ai/api/v1/videos/j/content', { auth: true });
+  assert.equal(seen[0][1].Authorization, 'Bearer SECRETA');
+  await API.fetchMediaBlob(ep, 'https://cdn.ajeno.example/v.mp4', { auth: true });
+  assert.deepEqual(seen[1][1], {}, 'una URL de otro dominio no recibe la clave');
+  for (const x of ['http://192.168.1.1/x.png', 'http://169.254.169.254/latest', 'http://[::1]/x', 'http://[fd00::1]/x', 'http://2130706433/x', 'http://0x7f.1/x', 'http://impresora.local/x', 'http://localhost./x', 'http://[::ffff:127.0.0.1]/x']) await assert.rejects(API.fetchMediaBlob(ep, x), /red local/, x);
+  for (const x of ['http://usuario@127.0.0.1/x', 'http://a:b@192.168.1.1/x', 'https://a:b@cdn.example/x']) await assert.rejects(API.fetchMediaBlob(ep, x), /no válida/, x);
+  assert.equal(API.isPrivateTarget('https://cdn.example/v.mp4'), false);
+  assert.equal(API.isPrivateTarget('http://8.8.8.8/'), false);
+  await assert.rejects(API.fetchMediaBlob(ep, 'file:///etc/passwd'), /no válida/);
+  await assert.rejects(API.fetchMediaBlob(ep, 'javascript:alert(1)'), /no válida/);
+});
+
+test('escritorio: writeBinary guarda dentro de la carpeta y nunca pisa un archivo', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'jc-bin-'));
+  const b64 = Buffer.from([0x89, 0x50, 0x4e, 0x47]).toString('base64');
+  assert.match(await tools.writeBinary(root, 'generated/a.png', b64), /generated\/a\.png/);
+  assert.deepEqual([...require('node:fs').readFileSync(join(root, 'generated', 'a.png'))], [0x89, 0x50, 0x4e, 0x47]);
+  await assert.rejects(tools.writeBinary(root, 'generated/a.png', b64), /EEXIST/);
+  await assert.rejects(tools.writeBinary(root, '../fuera.png', b64), /fuera/);
+});
+
+test('escritorio: una carpeta enlazada no saca las escrituras de la carpeta de trabajo', async (t) => {
+  const fsx = require('node:fs');
+  const root = mkdtempSync(join(tmpdir(), 'jc-link-'));
+  const out = mkdtempSync(join(tmpdir(), 'jc-out-'));
+  try { symlinkSync(out, join(root, 'salida'), 'junction'); symlinkSync(join(out, 'nada.png'), join(root, 'roto.png')); } catch { t.skip('este sistema no permite crear enlaces'); return; }
+  const b64 = Buffer.from('x').toString('base64');
+  await assert.rejects(tools.writeBinary(root, 'salida/nueva/a.png', b64), /enlace fuera/);
+  await assert.rejects(tools.write(root, 'salida/b.txt', 'x'), /enlace fuera/);
+  await assert.rejects(tools.writeBinary(root, 'roto.png', b64), /enlace fuera/);
+  assert.deepEqual(fsx.readdirSync(out), []);
+  assert.match(await tools.writeBinary(root, 'bien/c.png', b64), /c\.png/);
+});
+
+test('escritorio: la descarga de resultados comprueba cada salto y corta al pasar del tope', async (t) => {
+  const http = require('node:http');
+  const seen = [];
+  const server = http.createServer((req, res) => {
+    seen.push([req.url, req.headers.host, req.headers.authorization]);
+    if (req.url === '/mismo') { res.writeHead(302, { Location: '/fin' }); return res.end(); }
+    if (req.url === '/fuera') { res.writeHead(302, { Location: `http://ajeno.invalid:${server.address().port}/fin` }); return res.end(); }
+    if (req.url === '/interno') { res.writeHead(302, { Location: 'http://interno.invalid/secreto' }); return res.end(); }
+    if (req.url === '/grande') { res.writeHead(200); res.write(Buffer.alloc(4096)); res.write(Buffer.alloc(4096)); return; } // sin cabecera de tamaño y sin terminar
+    res.writeHead(200, { 'Content-Type': 'video/mp4' }); res.end('ok');
+  });
+  await new Promise((r) => server.listen(0, '127.0.0.1', r));
+  t.after(() => { server.closeAllConnections(); server.close(); });
+  const port = server.address().port;
+  const check = async (u) => { if (u.hostname === 'interno.invalid') throw new Error('destino no permitido'); return [{ address: '127.0.0.1', family: 4 }]; };
+  const headers = { Authorization: 'Bearer SECRETA' };
+  let r = await tools.downloadBinary(`http://api.invalid:${port}/mismo`, { headers, check });
+  assert.equal(r.data.toString(), 'ok');
+  assert.equal(seen.at(-1)[2], 'Bearer SECRETA', 'mismo origen: conserva la clave');
+  r = await tools.downloadBinary(`http://api.invalid:${port}/fuera`, { headers, check });
+  assert.equal(seen.at(-1)[2], undefined, 'otro origen: la clave no viaja');
+  await assert.rejects(tools.downloadBinary(`http://api.invalid:${port}/interno`, { check }), /no permitido/);
+  await assert.rejects(tools.downloadBinary(`http://api.invalid:${port}/grande`, { check, max: 1024 }), /pasa de/);
+  await assert.rejects(tools.downloadBinary(`http://127.0.0.1:${port}/fin`), /red local o privada/);
+  assert.equal((await tools.downloadBinary(`http://127.0.0.1:${port}/fin`, { publicOnly: false })).status, 200);
+});
+
+test('imagen: NVIDIA, Hugging Face, Alibaba, Z.ai y la familia nueva de OpenAI', async () => {
+  const run = async (provider, req, reply, url = 'https://api.example/v1') => {
+    const calls = [];
+    const net = { ep: { id: 'e', url, key: 'K', provider }, call: async (path, o = {}) => { calls.push({ path, ...o }); return reply; }, bytes: async (path, o = {}) => { calls.push({ path, ...o }); return reply; } };
+    return { items: await ME.generateImage({ kind: 'image', model: 'm', prompt: 'gato', ratio: '16:9', count: 1, ...req }, net), call: calls[0], calls };
+  };
+  const nv = { id: 'nv', url: 'https://integrate.api.nvidia.com/v1', key: 'k', provider: 'nvidia' };
+  assert.ok(ME.knownModels(nv).some((m) => m.id === 'black-forest-labs/flux.1-dev' && m.kind === 'image'), 'su /models no los lista');
+  assert.equal(ME.mediaKindOf(nv, 'black-forest-labs/flux.1-dev'), 'image');
+  let r = await run('nvidia', { model: 'black-forest-labs/flux.1-dev', steps: '30', guidance: '4' }, { artifacts: [{ base64: 'QUJD', finishReason: 'SUCCESS' }] });
+  assert.equal(r.call.base, 'https://ai.api.nvidia.com/v1/genai');
+  assert.equal(r.call.path, '/black-forest-labs/flux.1-dev');
+  assert.deepEqual(r.call.body, { prompt: 'gato', width: 1344, height: 768, steps: 30, cfg_scale: 4 });
+  assert.deepEqual(r.items[0], { b64: 'QUJD', mime: 'image/jpeg' });
+  await assert.rejects(run('nvidia', { model: 'x/flux.1-dev' }, { artifacts: [{ base64: '', finishReason: 'CONTENT_FILTERED' }] }), /filtro de contenido/);
+  r = await run('nvidia', { model: 'x/flux.1-dev', steps: '500', guidance: '50' }, { artifacts: [{ base64: 'QUJD' }] });
+  assert.deepEqual([r.call.body.steps, r.call.body.cfg_scale], [100, 9], 'dentro de los límites del modelo');
+  for (const id of ['flux.1-dev', 'flux.1-schnell', 'flux.2-klein-4b', 'flux-3-image-klein']) {
+    const c = ME.controlsFor(nv, `black-forest-labs/${id}`, 'image');
+    assert.deepEqual([c.seed, c.refs], [false, 0], `${id}: la API hospedada no los admite`);
+  }
+  assert.equal(ME.controlsFor(nv, 'black-forest-labs/flux.1-schnell', 'image').steps, false);
+  assert.equal(ME.knownModels(nv).some((m) => /kontext|stable-diffusion|qwen/.test(m.id)), false, 'solo los que responden de verdad');
+  // NVIDIA rechaza con 422 los campos que no conoce: se repite sin ellos
+  const seen = [];
+  await ME.generateImage({ kind: 'image', model: 'x/nuevo', prompt: 'p', ratio: '1:1', steps: '5' }, { ep: nv, call: async (_p, o) => {
+    seen.push(o.body);
+    if ('steps' in o.body) throw Object.assign(new Error('extra field steps not permitted'), { status: 422 });
+    return { artifacts: [{ base64: 'QUJD' }] };
+  } });
+  assert.equal(seen.length, 2);
+  const blob = new Blob([new Uint8Array([1])], { type: 'image/jpeg' });
+  r = await run('huggingface', { model: 'org/modelo', negative: 'n' }, blob);
+  assert.equal(r.call.base, 'https://router.huggingface.co/hf-inference');
+  assert.deepEqual([r.call.path, r.call.body.inputs, r.call.body.parameters.negative_prompt], ['/models/org/modelo', 'gato', 'n']);
+  assert.equal(r.items[0].blob, blob);
+  r = await run('dashscope', {}, { output: { choices: [{ message: { content: [{ image: 'https://oss.example/a.png' }] } }] } }, 'https://dashscope-intl.aliyuncs.com/compatible-mode/v1');
+  assert.equal(r.call.base, 'https://dashscope-intl.aliyuncs.com/api/v1');
+  assert.match(r.call.body.parameters.size, /^\d+\*\d+$/);
+  assert.equal(r.items[0].url, 'https://oss.example/a.png');
+  r = await run('zai', { quality: 'hd' }, { data: [{ url: 'https://cdn.example/z.png' }] });
+  assert.deepEqual([r.call.body.size, r.call.body.quality], ['1728x960', 'hd']);
+  r = await run('openai', { model: 'gpt-image-2.6-sunburst', resolution: '2K', quality: 'xhigh' }, { data: [{ b64_json: 'QUJD' }] });
+  assert.deepEqual([r.call.body.size, r.call.body.quality], ['2736x1536', 'xhigh']);
+  r = await run('xai', { resolution: '2k' }, { data: [{ b64_json: 'QUJD' }] });
+  assert.equal(r.call.body.resolution, '2k');
+  await assert.rejects(ME.generateImage({ kind: 'image', model: 'm', prompt: 'p', ratio: '1:1' }, { ep: { id: 'e', url: 'https://x.example/v1', key: 'k', provider: 'fireworks' }, call: async () => { throw Object.assign(new Error('404'), { status: 404, detail: '' }); } }), /no tiene una API de imágenes/);
+});
+
+test('vídeo: Alibaba y Z.ai', async () => {
+  let calls = [];
+  let replies = [{ output: { task_id: 't1' } }, { output: { task_status: 'RUNNING' } }, { output: { task_status: 'SUCCEEDED', video_url: 'https://oss.example/v.mp4' } }];
+  let net = { ep: { id: 'e', url: 'https://dashscope-intl.aliyuncs.com/compatible-mode/v1', key: 'K', provider: 'dashscope' }, call: async (p, o = {}) => { calls.push({ p, ...o }); return replies.shift(); } };
+  const ref = await ME.submitVideo({ model: 'wan2.7-t2v', prompt: 'mar', ratio: '16:9', resolution: '720P', duration: 5 }, net);
+  assert.deepEqual(calls[0].headers, { 'X-DashScope-Async': 'enable' });
+  assert.deepEqual(calls[0].body.parameters, { resolution: '720P', ratio: '16:9', duration: 5 });
+  assert.equal((await ME.pollVideo(ref, net)).done, false);
+  assert.equal((await ME.pollVideo(ref, net)).items[0].url, 'https://oss.example/v.mp4');
+  calls = [];
+  replies = [{ id: 'z1', task_status: 'PROCESSING' }, { task_status: 'SUCCESS', video_result: [{ url: 'https://cdn.example/z.mp4' }] }];
+  net = { ep: { id: 'e', url: 'https://api.z.ai/api/paas/v4', key: 'K', provider: 'zai' }, call: async (p, o = {}) => { calls.push({ p, ...o }); return replies.shift(); } };
+  const z = await ME.submitVideo({ model: 'cogvideox-3', prompt: 'mar', ratio: '9:16', duration: 5, start: 'data:image/png;base64,AA' }, net);
+  assert.deepEqual([calls[0].body.size, calls[0].body.image_url], ['1080x1920', 'data:image/png;base64,AA']);
+  assert.equal((await ME.pollVideo(z, net)).items[0].url, 'https://cdn.example/z.mp4');
+  assert.equal(calls[1].p, '/async-result/z1');
+});
+
+test('vídeo HTML: contrato de la composición, aislamiento y MP4', async () => {
+  const HV = await import('../web/js/media/htmlvideo.js');
+  const { muxMp4 } = await import('../web/js/media/mp4.js');
+  const good = '<div id="stage" data-composition-id="main" data-start="0" data-duration="5" data-width="1920" data-height="1080"><h1 class="clip" data-start="0" data-duration="5">Hola</h1></div><script>const tl = gsap.timeline({ paused: true }); tl.from("h1", { opacity: 0 }); window.__timelines["main"] = tl;</script>';
+  assert.deepEqual(HV.lintComposition(good), []);
+  const codes = (h) => HV.lintComposition(h).map((x) => x.code);
+  assert.ok(codes('<div>hola</div>').includes('root'));
+  for (const [snippet, code] of [['<script>Date.now()</script>', 'clock'], ['<script>Math.random()</script>', 'random'], ['<script>setTimeout(f, 1)</script>', 'timers'], ['<script>tl.to("a",{repeat:-1})</script>', 'infinite'], ['<script src="https://cdn.example/x.js"></script>', 'script-src'], ['<link rel="stylesheet" href="x.css">', 'link'], ['<img src="https://x.example/a.png">', 'remote'], ['<video></video>', 'media']])
+    assert.ok(codes(good + snippet).includes(code), code);
+  assert.equal(HV.extractHtml('Aquí va:\n```html\n<div>x</div>\n```\nListo'), '<div>x</div>');
+  assert.equal(HV.extractHtml('no hay nada'), '');
+  const doc = HV.buildCompositionDoc(`${good}<script src="https://mal.example/x.js"></script><meta http-equiv="refresh" content="0;url=https://mal.example"><iframe src="https://mal.example"></iframe><base href="https://mal.example/">`, { width: 1920, height: 1080, duration: 5, token: 'tok' });
+  assert.match(doc, /default-src 'none'/);
+  assert.doesNotMatch(doc, /mal\.example/, 'lo externo se elimina aunque el modelo lo escriba');
+  assert.ok(doc.indexOf('Content-Security-Policy') < doc.indexOf('<script'), 'la política va antes de cualquier script');
+  assert.deepEqual(ME.detectMediaIntent('crea un vídeo en HTML de mi cafetería'), { kind: 'html', prompt: 'crea un vídeo en HTML de mi cafetería' });
+  assert.equal(ME.detectMediaIntent('crea una página HTML con un vídeo'), null);
+  const samples = [{ data: new Uint8Array([1, 2, 3]), key: true }, { data: new Uint8Array([4, 5]), key: false }];
+  const file = muxMp4({ codec: 'avc1', width: 640, height: 360, fps: 30, description: new Uint8Array([1, 100, 0, 40]), samples });
+  const text = Buffer.from(file).toString('latin1');
+  for (const b of ['ftyp', 'moov', 'mvhd', 'trak', 'avcC', 'stts', 'stss', 'stsz', 'stco', 'mdat']) assert.ok(text.includes(b), b);
+  const view = new DataView(file.buffer);
+  const stco = text.indexOf('stco');
+  const offset = view.getUint32(stco + 12);
+  assert.deepEqual([...file.subarray(offset, offset + 5)], [1, 2, 3, 4, 5], 'el índice apunta a los datos');
+  assert.throws(() => muxMp4({ codec: 'avc1', width: 2, height: 2, fps: 30, samples: [] }), /no hay fotogramas/);
+});
+
+test('android: cada salto de una descarga se resuelve, se comprueba y se fija a su IP', async (t) => {
+  const calls = [];
+  const dns = { 'cdn.example': ['93.184.215.14'], 'otro.example': ['93.184.215.15'], 'trampa.example': ['8.8.8.8', '10.0.0.7'] };
+  const pages = {
+    'https://api.example/v1/ok': { status: 302, location: 'https://cdn.example/a.mp4' },
+    'https://cdn.example/a.mp4': { status: 200, b64: 'QUJD', type: 'video/mp4' },
+    'https://cdn.example/lan': { status: 302, location: 'http://192.168.1.1/secreto' },
+    'https://cdn.example/nombre': { status: 302, location: 'https://trampa.example/x' },
+  };
+  globalThis.window = { Capacitor: { isNativePlatform: () => true, getPlatform: () => 'android', Plugins: { CapacitorHttp: {}, JeanDevice: {
+    resolve: async ({ host }) => ({ addresses: dns[host] || [] }),
+    fetch: async (o) => { calls.push(o); return pages[o.url]; },
+  } } } };
+  t.after(() => { delete globalThis.window; });
+  const ep = { id: 'e', url: 'https://api.example/v1', key: 'SECRETA', provider: 'custom' };
+  dns['api.example'] = ['93.184.215.20'];
+  const blob = await API.fetchMediaBlob(ep, 'https://api.example/v1/ok', { auth: true });
+  assert.equal(await blob.text(), 'ABC');
+  assert.deepEqual(calls.map((c) => c.addresses), [['93.184.215.20'], ['93.184.215.14']], 'cada salto va a la IP comprobada');
+  assert.equal(calls[0].headers.Authorization, 'Bearer SECRETA');
+  assert.deepEqual(calls[1].headers, {}, 'la clave no cambia de origen');
+  calls.length = 0;
+  await assert.rejects(API.fetchMediaBlob(ep, 'https://cdn.example/lan'), /red local/);
+  assert.equal(calls.length, 1, 'la dirección privada no se llega a pedir');
+  calls.length = 0;
+  await assert.rejects(API.fetchMediaBlob(ep, 'https://cdn.example/nombre'), /red local/);
+  assert.equal(calls.length, 1, 'basta con UNA dirección privada entre las que resuelve');
+});
+
+test('mascota: qué expresión toca en cada momento', async () => {
+  const M = await import('../web/js/mascot.js');
+  assert.equal(M.restFrame(0), 'idle');
+  assert.equal(M.restFrame(30000), 'coffee');
+  assert.equal(M.restFrame(90000), 'bored');
+  assert.equal(M.restFrame(200000), 'sleep');
+  assert.equal(M.pickFrame({ work: 'thinking', quietMs: 0 }), 'confused');
+  assert.equal(M.pickFrame({ work: 'writing', quietMs: 999999 }), 'walk', 'trabajando no se duerme');
+  assert.equal(M.pickFrame({ reaction: 'angry', work: 'writing', quietMs: 0 }), 'angry', 'una reacción manda sobre el trabajo');
+  const { readFileSync } = require('node:fs');
+  const png = readFileSync(new URL('../web/icons/mascot.png', import.meta.url));
+  assert.deepEqual([png.readUInt32BE(16), png.readUInt32BE(20), png[25]], [1152, 208, 6], 'hoja RGBA de 9 × 2 celdas');
+});
+
+test('proveedores: catálogo sin repetidos y solo con conexiones seguras', () => {
+  const ids = P.PROVIDERS.map((x) => x.id);
+  assert.equal(new Set(ids).size, ids.length);
+  assert.ok(ids.length >= 60);
+  for (const x of P.PROVIDERS) {
+    if (x.url && !x.local) assert.match(x.url, /^https:\/\//, x.id);
+    assert.ok(x.keyHint, x.id);
+  }
+  for (const id of ['fal', 'replicate', 'bfl', 'recraft', 'luma', 'a1111', 'comfyui']) assert.equal(P.providerById(id).mediaOnly, true, id);
+  const ep = (provider) => ({ id: provider, url: 'https://x.example/v1', key: 'k', provider });
+  assert.equal(ME.mediaKindOf(ep('luma'), 'ray-2'), 'video');
+  assert.equal(ME.mediaKindOf(ep('a1111'), 'mi-modelo-propio.safetensors'), 'image', 'en un servidor de imagen, todo checkpoint genera imágenes');
+  assert.deepEqual(R.visibleModels([{ id: 'photon-1', ep: ep('luma') }, { id: 'gpt-5', ep: ep('openai') }]).map((m) => m.id), ['gpt-5'], 'no van al selector de chat');
+});
+
+test('imagen: fal, Replicate, BFL, Luma y servidores locales', async () => {
+  const flow = async (provider, url, replies, req = {}) => {
+    const calls = [];
+    const net = { fast: true, ep: { id: 'e', url, key: 'K', provider }, call: async (path, o = {}) => { calls.push({ path, ...o }); return replies[Math.min(calls.length - 1, replies.length - 1)]; } };
+    return { items: await ME.generateImage({ kind: 'image', model: 'org/m', prompt: 'gato', ratio: '1:1', count: 1, ...req }, net), calls };
+  };
+  let f = await flow('fal', 'https://queue.fal.run', [{ request_id: 'r', status_url: 'https://queue.fal.run/org/m/requests/r/status', response_url: 'https://queue.fal.run/org/m/requests/r' }, { status: 'IN_QUEUE' }, { status: 'COMPLETED' }, { images: [{ url: 'https://v3.fal.media/a.png' }] }]);
+  assert.deepEqual(f.calls[0].auth, { Authorization: 'Key K' });
+  assert.equal(f.calls[0].base, 'https://queue.fal.run');
+  assert.equal(f.items[0].url, 'https://v3.fal.media/a.png');
+  await assert.rejects(flow('fal', 'https://queue.fal.run', [{ request_id: 'r', status_url: 'https://mal.example/robar', response_url: 'https://mal.example/x' }]), /dirección inesperada/, 'la clave no va a otro dominio');
+  f = await flow('replicate', 'https://api.replicate.com/v1', [{ id: 'p', status: 'processing' }, { id: 'p', status: 'succeeded', output: ['https://replicate.delivery/a.webp'] }]);
+  assert.equal(f.calls[0].path, '/models/org/m/predictions');
+  assert.deepEqual(f.calls[0].headers, { Prefer: 'wait=55' });
+  assert.deepEqual([f.items[0].authHost, f.items[0].auth], ['replicate.delivery', true]);
+  f = await flow('bfl', 'https://api.bfl.ai/v1', [{ id: 'b', polling_url: 'https://api.eu.bfl.ai/v1/get_result?id=b' }, { status: 'Pending' }, { status: 'Ready', result: { sample: 'https://delivery.bfl.ai/a.jpg' } }]);
+  assert.deepEqual(f.calls[0].auth, { 'x-key': 'K' });
+  assert.equal(f.calls[1].base, 'https://api.eu.bfl.ai');
+  assert.equal(f.items[0].url, 'https://delivery.bfl.ai/a.jpg');
+  await assert.rejects(flow('bfl', 'https://api.bfl.ai/v1', [{ id: 'b', polling_url: 'https://api.bfl.ai/x' }, { status: 'Content Moderated' }]), /filtro de contenido/);
+  f = await flow('luma', 'https://api.lumalabs.ai/dream-machine/v1', [{ id: 'l', state: 'queued' }, { id: 'l', state: 'completed', assets: { image: 'https://cdn.luma/a.jpg' } }]);
+  assert.equal(f.calls[0].path, '/generations/image');
+  assert.equal(f.items[0].url, 'https://cdn.luma/a.jpg');
+  f = await flow('a1111', 'http://127.0.0.1:7860', [{ images: ['QUJD'] }], { model: 'sdxl.safetensors', negative: 'n', steps: '20', refs: ['data:image/png;base64,REVG'] });
+  assert.equal(f.calls[0].path, '/sdapi/v1/img2img');
+  assert.deepEqual([f.calls[0].body.init_images, f.calls[0].body.override_settings.sd_model_checkpoint, f.calls[0].body.steps], [['REVG'], 'sdxl.safetensors', 20]);
+  assert.equal(f.items[0].b64, 'QUJD');
+  f = await flow('comfyui', 'http://127.0.0.1:8188', [{ prompt_id: 'c1' }, {}, { c1: { outputs: { 7: { images: [{ filename: 'a b.png', subfolder: '', type: 'output' }] } } } }], { model: 'sd15.ckpt', seed: '9' });
+  const wf = f.calls[0].body.prompt;
+  assert.deepEqual([wf[1].inputs.ckpt_name, wf[5].inputs.seed, wf[7].class_type], ['sd15.ckpt', 9, 'SaveImage']);
+  assert.match(f.items[0].url, /\/view\?filename=a\+b\.png/);
+});
+
+test('errores: cada fallo dice qué pasó y qué hacer', () => {
+  const say = (e, o = {}) => ME.friendlyMediaError(e, { provider: 'NVIDIA', model: 'flux', ...o });
+  assert.deepEqual([say({ status: 401 }).action, /clave/.test(say({ status: 401 }).message)], ['settings', true]);
+  assert.match(say({ status: 402 }).message, /saldo/);
+  assert.match(say({ status: 400, detail: 'Insufficient credits' }).message, /saldo/);
+  assert.match(say({ status: 403 }).message, /acceso a flux/);
+  assert.equal(say({ status: 429 }).action, 'retry');
+  assert.equal(say({ status: 503 }).action, 'retry');
+  assert.match(say({ status: 400, detail: 'blocked by safety system' }).message, /filtro de contenido/);
+  assert.match(say({ status: 0, kind: 'network' }, { local: true }).message, /abierto en esta PC/);
+  const abort = new DOMException('aborted', 'AbortError');
+  assert.equal(say(abort), abort, 'cancelar no es un error');
+  assert.equal(ME.isTransient({ status: 429 }), true);
+  assert.equal(ME.isTransient({ status: 400 }), false);
+  assert.equal(ME.isTransient(abort), false);
+});
+
+test('modelos locales: Ollama con el contexto que hace falta', () => {
+  const ep = { id: 'o1', url: 'http://localhost:11434/v1', provider: 'ollama' };
+  assert.equal(API.ollamaContext(ep, 'm', 1000), 8192);
+  assert.equal(API.ollamaContext(ep, 'm', 10000), 16384);
+  assert.equal(API.ollamaContext(ep, 'm', 500), 16384, 'no baja: cambiarlo recargaría el modelo');
+  assert.equal(API.ollamaContext(ep, 'chico', 90000, 32768), 32768, 'nunca más de lo que admite el modelo');
+  const body = API.toOllamaChat({ model: 'q', temperature: 0.2, tools: [{ type: 'function', function: { name: 'x' } }], messages: [
+    { role: 'user', content: [{ type: 'text', text: 'mira' }, { type: 'image_url', image_url: { url: 'data:image/png;base64,QUJD' } }] },
+    { role: 'assistant', content: '', tool_calls: [{ id: 'c', function: { name: 'read', arguments: '{"path":"a"}' } }] },
+    { role: 'tool', tool_call_id: 'c', content: 'hola' },
+  ] }, { numCtx: 16384, thinking: false });
+  assert.deepEqual(body.options, { num_ctx: 16384, temperature: 0.2 });
+  assert.deepEqual([body.messages[0].content, body.messages[0].images], ['mira', ['QUJD']]);
+  assert.deepEqual(body.messages[1].tool_calls[0].function.arguments, { path: 'a' });
+  assert.equal(body.think, false);
+  assert.equal('think' in API.toOllamaChat({ model: 'q', messages: [] }, { numCtx: 8192 }), false, 'un modelo sin razonamiento rechazaría el campo');
+  const c = API.fromOllamaChunk({ message: { content: 'ho', thinking: 'mmm', tool_calls: [{ function: { name: 'read', arguments: { path: 'a' } } }] } });
+  assert.deepEqual(c.choices[0].delta, { content: 'ho', reasoning_content: 'mmm', tool_calls: [{ index: 0, id: 'call_0', function: { name: 'read', arguments: '{"path":"a"}' } }] });
+  assert.deepEqual(API.fromOllamaChunk({ done: true, message: {}, prompt_eval_count: 5, eval_count: 7 }).usage, { prompt_tokens: 5, completion_tokens: 7 });
+  const lean = AG.toolSchemasFor({ lean: true }).map((t) => t.function.name);
+  assert.ok(lean.length <= 9 && lean.includes('edit_file') && !lean.includes('schedule_task'));
+  assert.ok(AG.toolSchemasFor({}).length > lean.length * 2);
+});
+
+test('vídeo dirigido: del guion a una composición válida, con cualquier modelo', async () => {
+  const S = await import('../web/js/media/htmlscenes.js');
+  const HV = await import('../web/js/media/htmlvideo.js');
+  const A = await import('../web/js/media/htmlaudio.js');
+  assert.equal(S.parseStoryboard('Claro:\n```json\n{"mood":"pop","scenes":[{"type":"hook","headline":"Hola",},]}\n```').mood, 'pop', 'tolera texto y comas de más');
+  assert.equal(S.parseStoryboard('no hay guion'), null);
+  const board = S.normalizeBoard({ mood: 'tecno', accent: 'rojo', scenes: [{ type: 'stat', value: 'muchos' }, { type: 'list', items: ['a', 'b', 'c', 'd', 'e', 'f'] }, { type: 'nada' }, { type: 'hook', headline: 'x'.repeat(200) }] }, { duration: 10, brief: 'Café "Altura": rico' });
+  assert.equal(board.scenes.at(-1).type, 'cta', 'siempre hay cierre');
+  assert.equal(board.scenes.find((x) => x.type === 'list').items.length, 4);
+  assert.equal(board.scenes.some((x) => x.type === 'stat'), false, 'sin una cifra real no hay escena de cifra');
+  assert.equal(board.accent, '', 'un color no válido se ignora');
+  const empty = S.normalizeBoard(null, { duration: 6, brief: 'Tienda "Sol". Abrimos hoy. Envíos gratis' });
+  assert.deepEqual([empty.scenes[0].type, empty.scenes.at(-1).headline], ['hook', 'Sol'], 'un modelo que falla no deja sin vídeo');
+  const times = S.sceneTimes(board.scenes, 10);
+  assert.equal(times.at(-1).end, 10);
+  times.forEach((t, i) => { if (i) assert.equal(t.start, times[i - 1].end); });
+  const fit = S.fitText('el café que te despierta de verdad', { width: 1500, height: 500, max: 200, charWidth: 0.5 });
+  assert.ok(fit.size * Math.max(...fit.lines.map((l) => l.length)) * 0.5 <= 1500 && fit.lines.length > 1);
+  for (const theme of Object.keys(S.THEMES)) for (const ratio of ['16:9', '9:16', '1:1', '4:5']) {
+    const html = S.buildComposition(S.normalizeBoard({ scenes: [{ type: 'hook', headline: 'Hola <mundo>' }, { type: 'words', words: ['Uno', 'Dos'] }, { type: 'stat', value: '1.200', label: 'x' }, { type: 'quote', text: 'Una frase' }, { type: 'compare', left: { title: 'A', text: 'a' }, right: { title: 'B', text: 'b' } }, { type: 'cta', headline: 'Fin' }] }, { duration: 12 }), { ratio, duration: 12, theme });
+    assert.deepEqual(HV.lintComposition(html), [], `${theme} ${ratio}`);
+    assert.ok(!html.includes('<mundo>'), 'el texto del modelo va escapado');
+  }
+  const html = S.buildComposition(board, { duration: 10, sound: true });
+  assert.equal(A.soundOf(html).music, S.THEMES.tecno.music);
+  assert.ok(A.soundOf(html).cues.length >= 1);
+  assert.equal(A.soundOf(S.buildComposition(board, { duration: 10, sound: false })), null);
+  const { muxMp4 } = await import('../web/js/media/mp4.js');
+  const file = muxMp4({ codec: 'avc1', width: 640, height: 360, fps: 30, description: new Uint8Array([1, 100, 0, 40]), samples: [{ data: new Uint8Array([1, 2]), key: true }], audio: { codec: 'mp4a', sampleRate: 48000, channels: 2, description: new Uint8Array([0x11, 0x90]), samples: [{ data: new Uint8Array([9, 8, 7]), key: true, duration: 1024 }] } });
+  const text = Buffer.from(file).toString('latin1');
+  for (const b of ['mp4a', 'esds', 'smhd', 'soun', 'vide']) assert.ok(text.includes(b), b);
+  const view = new DataView(file.buffer);
+  const second = text.indexOf('stco', text.indexOf('stco') + 4);
+  assert.deepEqual([...file.subarray(view.getUint32(second + 12), view.getUint32(second + 12) + 3)], [9, 8, 7], 'el índice del sonido apunta a sus datos');
+});
+
+test('la app sin conexión: todo lo que guarda el service worker existe', () => {
+  const { readFileSync, existsSync } = require('node:fs');
+  const sw = readFileSync(new URL('../web/sw.js', import.meta.url), 'utf8');
+  const shell = sw.slice(sw.indexOf('const SHELL = ['), sw.indexOf('];', sw.indexOf('const SHELL = [')));
+  const files = [...shell.matchAll(/'([^']+)'/g)].map((m) => m[1]).filter((f) => f !== './');
+  assert.ok(files.length > 50);
+  for (const f of files) assert.ok(existsSync(new URL(`../web/${f}`, import.meta.url)), f);
+  for (const f of ['media/engine', 'media/service', 'media/studio', 'media/edit', 'media/htmlvideo', 'media/htmlrender', 'media/htmlstudio', 'media/htmlscenes', 'media/htmlaudio', 'media/mp4', 'mascot']) assert.ok(files.includes(`js/${f}.js`), f);
+});
+
+test('adjuntos: qué se acepta y qué viaja al modelo', async () => {
+  const T = await import('../web/js/attachments.js');
+  const file = (type, size = 1000) => ({ type, size });
+  assert.equal(T.rejectReason(file('image/png'), 0), '');
+  assert.match(T.rejectReason(file('application/pdf'), 0), /Solo se pueden/);
+  assert.match(T.rejectReason(file('image/svg+xml'), 0), /Solo se pueden/, 'un SVG puede llevar código');
+  assert.match(T.rejectReason(file('image/png', 21 * 1024 * 1024), 0), /20 MB/);
+  assert.match(T.rejectReason(file('image/png'), T.MAX_ATTACHMENTS), /hasta 6/);
+  assert.deepEqual(T.fitSide(4000, 2000), { width: 1568, height: 784 });
+  assert.deepEqual(T.fitSide(800, 600), { width: 800, height: 600 }, 'nunca se amplía');
+  const load = async (id) => (id === 'perdida' ? null : `data:image/png;base64,${id}`);
+  const msgs = [...Array.from({ length: 5 }, (_, i) => ({ role: 'user', content: `m${i}`, attachments: [`a${i}`] })), { role: 'assistant', content: 'ok', media: ['x'] }, { role: 'user', content: 'sin', attachments: ['perdida'] }];
+  const out = await T.withImages(msgs, load);
+  assert.match(out[0].content, /^m0\n\(el usuario adjuntó una imagen\)$/, 'las antiguas quedan como texto');
+  assert.equal(out[1].content, 'm1\n(el usuario adjuntó una imagen)');
+  assert.deepEqual(out[4].content, [{ type: 'text', text: 'm4' }, { type: 'image_url', image_url: { url: 'data:image/png;base64,a4' } }]);
+  assert.deepEqual(out[5], { role: 'assistant', content: 'ok' }, 'al modelo solo le llega rol y contenido');
+  assert.equal(out[6].content, 'sin', 'una imagen que ya no existe no rompe el mensaje');
+  const ep = { id: 'v', url: 'http://localhost:9/v1', provider: 'custom' };
+  for (const id of ['llava:13b', 'qwen2.5-vl:7b', 'nvidia/nemotron-3.5-super-vl-120b-a12b', 'meta/llama-4-maverick', 'google/gemma-4-31b-it', 'gpt-5', 'claude-sonnet']) assert.equal(CAP.capsOf(ep, id).vision, true, id);
+  assert.equal(CAP.capsOf(ep, 'jean-marvel').vision, false);
+  assert.equal(CAP.capsOf(ep, 'modelo-raro').vision, null, 'lo desconocido no se da por hecho');
 });

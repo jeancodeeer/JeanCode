@@ -25,6 +25,7 @@ contextBridge.exposeInMainWorld('jeancodeDesktop', {
     list: call('fs:list'),
     read: call('fs:read'),
     write: call('fs:write'),
+    writeBinary: call('fs:writeBinary'),
     edit: call('fs:edit'),
     search: call('fs:search'),
     undo: call('fs:undo'),
@@ -36,7 +37,7 @@ contextBridge.exposeInMainWorld('jeancodeDesktop', {
   },
   web: { fetch: call('web:fetch') },
   project: { memory: call('project:memory'), commands: call('project:commands'), agents: call('project:agents'), hooks: call('project:hooks') },
-  hooks: { global: call('hooks:global'), saveGlobal: call('hooks:saveGlobal'), exec: call('hooks:exec') },
+  hooks: { global: call('hooks:global'), saveGlobal: call('hooks:saveGlobal'), exec: call('hooks:exec'), transcript: call('hooks:transcript') },
   turn: { begin: call('turn:begin'), rewind: call('turn:rewind') },
   shell: { run: call('shell:run'), cancel: call('shell:cancel') },
   // Ejecutar el proyecto del modo CODE en el PC (copia temporal; los comandos los decide lib/runner.js)
@@ -75,5 +76,18 @@ contextBridge.exposeInMainWorld('jeancodeDesktop', {
     installGithub: call('skills:installGithub'),
     installFolder: call('skills:installFolder'),
     installUrl: call('skills:installUrl'),
+  },
+  remote: {
+    load: call('remote:load'), save: call('remote:save'), qr: call('remote:qr'),
+    lanStart: call('remote:lanStart'), lanStop: call('remote:lanStop'), lanStatus: call('remote:lanStatus'),
+    lanSend: call('remote:lanSend'), lanClose: call('remote:lanClose'),
+    onLan: (fn) => ipcRenderer.on('remote:lan', (_e, ev) => fn(ev)),
+  },
+  plugins: {
+    list: call('plugins:list'),
+    installGit: call('plugins:installGit'),
+    installFolder: call('plugins:installFolder'),
+    setEnabled: call('plugins:setEnabled'),
+    remove: call('plugins:remove'),
   },
 });

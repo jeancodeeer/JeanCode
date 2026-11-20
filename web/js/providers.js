@@ -24,7 +24,7 @@ const DEFAULT_ADAPTER = {
   request: (payload) => payload,
   /** Lee GET /models y registra lo que el proveedor informe de cada modelo. Devuelve los ids. */
   models: (json, ep) => {
-    const list = json.data || json.models || [];
+    const list = Array.isArray(json) ? json : json.data || json.models || []; // Together devuelve la lista sin envolver
     if (!Array.isArray(list)) throw new TypeError('la respuesta de /models no trae una lista de modelos');
     return list.map((m) => {
       if (typeof m === 'string') return m;
@@ -32,6 +32,9 @@ const DEFAULT_ADAPTER = {
       // muchos proveedores (SambaNova, Chutes, Together, vLLM, LM Studio…) informan la ventana real del modelo
       const ctx = contextFrom(m);
       if (id && ctx) reportCaps(ep, id, { context: ctx });
+      // Together y otros dicen el tipo de cada modelo: imagen y vídeo no van al selector de chat
+      if (id && m.type === 'image') reportCaps(ep, id, { chat: false, image: true });
+      if (id && m.type === 'video') reportCaps(ep, id, { chat: false, video: true });
       return id;
     }).filter(Boolean);
   },
@@ -52,6 +55,7 @@ const OPENROUTER_ADAPTER = {
       reasoning: m.supported_parameters ? (params.has('reasoning') || params.has('include_reasoning')) : null,
       structured: m.supported_parameters ? (params.has('structured_outputs') || params.has('response_format')) : null,
       chat: Array.isArray(m.architecture?.output_modalities) ? m.architecture.output_modalities.includes('text') : null,
+      image: Array.isArray(m.architecture?.output_modalities) ? m.architecture.output_modalities.includes('image') : null,
       price: Number.isFinite(prompt) && Number.isFinite(completion) ? { prompt, completion } : null,
     });
     return m.id;
@@ -108,6 +112,39 @@ export const PROVIDERS = [
   { id: 'cohere', name: 'Cohere', url: 'https://api.cohere.ai/compatibility/v1', keyHint: 'clave de Cohere', keyUrl: 'https://dashboard.cohere.com/api-keys', browser: true, billing: 'paid', note: 'La clave de prueba es gratis, con límites y solo para uso no comercial.' },
   { id: 'scaleway', name: 'Scaleway (UE)', url: 'https://api.scaleway.ai/v1', keyHint: 'clave secreta de Scaleway', keyUrl: 'https://console.scaleway.com/iam/api-keys', browser: true, billing: 'paid', adapter: USAGE },
   { id: 'ionos', name: 'IONOS AI (UE)', url: 'https://openai.inference.de-txl.ionos.com/v1', keyHint: 'token de IONOS', keyUrl: 'https://dcd.ionos.com', browser: true, billing: 'paid' },
+  // comprobados en vivo el 18-11-2026 (GET /models sin clave y preflight desde github.io)
+  { id: 'vercel', name: 'Vercel AI Gateway', url: 'https://ai-gateway.vercel.sh/v1', keyHint: 'clave del AI Gateway', keyUrl: 'https://vercel.com/docs/ai-gateway', browser: true, billing: 'paid', adapter: USAGE, note: 'Cientos de modelos con una sola clave.' },
+  { id: 'requesty', name: 'Requesty', url: 'https://router.requesty.ai/v1', keyHint: 'clave de Requesty', keyUrl: 'https://www.requesty.ai', browser: true, billing: 'paid', adapter: USAGE },
+  { id: 'aihubmix', name: 'AIHubMix', url: 'https://aihubmix.com/v1', keyHint: 'sk-…', keyUrl: 'https://aihubmix.com', browser: true, billing: 'paid', adapter: USAGE },
+  { id: 'zenmux', name: 'ZenMux', url: 'https://zenmux.ai/api/v1', keyHint: 'clave de ZenMux', keyUrl: 'https://zenmux.ai', browser: true, billing: 'paid', adapter: USAGE },
+  { id: 'nanogpt', name: 'NanoGPT', url: 'https://nano-gpt.com/api/v1', keyHint: 'clave de NanoGPT', keyUrl: 'https://nano-gpt.com/api', browser: true, billing: 'paid', adapter: USAGE },
+  { id: 'poe', name: 'Poe', url: 'https://api.poe.com/v1', keyHint: 'clave de Poe', keyUrl: 'https://poe.com/api_key', browser: true, billing: 'paid', adapter: USAGE },
+  { id: 'venice', name: 'Venice', url: 'https://api.venice.ai/api/v1', keyHint: 'clave de Venice', keyUrl: 'https://venice.ai/settings/api', browser: true, billing: 'paid', adapter: USAGE },
+  { id: 'featherless', name: 'Featherless', url: 'https://api.featherless.ai/v1', keyHint: 'clave de Featherless', keyUrl: 'https://featherless.ai/account/api-keys', browser: true, billing: 'paid', adapter: USAGE },
+  { id: 'cortecs', name: 'Cortecs (UE)', url: 'https://api.cortecs.ai/v1', keyHint: 'clave de Cortecs', keyUrl: 'https://cortecs.ai', browser: true, billing: 'paid', adapter: USAGE },
+  { id: 'ovh', name: 'OVHcloud AI Endpoints (UE)', url: 'https://oai.endpoints.kepler.ai.cloud.ovh.net/v1', keyHint: 'token de OVHcloud', keyUrl: 'https://endpoints.ai.cloud.ovh.net', browser: true, billing: 'paid', adapter: USAGE },
+  { id: 'vultr', name: 'Vultr Inference', url: 'https://api.vultrinference.com/v1', keyHint: 'clave de Vultr', keyUrl: 'https://my.vultr.com', browser: true, billing: 'paid', adapter: USAGE },
+  { id: 'nscale', name: 'Nscale', url: 'https://inference.api.nscale.com/v1', keyHint: 'clave de Nscale', keyUrl: 'https://www.nscale.com', browser: true, billing: 'paid', adapter: USAGE },
+  { id: 'gmi', name: 'GMI Cloud', url: 'https://api.gmi-serving.com/v1', keyHint: 'clave de GMI Cloud', keyUrl: 'https://www.gmicloud.ai', browser: true, billing: 'paid', adapter: USAGE },
+  { id: 'baseten', name: 'Baseten', url: 'https://inference.baseten.co/v1', keyHint: 'clave de Baseten', keyUrl: 'https://app.baseten.co', browser: true, billing: 'paid', adapter: USAGE },
+  { id: 'parasail', name: 'Parasail', url: 'https://api.parasail.io/v1', keyHint: 'clave de Parasail', keyUrl: 'https://www.parasail.io', browser: true, billing: 'paid', adapter: USAGE },
+  { id: 'friendli', name: 'FriendliAI', url: 'https://api.friendli.ai/serverless/v1', keyHint: 'flp_…', keyUrl: 'https://friendli.ai', browser: false, billing: 'paid', adapter: USAGE, note: 'Sin CORS: en la web usa el relay o la app de escritorio.' },
+  { id: 'ai21', name: 'AI21 (Jamba)', url: 'https://api.ai21.com/studio/v1', keyHint: 'clave de AI21', keyUrl: 'https://studio.ai21.com', browser: true, billing: 'paid', adapter: USAGE },
+  { id: 'upstage', name: 'Upstage (Solar)', url: 'https://api.upstage.ai/v1', keyHint: 'up_…', keyUrl: 'https://console.upstage.ai', browser: true, billing: 'paid', adapter: USAGE },
+  { id: 'stepfun', name: 'StepFun', url: 'https://api.stepfun.ai/v1', keyHint: 'clave de StepFun', keyUrl: 'https://platform.stepfun.ai', browser: false, billing: 'paid', adapter: USAGE, note: 'Sin CORS: en la web usa el relay o la app de escritorio.' },
+  { id: 'hunyuan', name: 'Tencent Hunyuan', url: 'https://api.hunyuan.cloud.tencent.com/v1', keyHint: 'sk-…', keyUrl: 'https://console.cloud.tencent.com/hunyuan', browser: true, billing: 'paid', adapter: USAGE },
+  { id: 'bigmodel', name: 'Zhipu BigModel (China)', url: 'https://open.bigmodel.cn/api/paas/v4', keyHint: 'clave de BigModel', keyUrl: 'https://open.bigmodel.cn', browser: false, billing: 'paid', adapter: USAGE, note: 'Sin CORS: en la web usa el relay o la app de escritorio.' },
+  { id: 'siliconcn', name: 'SiliconFlow (China)', url: 'https://api.siliconflow.cn/v1', keyHint: 'sk-…', keyUrl: 'https://cloud.siliconflow.cn', browser: true, billing: 'paid', adapter: USAGE },
+  { id: 'cloudflare', name: 'Cloudflare Workers AI', url: '', keyHint: 'token de API de Cloudflare', keyUrl: 'https://dash.cloudflare.com', browser: false, billing: 'paid', adapter: USAGE, note: 'URL: https://api.cloudflare.com/client/v4/accounts/TU_CUENTA/ai/v1' },
+  // solo imagen y vídeo: no tienen lista de modelos ni chat
+  { id: 'fal', name: 'fal.ai (imagen y vídeo)', url: 'https://queue.fal.run', keyHint: 'clave de fal', keyUrl: 'https://fal.ai/dashboard/keys', browser: true, billing: 'paid', mediaOnly: true, media: [['fal-ai/flux/dev', 'image'], ['fal-ai/flux/schnell', 'image'], ['fal-ai/flux-pro/v1.1', 'image']], note: 'Cientos de modelos: añade cualquiera con «Escribir otro modelo…» en Imagen.' },
+  { id: 'replicate', name: 'Replicate (imagen y vídeo)', url: 'https://api.replicate.com/v1', keyHint: 'r8_…', keyUrl: 'https://replicate.com/account/api-tokens', browser: false, billing: 'paid', mediaOnly: true, media: [['black-forest-labs/flux-schnell', 'image'], ['black-forest-labs/flux-dev', 'image'], ['black-forest-labs/flux-1.1-pro', 'image']], note: 'Añade cualquier modelo (propietario/nombre) con «Escribir otro modelo…» en Imagen.' },
+  { id: 'bfl', name: 'Black Forest Labs (FLUX)', url: 'https://api.bfl.ai/v1', keyHint: 'clave de BFL', keyUrl: 'https://dashboard.bfl.ai', browser: false, billing: 'paid', mediaOnly: true, media: [['flux-2-pro', 'image'], ['flux-2-max', 'image'], ['flux-2-flex', 'image'], ['flux-2-klein-9b', 'image'], ['flux-2-klein-4b', 'image']] },
+  { id: 'recraft', name: 'Recraft', url: 'https://external.api.recraft.ai/v1', keyHint: 'token de Recraft', keyUrl: 'https://www.recraft.ai/profile/api', browser: false, billing: 'paid', mediaOnly: true, media: [['recraftv4_1', 'image'], ['recraftv4_1_flash_v2', 'image']] },
+  { id: 'luma', name: 'Luma (Dream Machine)', url: 'https://api.lumalabs.ai/dream-machine/v1', keyHint: 'luma-…', keyUrl: 'https://lumalabs.ai/api', browser: false, billing: 'paid', mediaOnly: true, media: [['photon-1', 'image'], ['photon-flash-1', 'image'], ['ray-2', 'video'], ['ray-flash-2', 'video']] },
+  // en tu PC
+  { id: 'a1111', name: 'Stable Diffusion WebUI / Forge (local)', url: 'http://127.0.0.1:7860', keyHint: 'cualquier texto', keyUrl: 'https://github.com/AUTOMATIC1111/stable-diffusion-webui', browser: true, local: true, mediaOnly: true, note: 'Ábrelo con --api (y --cors-allow-origins=* si usas la web).' },
+  { id: 'comfyui', name: 'ComfyUI (local)', url: 'http://127.0.0.1:8188', keyHint: 'cualquier texto', keyUrl: 'https://www.comfy.org', browser: true, local: true, mediaOnly: true, note: 'En la web, ábrelo con --enable-cors-header.' },
   { id: 'litellm', name: 'LiteLLM proxy (local)', url: 'http://localhost:4000/v1', keyHint: 'clave del proxy (sk-…)', keyUrl: 'https://docs.litellm.ai', browser: true, local: true, note: 'Une cualquier proveedor (Azure, Bedrock, Vertex…) detrás de una API OpenAI.' },
   { id: 'ollama', name: 'Ollama (local)', url: 'http://localhost:11434/v1', keyHint: 'cualquier texto', keyUrl: 'https://ollama.com', browser: true, local: true, note: 'En la web, Ollama debe permitir el origen: OLLAMA_ORIGINS=*' },
   { id: 'lmstudio', name: 'LM Studio (local)', url: 'http://localhost:1234/v1', keyHint: 'cualquier texto', keyUrl: 'https://lmstudio.ai', browser: true, local: true },
@@ -139,6 +176,8 @@ export const LOCAL_CANDIDATES = [
   { provider: 'custom', label: 'text-generation-webui', url: 'http://localhost:5000/v1' },
   { provider: 'custom', label: 'KoboldCpp', url: 'http://localhost:5001/v1' },
   { provider: 'litellm', label: 'LiteLLM proxy', url: 'http://localhost:4000/v1' },
+  { provider: 'a1111', label: 'Stable Diffusion WebUI / Forge', url: 'http://127.0.0.1:7860' },
+  { provider: 'comfyui', label: 'ComfyUI', url: 'http://127.0.0.1:8188' },
 ];
 
 /** Modelos de código recomendados para instalar con Ollama (nombre exacto de `ollama pull`). */

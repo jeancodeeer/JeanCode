@@ -2,7 +2,7 @@
 import { CONFIG, BRAND } from './config.js';
 import { VERSION, isNewer } from './version.js';
 import { store } from './store.js';
-import { getEndpoints, saveEndpoints, addEndpoint, probe, generateKey, discoverSiblings, detectLocal, ollamaPull } from './api.js';
+import { getEndpoints, saveEndpoints, addEndpoint, probe, generateKey, discoverSiblings, detectLocal, ollamaPull, isNativeApp } from './api.js';
 import { renderMarkdown, esc } from './md.js';
 import { CODE_SYSTEM, parseFiles, projectContext } from './code.js';
 import { langOf, canRun, entryFor, runnableFiles, buildRunDoc, dependencies } from './run.js';
@@ -20,13 +20,100 @@ import { SLOTS, controlUrlFrom, hfSearch, hfFiles, control, gb } from './hf.js';
 import { initApps } from './apps.js';
 import { qualityPrompt, detectSensitive, rowsToCsv, rowsToMarkdown, markdownToText, extractLinks, searchThreads, threadToJson } from './quality.js';
 import { loadThreads, saveThreadsSoon, saveThreadsNow, wipeThreads } from './history.js';
-import { createHooks } from './hooks.js';
-import { initAutomations, parseInterval } from './automations.js';
+import { createHooks, permissionMode, HOOK_EVENTS } from './hooks.js';
+import { createRemoteHost } from './remote/host.js';
+import { initRemotePhone } from './remote/phone.js';
+import { initAutomations, parseInterval, validateTask, taskSummary, runSummary, describeTaskSchedule, fmtWhen } from './automations.js';
+import { createMediaService, library as mediaLibrary, blobToDataUrl, extOf, slugOf } from './media/service.js';
+import { detectMediaIntent } from './media/engine.js';
+import { createMascot } from './mascot.js';
+import { MAX_ATTACHMENTS, prepareImage, rejectReason, withImages } from './attachments.js';
 import { SKILL_CATALOG, SKILL_CATEGORIES } from './skills-catalog.js';
+import { PLUGIN_CATALOG, pluginUrl } from './plugins-catalog.js';
 
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => [...el.querySelectorAll(s)];
 const desktop = window.jeancodeDesktop || null;
+// El modo CODE (proyectos descargables, estilo Abacus) es solo de la web: en el escritorio está el agente,
+// que trabaja en tus carpetas, y en el móvil se queda el chat.
+const CODE_MODE = !desktop && !isNativeApp();
+if (!CODE_MODE) $$('.web-only').forEach((el) => { el.hidden = true; }); // pestaña, ayuda… desde el primer instante
+// la pestaña PC (controlar el agente de tu PC) es de la web y el móvil; en el escritorio no tiene sentido
+if (desktop) $$('.remote-only').forEach((el) => { el.hidden = true; });
+// el agente dentro del teléfono solo existe en las apps de Android e iOS
+if (isNativeApp()) $$('.native-only').forEach((el) => { el.hidden = false; });
+let phoneAgent = null;
+let remoteHost = null;   // escritorio: control desde móviles emparejados
+let remotePhone = null;  // web y móvil: controlar un PC
+
+const mascot = createMascot({ store });
+/** La mascota se apoya en la caja de mensaje; en Imagen, en el pie del panel. En PC y Móvil no aparece. */
+function placeMascot(mode = state.mode) {
+  mascot.place(mode === 'image' ? $('.st-stage') : ['chat', 'code', 'agent'].includes(mode) ? $('.composer-box') : null);
+}
+
+// Imagen y vídeo: un solo servicio para el estudio, el chat y el agente
+const mediaService = createMediaService({ models: () => state.models });
+mediaService.subscribe((what) => { if (what === 'jobs') { if (mediaService.jobs().length) mascot.work('media'); else mascot.done(); } });
+let studio = null;
+/** El estudio y el vídeo HTML se cargan al usarlos por primera vez: el arranque no paga por lo que no se abre. */
+const htmlTools = () => import('./media/htmlrender.js');
+function openStudio() {
+  // una sola promesa: dos clics seguidos no deben montar el estudio dos veces
+  studio ||= import('./media/studio.js').then(({ initStudio }) => initStudio({
+    $, esc, store, toast, confirmDialog, downloadBlob, service: mediaService,
+    endpoints: getEndpoints, providerName: (ep) => providerOf(ep).name, openSettings: () => openPanel('settings'),
+    chatText: mediaChatText,
+  }));
+  return studio;
+}
+/** Pregunta al modelo de chat del usuario (mejorar prompts y escribir composiciones). */
+async function mediaChatText(system, user, signal) {
+  const m = decide(routeFor('chat'), { models: state.visible || [], mode: 'chat', endpoints: getEndpoints(), need: {} }).model;
+  if (!m) throw new Error('Elige un modelo de chat en el selector de arriba (en catálogos grandes, como NVIDIA, hay que fijarlo primero).');
+  return (await routedChat(m, { signal, think: false, temperature: 0.7, firstByteMs: 420000, messages: [{ role: 'system', content: system }, { role: 'user', content: user }] }, routeCtx(() => {}))).text.replace(/<think>[\s\S]*?<\/think>/g, '').trim();
+}
+/** Guarda un archivo generado en la carpeta de trabajo; si la ruta no vale, sigue en la galería. */
+async function saveToWorkspace(item, wanted, d, workspace) {
+  if (!d?.fs?.writeBinary || !workspace || !item.blob) return { path: '', note: '' };
+  const target = String(wanted || `generated/${slugOf(item.prompt)}-${item.id.slice(0, 6)}.${extOf(item.mime)}`);
+  try { await d.fs.writeBinary(workspace, target, (await blobToDataUrl(item.blob)).split(',')[1]); return { path: target, note: '' }; } catch (e) { return { path: '', note: ` No se pudo guardar en ${target} (${e.message}): está en la galería de Imagen.` }; }
+}
+
+/** Lo que el agente puede pedir: modelo disponible y generar guardando el archivo en su carpeta de trabajo. */
+const agentMedia = {
+  lintHtml: async (html) => (await import('./media/htmlvideo.js')).lintComposition(html),
+  async renderHtml(args, { signal, workspace, desktop: d }) {
+    const { exportHtmlVideo } = await htmlTools();
+    const ratio = ['16:9', '9:16', '1:1', '4:5'].includes(args.ratio) ? args.ratio : '16:9';
+    const duration = Math.min(120, Math.max(1, Number(args.duration) || 10));
+    const blob = await exportHtmlVideo(String(args.html), { ratio, duration, signal });
+    const item = await mediaService.saveHtmlVideo(blob, { prompt: String(args.path || 'Composición HTML'), html: String(args.html), ratio, duration, source: 'agent' });
+    const { path, note } = await saveToWorkspace(item, args.path, d, workspace);
+    return { ids: [item.id], path, text: `Vídeo renderizado (${ratio}, ${duration} s). id: ${item.id}${path ? ` · guardado en ${path}` : ''}. El usuario ya lo ve en la conversación.${note}` };
+  },
+  model(kind) {
+    const m = mediaService.pick(kind);
+    return m ? { id: m.id, billing: { local: 'en tu equipo', own: 'tu servidor', free: 'gratis', paid: 'de pago' }[mediaService.billing(m)] || 'coste según tu proveedor' } : null;
+  },
+  async generate(kind, args, { signal, workspace, desktop: d }) {
+    const m = mediaService.pick(kind);
+    const c = mediaService.controls(m);
+    const req = { kind, modelKey: m.key, prompt: String(args.prompt || ''), count: 1, ratio: c.ratios.includes(args.ratio) ? args.ratio : c.ratios[0] };
+    if (c.durations.length) req.duration = c.durations.includes(Number(args.duration)) ? Number(args.duration) : c.durations[0];
+    if (c.resolutions.length) req.resolution = c.resolutions[Math.min(1, c.resolutions.length - 1)];
+    if (args.from) {
+      const prev = await mediaLibrary.get(String(args.from));
+      if (!prev?.blob) throw new Error(`no existe el resultado ${args.from}`);
+      const url = await blobToDataUrl(prev.blob);
+      if (kind === 'video' && c.start) req.start = url; else if (kind === 'image' && c.refs) req.refs = [url]; else throw new Error(`${m.id} no acepta imágenes de entrada`);
+    }
+    const items = await mediaService.generate(req, { source: 'agent', signal, parent: args.from || null });
+    const item = items[0];
+    const { path, note: saveNote } = await saveToWorkspace(item, args.path, d, workspace);
+    return { ids: items.map((i) => i.id), path, text: `${kind === 'video' ? 'Vídeo generado' : 'Imagen generada'} con ${m.id}. id: ${item.id}${path ? ` · guardado en ${path}` : ''}. El usuario ya lo ve en la conversación.${saveNote}` };
+  },
+};
 
 const DEFAULT_SYS = 'Eres Jean, un asistente de programación. Responde en el idioma del usuario, con precisión y código claro.';
 
@@ -69,10 +156,12 @@ function toast(msg) {
 const saveThreads = () => saveThreadsSoon(state.threads.slice(0, 200), state.current);
 const thread = () => state.threads.find((t) => t.id === state.current) || null;
 
+let openedThread = null; // la conversación que estaba en pantalla (para SessionEnd al cambiar)
 function newThread(mode = state.mode) {
   const t = { id: crypto.randomUUID(), mode, title: 'NUEVA CONVERSACIÓN', messages: [], files: {}, changed: {}, updated: Date.now(), ...(mode === 'agent' && state.workspace ? { workspace: state.workspace } : {}) };
   state.threads.unshift(t);
   state.current = t.id;
+  openedThread = t.id;
   saveThreads();
   return t;
 }
@@ -91,6 +180,11 @@ async function enterApp() {
   $('#repo-link').href = CONFIG.repoUrl;
   $('#app-version').textContent = `JeanCode ${VERSION}${desktop ? ' · escritorio' : ' · web'}`;
   if (desktop) $$('.desktop-only').forEach((el) => { el.hidden = false; });
+  // la interfaz no espera a la red: con una API lenta, las conversaciones ya se pueden leer mientras cargan los modelos
+  renderThreads();
+  openThread(state.threads.find((t) => t.mode === state.mode)?.id || null);
+  placeMascot();
+  hideBoot();
   if (!store.get('siblingsChecked', false)) {
     // conexiones anteriores a v0.2.1 solo guardaban un puerto: se buscan los otros modelos una vez
     for (const ep of getEndpoints()) await discoverSiblings(ep.url, ep.key);
@@ -98,7 +192,11 @@ async function enterApp() {
   }
   await refreshModels();
   renderThreads();
-  openThread(state.threads.find((t) => t.mode === state.mode)?.id || null);
+  // imagen y vídeo: catálogos aparte y los vídeos que quedaron en marcha al cerrar la app
+  mediaService.refresh().finally(() => mediaService.resume({
+    onDone: () => toast('TU VÍDEO ESTÁ LISTO EN LA PESTAÑA IMAGEN'),
+    onFail: (e) => toast(`EL VÍDEO FALLÓ: ${e.message}`.toUpperCase()),
+  }));
 }
 
 /*
@@ -320,7 +418,66 @@ function noticeModelChanges(eps, results) {
 function needFor() {
   const t = thread();
   const msgs = (state.mode === 'agent' ? t?.agentMessages : t?.messages) || [];
-  return { tokens: estimateTokens(msgs) + 1500, tools: state.mode === 'agent' };
+  const vision = attached.length > 0 || !!t?.messages?.slice(-8).some((m) => m.attachments?.length);
+  return { tokens: estimateTokens(msgs) + 1500, tools: state.mode === 'agent', ...(vision ? { vision: true } : {}) };
+}
+
+/* ---------------------------------------------------------------- imágenes adjuntas */
+let attached = []; // { id, url, name } del mensaje que se está escribiendo
+const attachUrls = new Map();
+const attachUrl = (id, blob) => { if (!attachUrls.has(id)) attachUrls.set(id, URL.createObjectURL(blob)); return attachUrls.get(id); };
+const loadAttachment = async (id) => { const i = await mediaLibrary.get(id); return i?.blob ? blobToDataUrl(i.blob) : null; };
+
+/** ¿Puede adjuntar imágenes el modelo que atendería este mensaje? */
+function canAttach() {
+  const d = decide(routeFor(state.mode), { models: state.visible || [], mode: state.mode, endpoints: getEndpoints(), need: { vision: true, tools: state.mode === 'agent' } });
+  return !!d.model && capsOf(d.model.ep, d.model.id).vision !== false;
+}
+function renderAttachments() {
+  const can = canAttach();
+  $('#att-btn').hidden = !can && !attached.length;
+  const list = $('#att-list');
+  list.hidden = !attached.length;
+  list.innerHTML = attached.map((a) => `<li><img src="${esc(a.url)}" alt="${esc(a.name)}"><button type="button" data-att-del="${esc(a.id)}" aria-label="Quitar ${esc(a.name)}"><svg class="i" aria-hidden="true"><use href="#i-close"/></svg></button></li>`).join('')
+    + (attached.length && !can ? '<li class="att-warn">Este modelo no ve imágenes: elige otro o quítalas.</li>' : '');
+}
+async function addAttachments(files) {
+  if (!canAttach()) { toast('ESTE MODELO NO ACEPTA IMÁGENES'); return; }
+  for (const file of files) {
+    const why = rejectReason(file, attached.length);
+    if (why) { toast(why.toUpperCase()); continue; }
+    try {
+      const { blob, mime } = await prepareImage(file);
+      const id = crypto.randomUUID();
+      await mediaLibrary.put({ id, kind: 'attachment', blob, mime, prompt: '', createdAt: Date.now() });
+      attached.push({ id, url: attachUrl(id, blob), name: file.name || 'imagen' });
+    } catch { toast('NO SE PUDO LEER LA IMAGEN'); }
+  }
+  renderAttachments();
+}
+/** Miniaturas bajo el mensaje del usuario. Al pulsar una se amplía. */
+async function showAttachments(row, ids) {
+  if (!ids?.length || $('.msg-atts', row)) return;
+  const box = document.createElement('div');
+  box.className = 'msg-atts';
+  $('.bubble', row).after(box);
+  for (const id of ids) {
+    const item = await mediaLibrary.get(id);
+    if (!item?.blob) continue;
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'msg-att';
+    b.setAttribute('aria-label', 'Ampliar imagen adjunta');
+    b.innerHTML = `<img src="${esc(attachUrl(id, item.blob))}" alt="Imagen adjunta">`;
+    b.addEventListener('click', () => b.classList.toggle('big'));
+    box.appendChild(b);
+  }
+}
+/** Borra las imágenes adjuntas de conversaciones que ya no existen. */
+async function pruneAttachments() {
+  const used = new Set(state.threads.flatMap((t) => (t.messages || []).flatMap((m) => m.attachments || [])));
+  const day = Date.now() - 86400000;
+  for (const i of await mediaLibrary.list()) if (i.kind === 'attachment' && !used.has(i.id) && i.createdAt < day) await mediaLibrary.remove(i.id);
 }
 
 /** Decisión del enrutador para el modo actual (con motivos). */
@@ -330,6 +487,7 @@ function currentDecision() {
 
 /** Refleja en el selector el enrutado guardado para este modo y actualiza AUTO y la tarjeta de ruta. */
 function applyRoute() {
+  queueMicrotask(renderAttachments); // el botón de adjuntar depende del modelo elegido
   const sel = $('#model-select');
   const r = routeFor(state.mode);
   const visible = state.visible || [];
@@ -515,6 +673,8 @@ const KIND_HINT = {
   format: 'La URL no es de una API OpenAI-compatible: revisa que sea la base (…/v1).',
 };
 function showError(err) {
+  mascot.fail();
+  renderAttachments(); // pudo aprenderse que este modelo no ve imágenes
   const kind = err.kind && KIND_LABEL[err.kind] ? KIND_LABEL[err.kind].toUpperCase() + ' · ' : '';
   const row = addMessage('error', `${kind}${err.message || String(err)}${KIND_HINT[err.kind] ? `\n${KIND_HINT[err.kind]}` : ''}`);
   if (err.trace) attachTrace(row, err.trace);
@@ -582,7 +742,8 @@ $('#new-thread').addEventListener('click', () => { state.current = null; openThr
 document.addEventListener('click', (e) => { if (e.target.closest('[data-news]')) openNews(); });
 
 function setMode(mode) {
-  if (mode === 'agent' && !desktop) return;
+  if (state.mode === 'image' && mode !== 'image') showRailFor(mode);
+  if ((mode === 'agent' && !desktop) || (mode === 'code' && !CODE_MODE) || (mode === 'remote' && desktop) || (mode === 'device' && !phoneAgent)) return;
   state.mode = mode;
   applyRoute();
   $$('.mode').forEach((b) => {
@@ -593,13 +754,31 @@ function setMode(mode) {
   $('#view-chat').hidden = mode !== 'chat';
   $('#view-code').hidden = mode !== 'code';
   $('#view-agent').hidden = mode !== 'agent';
-  $('#crumb-mode').textContent = mode === 'agent' ? `AGENT · ${state.agent.toUpperCase()}` : mode.toUpperCase();
+  $('#view-remote').hidden = mode !== 'remote';
+  $('#view-device').hidden = mode !== 'device';
+  $('#view-image').hidden = mode !== 'image';
+  $('#composer').hidden = mode === 'remote' || mode === 'device' || mode === 'image'; // estas vistas tienen su propia caja de mensaje
+  // el modelo lo elige el PC, no este dispositivo: fuera el selector, la ruta y el título de conversación local
+  for (const el of [$('#route-menu'), $('.topbar .model')]) if (el) el.hidden = mode === 'remote' || mode === 'image';
+  for (const el of [$('#crumb-title')?.previousElementSibling, $('#crumb-title')]) if (el) el.hidden = mode === 'remote';
+  $('#crumb-mode').textContent = mode === 'agent' ? `AGENT · ${state.agent.toUpperCase()}` : mode === 'remote' ? 'CONTROLAR MI PC' : mode === 'device' ? 'AGENTE DEL MÓVIL' : mode === 'image' ? 'IMAGEN' : mode.toUpperCase();
+  placeMascot(mode);
+  if (mode === 'image') { $('#crumb-title').textContent = 'ESTUDIO DE IMAGEN Y VÍDEO'; showRailFor(mode); openStudio().then((s) => { placeMascot('image'); return s.show(); }); return; }
+  if (mode === 'remote') { renderThreads(); remotePhone?.autoconnect(); return; }
+  if (mode === 'device') { renderThreads(); phoneAgent.check(); return; }
   updateHint();
   renderThreads();
   openThread(state.threads.find((t) => t.mode === mode)?.id || null);
   if (mode === 'agent') loadProject();
 }
 $$('.mode').forEach((b) => b.addEventListener('click', () => setMode(b.dataset.mode)));
+
+/** En IMAGEN el rail enseña la galería en lugar de las conversaciones. */
+function showRailFor(mode) {
+  const on = mode === 'image';
+  for (const el of [$('#new-thread'), $('#thread-search'), $('#threads')]) el.hidden = on;
+  $('#media-gallery').hidden = !on;
+}
 
 function streamEl() {
   return { chat: $('#chat-stream'), code: $('#code-stream'), agent: $('#agent-stream') }[state.mode];
@@ -608,8 +787,11 @@ function streamEl() {
 const reentryOffered = new Set(); // solo una vez por sesión
 const PAGE = 60; // mensajes que se pintan al abrir; los anteriores, bajo demanda (páginas largas y RAM)
 function openThread(id, { keepTop = false } = {}) {
+  if (!streamEl()) return; // Imagen, PC y Móvil no muestran conversaciones
+  if (openedThread && openedThread !== id) endSession(openedThread, 'other');
   const t = state.threads.find((x) => x.id === id && x.mode === state.mode) || null;
   state.current = t?.id || null;
+  openedThread = state.current;
   $('#crumb-title').textContent = t?.title || 'NUEVA CONVERSACIÓN';
   const el = streamEl();
   const prevHeight = el.scrollHeight, prevTop = el.scrollTop;
@@ -625,6 +807,8 @@ function openThread(id, { keepTop = false } = {}) {
     for (let i = start; i < t.messages.length; i++) {
       const m = t.messages[i];
       const row = addMessage(m.role, m.content, { reasoning: m.reasoning, turn: m.turn, model: m.model });
+      if (m.media?.length) showMedia(row, m.media);
+      if (m.attachments?.length) showAttachments(row, m.attachments);
       if (m.usage) setUsage(row, m.usage);
       if (m.role === 'assistant') decorateAssistant(row, t, i);
     }
@@ -689,6 +873,7 @@ function setUsage(row, u) {
 const REDUCED = window.matchMedia?.('(prefers-reduced-motion: reduce)');
 function updateMessage(row, content, reasoning = '', streaming = false) {
   row._pending = { content, reasoning, streaming };
+  if (streaming && content) mascot.work('writing');
   if (streaming) row._animated = true;
   if (reasoning && !row._thinkStart) row._thinkStart = performance.now();
   if (reasoning && !row._thinkEnd && (stripVisible(content).trim() || !streaming)) row._thinkEnd = performance.now();
@@ -774,7 +959,7 @@ function decorateAssistant(row, t, index) {
   const bar = document.createElement('div');
   bar.className = 'msg-actions';
   const n = msg.alts?.length || 0;
-  const canRegen = state.mode !== 'agent' && index === t.messages.length - 1;
+  const canRegen = state.mode !== 'agent' && index === t.messages.length - 1 && !msg.media?.length;
   bar.innerHTML = `<button type="button" data-msg="copy-md">Copiar</button><button type="button" data-msg="copy-text">Copiar texto</button>`
     + (canRegen ? `<details class="menu regen"><summary>Regenerar</summary><div class="menu-list" role="menu">
         <button type="button" role="menuitem" data-msg="regen" data-how="">Otra vez</button>
@@ -853,7 +1038,7 @@ function addToolLine(call, result, nested) {
     row._timer = setInterval(() => { if (!row.isConnected) { clearInterval(row._timer); return; } $('.tl-time', row).textContent = secs(performance.now() - row._t0); }, 100);
   } else {
     clearInterval(row._timer);
-    const bad = /^(ERROR|DENEGADO|RECHAZADO)/.test(String(result));
+    const bad = /^(ERROR|DENEGADO|RECHAZADO|BLOQUEADO|DETENIDO)/.test(String(result));
     st.className = `tl-state ${bad ? 'tl-bad' : 'tl-ok'}`;
     st.textContent = bad ? '✕' : '✓';
     $('.tl-time', row).textContent = secs(performance.now() - row._t0);
@@ -997,7 +1182,7 @@ async function refreshPopup() {
   const v = input.value;
   const caret = input.selectionStart;
   const before = v.slice(0, caret);
-  const cmd = before.match(/^\/([\w-]*)$/);
+  const cmd = before.match(/^\/([\w-]*(?::[\w-]*)?)$/);
   if (cmd) {
     const items = matchCommands(cmd[1], state.mode, state.custom);
     showPopup(items.map((c) => ({ name: c.name, desc: c.desc, custom: c.custom })), 'cmd', 0);
@@ -1069,10 +1254,10 @@ function paletteItems() {
   const items = [
     ['Nueva conversación', 'Ctrl+K', () => { state.current = null; openThread(null); input.focus(); }],
     ['Buscar conversaciones', 'Ctrl+Shift+F', () => { $('#rail').classList.add('open'); $('#thread-search').focus(); }],
-    ['Modo Chat', 'Ctrl+1', () => setMode('chat')], ['Modo Code', 'Ctrl+2', () => setMode('code')],
+    ['Modo Chat', 'Ctrl+1', () => setMode('chat')], ...(CODE_MODE ? [['Modo Code', 'Ctrl+2', () => setMode('code')]] : []),
     ...(desktop ? [['Modo Agent', 'Ctrl+3', () => setMode('agent')]] : []),
     ['Ajustes', '', () => openPanel('settings')], ['Skills', '', () => openPanel('skills')],
-    ...(desktop ? [['Automatizaciones', '', () => openPanel('automations')]] : []),
+    ...(desktop ? [['Automatizaciones', '', () => openPanel('automations')], ['Plugins', '', () => openPanel('plugins')]] : []),
     ['Novedades de JeanCode', '', () => openNews()],
     ...(t ? [['Exportar a Markdown', '', () => exportThread(t, 'md')], ['Exportar a JSON', '', () => exportThread(t, 'json')], ['Exportar a PDF', '', () => exportThread(t, 'pdf')],
       [t.pinned ? 'Quitar de fijadas' : 'Fijar esta conversación', '', () => { t.pinned = !t.pinned; saveThreads(); renderThreads(); }],
@@ -1125,14 +1310,37 @@ async function openNews() {
 }
 
 function busy(on) {
+  if (on) mascot.work('thinking'); else mascot.done();
   $('#send-btn').disabled = on;
   $('#stop-btn').hidden = !on;
+  remoteHost?.pushState();
 }
+
+$('#model-select').addEventListener('change', () => setTimeout(renderAttachments));
+$('#att-input').addEventListener('change', (e) => { addAttachments([...e.target.files]); e.target.value = ''; });
+$('#att-list').addEventListener('click', (e) => {
+  const b = e.target.closest('[data-att-del]');
+  if (!b) return;
+  attached = attached.filter((a) => a.id !== b.dataset.attDel);
+  mediaLibrary.remove(b.dataset.attDel);
+  renderAttachments();
+});
+input.addEventListener('paste', (e) => {
+  const files = [...(e.clipboardData?.files || [])].filter((f) => f.type.startsWith('image/'));
+  if (files.length) { e.preventDefault(); addAttachments(files); }
+});
+$('#composer').addEventListener('dragover', (e) => { if ([...(e.dataTransfer?.types || [])].includes('Files')) { e.preventDefault(); $('.composer-box').classList.add('drop'); } });
+$('#composer').addEventListener('dragleave', () => $('.composer-box').classList.remove('drop'));
+$('#composer').addEventListener('drop', (e) => {
+  $('.composer-box').classList.remove('drop');
+  const files = [...(e.dataTransfer?.files || [])].filter((f) => f.type.startsWith('image/'));
+  if (files.length) { e.preventDefault(); addAttachments(files); }
+});
 
 $('#composer').addEventListener('submit', async (e) => {
   e.preventDefault();
   let text = input.value.trim();
-  if (!text || state.abort) return;
+  if ((!text && !attached.length) || state.abort) return;
 
   const cmd = parseCommand(text);
   if (cmd) {
@@ -1149,8 +1357,153 @@ $('#composer').addEventListener('submit', async (e) => {
   await send(text);
 });
 
+/* ---------------------------------------------------------------- imagen y vídeo en el chat y el agente */
+const mediaUrls = new Map();
+/** Pinta los resultados guardados bajo un mensaje, con sus acciones. */
+async function showMedia(row, ids) {
+  let box = $('.msg-media', row);
+  if (!box) { box = document.createElement('div'); box.className = 'msg-media'; $('.bubble', row).after(box); }
+  if (!row._pending?.content) $('.bubble', row).hidden = true; // del agente: solo el archivo, sin texto
+  for (const id of ids) {
+    if ($(`[data-media="${CSS.escape(id)}"]`, box)) continue;
+    const item = await mediaLibrary.get(id);
+    const fig = document.createElement('figure');
+    fig.dataset.media = id;
+    if (!item) { fig.innerHTML = '<figcaption class="fine">Este archivo ya no está en este dispositivo.</figcaption>'; box.appendChild(fig); continue; }
+    if (item.blob && !mediaUrls.has(id)) mediaUrls.set(id, URL.createObjectURL(item.blob));
+    const src = esc(mediaUrls.get(id) || item.remoteUrl || '');
+    fig.innerHTML = `${item.kind === 'video' ? `<video src="${src}" controls playsinline preload="metadata"></video>` : `<img src="${src}" alt="${esc(item.prompt)}" loading="lazy">`}
+      <figcaption class="media-actions"><button type="button" data-media-act="open">Editar en Imagen</button>${item.kind === 'image' && item.blob ? '<button type="button" data-media-act="animate">Animar</button>' : ''}${item.blob ? '<button type="button" data-media-act="download">Descargar</button>' : ''}</figcaption>`;
+    box.appendChild(fig);
+  }
+  const el = row.parentElement;
+  if (el) el.scrollTop = el.scrollHeight;
+}
+document.addEventListener('click', async (e) => {
+  const b = e.target.closest('[data-media-act]');
+  if (!b) return;
+  const id = b.closest('[data-media]').dataset.media;
+  const act = b.dataset.mediaAct;
+  if (act === 'download') { const i = await mediaLibrary.get(id); if (i?.blob) downloadBlob(i.blob, `${slugOf(i.prompt)}.${extOf(i.mime)}`); return; }
+  setMode('image');
+  const s = await openStudio();
+  if (act === 'open') await s.open(id); else await s.animate(id);
+});
+
+/** El último resultado de la conversación (para «hazla más azul» o «anímala»). */
+async function lastMediaOf(t) {
+  const m = [...(t?.messages || [])].reverse().find((x) => x.role === 'assistant');
+  return m?.media?.length ? mediaLibrary.get(m.media[m.media.length - 1]) : null;
+}
+/** Vídeo con HTML dentro de la conversación: el modelo de chat escribe la animación y este equipo la exporta. */
+async function sendHtmlVideo(t, intent, chatModel) {
+  const row = addMessage('assistant', '', { streaming: true, model: chatModel?.id || '' });
+  const say = (text) => { $('.bubble', row).innerHTML = `<p class="muted mono waiting">${esc(text)}</p>`; };
+  state.abort = new AbortController();
+  busy(true);
+  say('escribiendo la composición…');
+  try {
+    const ratio = /vertical|9:16|reel|tiktok|short/i.test(intent.prompt) ? '9:16' : /cuadrad|1:1/i.test(intent.prompt) ? '1:1' : '16:9';
+    const duration = Math.min(30, Number(intent.prompt.match(/(\d+)\s*(?:s\b|seg)/i)?.[1]) || 10);
+    const signal = state.abort.signal;
+    const { exportHtmlVideo, directComposition } = await htmlTools();
+    const { html } = await directComposition({ brief: intent.prompt, ratio, duration, chatText: mediaChatText, signal, onStatus: say });
+    const blob = await exportHtmlVideo(html, { ratio, duration, signal, onProgress: (p) => say(`exportando… ${Math.round(p * 100)} %`) });
+    const item = await mediaService.saveHtmlVideo(blob, { prompt: intent.prompt, html, ratio, duration, source: 'chat' });
+    const content = `Vídeo creado con HTML (${ratio}, ${duration} s). Puedes seguir editándolo en la pestaña Imagen.`;
+    t.messages.push({ role: 'assistant', content, media: [item.id], model: chatModel.id, at: Date.now() });
+    updateMessage(row, content, '', false);
+    await showMedia(row, [item.id]);
+    decorateAssistant(row, t, t.messages.length - 1);
+  } catch (err) {
+    row.remove();
+    if (err.name === 'AbortError') addMessage('system', 'Detenido.'); else showError(err);
+  } finally {
+    state.abort = null;
+    busy(false);
+    t.updated = Date.now(); saveThreads(); renderThreads();
+  }
+}
+
+/** Genera dentro de la conversación: el chat no necesita un modelo de chat para esto. */
+async function sendMedia(intent, text) {
+  const t = thread() || newThread();
+  const noun = intent.kind === 'video' ? 'vídeo' : 'imagen';
+  if (!t.messages.length) { t.title = text.replace(/\s+/g, ' ').slice(0, 60).toUpperCase(); $('#crumb-title').textContent = t.title; }
+  input.value = ''; autosize();
+  const attachments = attached.map((a) => a.id);
+  attached = [];
+  renderAttachments();
+  t.messages.push({ role: 'user', content: text, ...(attachments.length ? { attachments } : {}) });
+  showAttachments(addMessage('user', text), attachments);
+  // sin modelo de vídeo, el vídeo se hace con HTML y el modelo de chat
+  const chatModel = decide(routeFor('chat'), { models: state.visible || [], mode: 'chat', endpoints: getEndpoints(), need: {} }).model;
+  if (intent.kind === 'html' || (intent.kind === 'video' && !mediaService.pick('video') && chatModel)) return sendHtmlVideo(t, intent, chatModel);
+  const m = mediaService.pick(intent.kind);
+  if (!m) {
+    const note = `No tienes ningún modelo de ${noun} conectado. Añade un proveedor que lo ofrezca en Ajustes y aparecerá en la pestaña Imagen.`;
+    t.messages.push({ role: 'assistant', content: note, at: Date.now() });
+    addMessage('assistant', note);
+    t.updated = Date.now(); saveThreads(); renderThreads();
+    return;
+  }
+  const row = addMessage('assistant', '', { streaming: true, model: m.id });
+  const started = Date.now();
+  const tick = setInterval(() => { $('.bubble', row).innerHTML = `<p class="muted mono waiting">generando ${noun}… ${Math.round((Date.now() - started) / 1000)} s</p>`; }, 1000);
+  state.abort = new AbortController();
+  busy(true);
+  try {
+    const req = { kind: intent.kind, prompt: intent.prompt, ratio: intent.kind === 'video' ? '16:9' : '1:1', count: 1, modelKey: m.key };
+    const controls = mediaService.controls(m);
+    if (!controls.ratios.includes(req.ratio)) req.ratio = controls.ratios[0];
+    if (controls.durations.length) req.duration = controls.durations[0];
+    if (controls.resolutions.length) req.resolution = controls.resolutions[Math.min(1, controls.resolutions.length - 1)];
+    let parent = null;
+    if (intent.from) {
+      const last = await lastMediaOf(t);
+      if (last?.blob) {
+        parent = last.id;
+        const url = await blobToDataUrl(last.blob);
+        if (intent.from === 'animate' && controls.start) req.start = url;
+        else if (intent.from === 'edit' && controls.refs) req.refs = [url];
+        else req.prompt = `${last.prompt}. ${intent.prompt}`; // el modelo no acepta imágenes: se rehace con el cambio
+      }
+    }
+    // una imagen adjunta sirve de referencia o de primer fotograma, si el modelo lo admite
+    if (attachments.length) {
+      const urls = (await Promise.all(attachments.map(loadAttachment))).filter(Boolean);
+      if (intent.kind === 'video' && controls.start) req.start = urls[0];
+      else if (intent.kind === 'image' && controls.refs) req.refs = urls.slice(0, controls.refs);
+    }
+    const items = await mediaService.generate(req, { source: 'chat', parent, signal: state.abort.signal });
+    clearInterval(tick);
+    const content = `${intent.kind === 'video' ? 'Vídeo generado' : 'Imagen generada'} con \`${m.id}\`.\n\nPrompt: ${req.prompt}`;
+    const ids = items.map((i) => i.id);
+    t.messages.push({ role: 'assistant', content, media: ids, model: m.id, at: Date.now() });
+    updateMessage(row, content, '', false);
+    await showMedia(row, ids);
+    decorateAssistant(row, t, t.messages.length - 1);
+  } catch (err) {
+    clearInterval(tick);
+    row.remove();
+    if (err.name === 'AbortError') addMessage('system', 'Detenido.'); else showError(err);
+  } finally {
+    clearInterval(tick);
+    state.abort = null;
+    busy(false);
+    t.updated = Date.now(); saveThreads(); renderThreads();
+  }
+}
+
 async function send(text) {
+  if (!text && attached.length) text = '¿Qué ves en esta imagen?';
+  // «genera una imagen de…» en el chat: va directo al modelo de imagen, sin pasar por el de texto
+  if (state.mode === 'chat') {
+    const intent = detectMediaIntent(text, { last: await lastMediaOf(thread()) });
+    if (intent) return sendMedia(intent, text);
+  }
   const decision = currentDecision();
+  if (attached.length && decision.model && capsOf(decision.model.ep, decision.model.id).vision === false) { toast(`${decision.model.id.toUpperCase()} NO VE IMÁGENES: ELIGE OTRO MODELO`); return; }
   const m = decision.model;
   if (!m) { toast(decision.reasons[0] ? decision.reasons[0].toUpperCase() : 'SIN API CONECTADA — REVISA AJUSTES'); return; }
   state.decision = decision;
@@ -1174,7 +1527,7 @@ async function send(text) {
       title: 'CONTEXTO AL 85 %',
       command: 'Se resumirá la conversación y verás el resumen antes de seguir. Las reglas fijadas y la memoria del proyecto (AGENTS.md) no se pierden: se envían siempre.',
     });
-    if (ok) await compact(t);
+    if (ok) await compact(t, { trigger: 'auto' });
     if (ok && auto) addMessage('system', 'El contexto llegó al 85 %: la conversación se resumió sola (arriba lo que el modelo recuerda). Puedes desactivarlo en Ajustes → Comportamiento.');
   }
   if (!t.messages.length) {
@@ -1183,14 +1536,18 @@ async function send(text) {
   }
   input.value = ''; autosize();
   const turn = state.mode === 'agent' ? Date.now() : null;
-  t.messages.push({ role: 'user', content: text, turn });
-  addMessage('user', text, { turn });
+  const attachments = attached.map((a) => a.id);
+  attached = [];
+  renderAttachments();
+  t.messages.push({ role: 'user', content: text, turn, ...(attachments.length ? { attachments } : {}) });
+  const userRow = addMessage('user', text, { turn });
+  showAttachments(userRow, attachments);
   t.updated = Date.now(); saveThreads(); renderThreads();
 
   state.abort = new AbortController();
   busy(true);
   try {
-    if (state.mode === 'agent') await sendAgent(t, m, text, turn);
+    if (state.mode === 'agent') { remoteHost?.emit({ thread: t.id, kind: 'user', text }); await sendAgent(t, m, text, turn); }
     else await sendChat(t, m);
   } catch (err) {
     if (err.name !== 'AbortError') {
@@ -1207,17 +1564,150 @@ async function send(text) {
     t.updated = Date.now();
     saveThreads();
     updateContext();
+    if (state.mode === 'agent') remoteHost?.emit({ thread: t.id, kind: 'turn-end' });
   }
 }
 
+/* ---------------------------------------------------------------- control remoto: el agente, visto desde el móvil */
+const remoteCallIds = new WeakMap();
+let remoteLastDelta = 0;
+function remoteEmit(threadId, ev) {
+  if (!remoteHost?.connected() || ev.nested) return; // de los subagentes llega solo su resumen
+  const send = (x) => remoteHost.emit({ thread: threadId, ...x });
+  const callId = (c) => { if (!remoteCallIds.has(c)) remoteCallIds.set(c, Math.random().toString(36).slice(2, 10)); return remoteCallIds.get(c); };
+  const label = (c) => `${c.tool} ${String(toolTarget(c) ?? '').slice(0, 140)}`.trim();
+  switch (ev.type) {
+    case 'assistant-start': send({ kind: 'assistant-start' }); break;
+    case 'assistant-delta': if (Date.now() - remoteLastDelta > 200) { remoteLastDelta = Date.now(); send({ kind: 'delta', text: stripToolBlocks(ev.text || '') }); } break;
+    case 'assistant-end': send({ kind: 'assistant-end', text: stripToolBlocks(ev.text || '') }); break;
+    case 'tool-start': send({ kind: 'tool', id: callId(ev.call), tool: ev.call.tool, label: label(ev.call), status: 'start' }); break;
+    case 'tool-end': send({ kind: 'tool', id: callId(ev.call), tool: ev.call.tool, label: label(ev.call), status: /^(ERROR|DENEGADO|RECHAZADO|BLOQUEADO|DETENIDO)/.test(String(ev.result ?? '')) ? 'error' : 'ok' }); break;
+    case 'subagent-start': send({ kind: 'system', text: `Subagente${ev.agent ? ` ${ev.agent}` : ''} lanzado` }); break;
+    case 'subagent-end': send({ kind: 'system', text: subagentSummary(ev) }); break;
+    case 'todos': send({ kind: 'todos', todos: ev.todos }); break;
+    case 'hook': for (const x of [...(ev.messages || [])]) send({ kind: 'system', text: `[hook ${ev.event}] ${x}` }); break;
+    default: break;
+  }
+}
+
+/** Lo que el móvil puede ver y hacer del agente de este PC. */
+function remoteApp(hostName) {
+  const agentThreads = () => state.threads.filter((x) => x.mode === 'agent');
+  return {
+    hostName: () => hostName,
+    toast,
+    snapshot: () => ({
+      host: hostName, workspace: state.workspace || '', perm: state.perm, agent: state.agent, busy: !!state.abort,
+      thread: (state.mode === 'agent' && state.current) || agentThreads()[0]?.id || null, model: currentModel()?.id || '',
+    }),
+    threads: () => agentThreads().slice(0, 60).map((x) => ({ id: x.id, title: x.title, updated: x.updated, workspace: x.workspace || '' })),
+    thread: (id) => {
+      const x = agentThreads().find((y) => y.id === id);
+      if (!x) return null;
+      return { id: x.id, title: x.title, messages: x.messages.filter((m) => (m.role === 'user' || m.role === 'assistant') && typeof m.content === 'string').slice(-80).map(({ role, content }) => ({ role, content: content.slice(0, 20000) })) };
+    },
+    send: async (text, threadId, device) => {
+      if (state.abort) throw new Error('El agente está ocupado: espera a que termine o páralo.');
+      if (state.mode !== 'agent') setMode('agent');
+      if (threadId && agentThreads().some((x) => x.id === threadId)) { if (state.current !== threadId) openThread(threadId); } else { state.current = null; openThread(null); }
+      addMessage('system', `Mensaje enviado desde el móvil «${device?.name || 'móvil'}».`);
+      send(text); // sin esperar: el móvil sigue el turno por los eventos
+      setTimeout(() => remoteHost?.pushThreads(), 300);
+    },
+    stop: () => stopEverything('detenida desde el móvil'),
+    newThread: () => { setMode('agent'); state.current = null; openThread(null); },
+    setPerm: (v) => { if (!['ask', 'auto-edit'].includes(v)) return; state.perm = v; store.set('perm', v); $('#perm-mode').value = v; },
+    setAgent: (v) => { if (['plan', 'build'].includes(v)) setAgent(v); },
+    confirmPair: ({ name, platform }) => confirmDialog({
+      title: 'EMPAREJAR UN MÓVIL', localOnly: true, where: '',
+      command: `«${name}»${platform ? ` (${platform})` : ''} quiere controlar JeanCode en este PC: ver las conversaciones del agente, escribirle, pararlo y aprobar sus permisos.\n\nAcéptalo solo si es tu móvil y acabas de escanear el código.`,
+    }).then((v) => v === true),
+  };
+}
+
+/** Ajustes → Control desde el móvil (escritorio). */
+async function initRemoteHostUi() {
+  const host = (await desktop.remote.lanStatus().catch(() => ({}))).hostname || 'PC';
+  remoteHost = createRemoteHost({ desktop, app: remoteApp(store.get('remoteHostName', '') || host) });
+  let pairTimer = null;
+  const render = (s) => {
+    $('#remote-enabled').checked = s.enabled;
+    $('#remote-lan').checked = s.lan;
+    if (document.activeElement !== $('#remote-worker')) $('#remote-worker').value = s.worker || '';
+    if (document.activeElement !== $('#remote-wkey')) $('#remote-wkey').value = s.wkey || '';
+    $('#remote-pair').disabled = !s.enabled;
+    $('#remote-status').textContent = !s.enabled ? 'Desactivado.' : [
+      s.lan ? (s.lanRunning ? `Wi-Fi: ${s.lanUrls.join(' · ') || 'sin red local'}` : 'Wi-Fi: no se pudo escuchar') : 'Wi-Fi: desactivada',
+      s.worker ? `Internet: ${s.relayRooms ? 'conectado al Worker' : 'conectando con el Worker…'}` : 'Internet: sin Worker (solo Wi-Fi)',
+    ].join(' · ');
+    if (!s.pairing) { $('#remote-qr').hidden = true; clearInterval(pairTimer); }
+    $('#remote-devices').innerHTML = s.devices.map((d) => `<li><span class="status ${d.online.length ? 'ok' : ''}" aria-hidden="true"></span>
+      <span class="ep-prov">${esc(d.name)}</span>
+      <span class="ep-url apps-desc">${d.online.length ? `conectado (${esc(d.online.map((k) => ({ lan: 'Wi-Fi', p2p: 'P2P', relay: 'relay' }[k] || k)).join(', '))})` : d.lastSeen ? `visto ${esc(new Date(d.lastSeen).toLocaleString())}` : 'emparejado, aún sin conectar'}</span>
+      <button class="btn ghost sm" type="button" data-remote-revoke="${esc(d.id)}">Quitar</button></li>`).join('') || '<li class="fine">Ningún móvil emparejado.</li>';
+  };
+  remoteHost.onChange(render);
+  $('#remote-enabled').addEventListener('change', (e) => remoteHost.configure({ enabled: e.target.checked }).catch((err) => toast(String(err.message).toUpperCase())));
+  $('#remote-lan').addEventListener('change', (e) => remoteHost.configure({ lan: e.target.checked }).catch((err) => toast(String(err.message).toUpperCase())));
+  $('#remote-save').addEventListener('click', () => remoteHost.configure({ worker: $('#remote-worker').value, wkey: $('#remote-wkey').value.trim() })
+    .then(() => toast('CONTROL REMOTO: GUARDADO')).catch((err) => toast(String(err.message).toUpperCase())));
+  $('#remote-pair').addEventListener('click', async () => {
+    try {
+      const p = await remoteHost.startPairing();
+      $('#remote-qr').hidden = false;
+      $('#remote-qr-img').src = p.qr;
+      $('#remote-copy').onclick = () => navigator.clipboard.writeText(p.url).then(() => toast('ENLACE COPIADO')).catch(() => toast('NO SE PUDO COPIAR'));
+      clearInterval(pairTimer);
+      const tick = () => { const s = Math.max(0, Math.round((p.exp - Date.now()) / 1000)); $('#remote-exp').textContent = `caduca en ${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`; };
+      tick(); pairTimer = setInterval(tick, 1000);
+    } catch (err) { toast(String(err.message).toUpperCase()); }
+  });
+  $('#remote-cancel').addEventListener('click', () => { remoteHost.cancelPairing(); render(remoteHost.status()); });
+  $('#remote-devices').addEventListener('click', async (e) => {
+    const b = e.target.closest('[data-remote-revoke]');
+    if (b && await confirmDialog({ title: 'QUITAR MÓVIL', command: 'Ese móvil deja de poder conectarse. Para volver a usarlo habrá que emparejarlo otra vez.', localOnly: true, where: '' })) remoteHost.revoke(b.dataset.remoteRevoke);
+  });
+  await remoteHost.load();
+}
+
 /* ------------------------------------------------------------- comandos */
+/** /hooks: qué hooks están activos aquí, de dónde vienen y qué archivos se leen (como /hooks de Claude Code). */
+async function showHooks() {
+  if (!desktop?.hooks) { addMessage('system', 'Los hooks solo están en la app de escritorio.'); return; }
+  const project = state.workspace ? await loadHooks(state.workspace, { interactive: false }) : { sources: [] };
+  const engine = await hookEngine(project);
+  const global = await desktop.hooks.global().catch(() => ({}));
+  const rows = engine.list();
+  const lines = [`HOOKS ${engine.disabled ? '(DESACTIVADOS: disableAllHooks)' : `ACTIVOS · ${rows.length}`}`];
+  for (const ev of HOOK_EVENTS) {
+    const xs = rows.filter((r) => r.event === ev);
+    if (xs.length) lines.push(`\n${ev}`, ...xs.map((r) => `  [${r.matcher}] ${r.type === 'prompt' ? `prompt: ${r.prompt.slice(0, 80)}` : r.command}  · ${r.label}`));
+  }
+  lines.push('', `Usuario: ${global?.file || 'settings.json'} (Ajustes → Comportamiento)`,
+    'Proyecto: .claude/settings.json · .claude/settings.local.json · .jeancode/settings.json · .jeancode/settings.local.json · .jeancode/hooks.json');
+  if (project.untrusted) lines.push('Este proyecto tiene hooks en los que aún no confiaste: se te preguntará al enviar el próximo mensaje.');
+  if (project.error) lines.push(`Error: ${project.error}`);
+  addMessage('system', lines.join('\n'));
+}
+
 async function runCommand({ name, args }) {
   const t = thread();
   switch (name) {
     case 'new': state.current = null; openThread(null); return null;
     case 'clear':
-      if (t) { t.messages = []; t.agentMessages = null; t.todos = []; saveThreads(); openThread(t.id); }
+      if (t) {
+        await endSession(t.id, 'clear');
+        t.messages = []; t.agentMessages = null; t.todos = []; t.sessionContext = ''; t.sessionSource = 'clear';
+        saveThreads(); openThread(t.id);
+      }
       return null;
+    case 'imagen': case 'image': case 'video': case 'videohtml': {
+      const kind = name === 'videohtml' ? 'html' : name === 'video' ? 'video' : 'image';
+      if (!args) { setMode('image'); return null; }
+      await sendMedia({ kind, prompt: args }, `/${name} ${args}`);
+      return null;
+    }
+    case 'hooks': await showHooks(); return null;
     case 'help': openPanel('help'); return null;
     case 'model':
       if (!args) { toast('MODELOS: ' + state.models.map((x) => x.id).join(', ')); return null; }
@@ -1225,15 +1715,25 @@ async function runCommand({ name, args }) {
       return null;
     case 'export': exportThread(t, ['json', 'pdf', 'md'].includes(args.toLowerCase()) ? args.toLowerCase() : 'md'); return null;
     case 'zip': $('#dl-zip').click(); return null;
-    case 'compact': await compact(t); return null;
+    case 'compact': await compact(t, { trigger: 'manual', instructions: args }); return null;
     case 'context': await showContext(t); return null;
     case 'doctor': await runDoctor(); return null;
     case 'loop': {
-      // /loop 10m <mensaje>: lo envía ahora y luego cada intervalo, mientras la app siga abierta
+      // /loop 10m <mensaje>: lo envía ahora y luego cada intervalo, mientras la app siga abierta.
+      // /loop <mensaje> (sin intervalo): el agente marca el ritmo con schedule_wakeup (60 s – 1 h), como en Claude Code.
       if (/^(stop|para|parar)$/i.test(args)) { stopLoop('BUCLE DETENIDO'); return null; }
-      const [, every, msg] = args.match(/^(\S+)\s+([\s\S]+)$/) || [];
+      const [, every, rest] = args.match(/^(\S+)\s+([\s\S]+)$/) || [];
+      if (!parseInterval(every) && args.trim()) {
+        if (state.mode !== 'agent') { toast('EL /loop SIN INTERVALO ES DEL MODO AGENTE'); return null; }
+        stopLoop();
+        const cur = thread() || newThread();
+        state.loop = { dynamic: true, msg: args.trim(), thread: cur.id, until: Date.now() + 7 * 86400000, pending: null, timer: null };
+        addMessage('system', `Bucle dinámico: «${args.trim().slice(0, 120)}». El agente decide cuándo repetir (schedule_wakeup, entre 1 min y 1 h) o lo da por terminado. /loop stop para pararlo.`);
+        return args.trim();
+      }
+      const msg = rest;
       const ms = parseInterval(every);
-      if (!ms || !msg) { toast('USO: /loop 10m <mensaje>  ·  /loop stop'); return null; }
+      if (!ms || !msg) { toast('USO: /loop 10m <mensaje>  ·  /loop <mensaje>  ·  /loop stop'); return null; }
       stopLoop();
       state.loop = { msg, ms, until: Date.now() + 7 * 86400000, timer: setInterval(() => {
         if (Date.now() > state.loop?.until) { stopLoop('BUCLE TERMINADO (7 DÍAS)'); return; }
@@ -1362,7 +1862,7 @@ async function runDoctor() {
 }
 
 function stopLoop(msg) {
-  if (state.loop?.timer) clearInterval(state.loop.timer);
+  if (state.loop?.timer) { clearInterval(state.loop.timer); clearTimeout(state.loop.timer); }
   if (state.loop && msg) toast(msg);
   state.loop = null;
 }
@@ -1371,36 +1871,177 @@ function stopLoop(msg) {
  * Ejecuta una tarea programada sin nadie delante: hilo propio, modelo del modo Agente, sin permisos
  * interactivos (lo que pediría permiso se deniega y se informa). Solo comandos "permitir siempre" de esa carpeta.
  */
-async function runAutomation(task) {
-  const decision = decide(routeFor('agent'), { models: state.visible || [], mode: 'agent', endpoints: getEndpoints(), need: { tools: true, tokens: 4000 } });
-  const m = decision.model;
+let automations = null; // API del planificador (initAutomations)
+
+/** Modelo de una tarea: el fijado en ella (si sigue disponible) o el enrutado automático del agente. */
+function automationModel(task) {
+  const pinned = task.model ? (state.routable || state.models || []).find((x) => modelKey(x) === task.model) : null;
+  const decision = decide(pinned ? { routing: 'model', target: task.model } : routeFor('agent'), { models: state.visible || [], mode: 'agent', endpoints: getEndpoints(), need: { tools: true, tokens: 4000 } });
+  return { m: pinned || decision.model, decision };
+}
+
+/** Espera a que la interfaz no esté ocupada (como máximo `ms`). */
+async function waitIdle(ms = 30 * 60000) {
+  const until = Date.now() + ms;
+  while (state.abort && Date.now() < until) await new Promise((r) => setTimeout(r, 2000));
+  return !state.abort;
+}
+
+/**
+ * Ejecuta una tarea programada SIN SUPERVISIÓN (como una sesión programada de Claude): conversación nueva o la misma de
+ * siempre, el modelo de la tarea, sus permisos y los hooks (del usuario y del proyecto en el que ya confiaste).
+ * Devuelve { status: ok|denied|error|cancelled, summary, thread }.
+ */
+async function runAutomation(task, { extra = '', trigger = 'schedule' } = {}) {
+  const prompt = extra ? `${task.prompt}\n\nINSTRUCCIONES EXTRA PARA ESTA EJECUCIÓN: ${extra}` : task.prompt;
+  // send_later en la conversación que tienes abierta: se entrega como un mensaje normal, cuando el agente quede libre
+  if (task.kind === 'send_later' && state.current === task.threadId && state.mode === 'agent' && thread()) {
+    if (await waitIdle()) { await send(prompt); return { status: 'ok', summary: 'entregado en la conversación abierta', thread: task.threadId }; }
+  }
+  const { m, decision } = automationModel(task);
   if (!m) throw new Error('no hay un modelo disponible para el agente');
   await desktop.fs.list(task.folder, '.'); // la carpeta existe y se puede leer
-  const t = { id: crypto.randomUUID(), mode: 'agent', title: `⏱ ${task.name.toUpperCase()}`.slice(0, 60), messages: [{ role: 'user', content: task.prompt, turn: Date.now() }], files: {}, changed: {}, updated: Date.now(), automation: task.id };
-  state.threads.unshift(t); saveThreads(); renderThreads();
-  const [skills, os, memory, mcpAll] = await Promise.all([desktop.skills.list(), desktop.system.os(), desktop.project.memory(task.folder).catch(() => ''), desktop.mcp ? desktop.mcp.tools().catch(() => []) : []]);
+  const reuse = task.target === 'same' ? state.threads.find((x) => x.id === (task.threadId || task.lastThread)) : null;
+  const t = reuse || { id: crypto.randomUUID(), mode: 'agent', title: `⏱ ${task.name.toUpperCase()}`.slice(0, 60), messages: [], files: {}, changed: {}, updated: Date.now(), automation: task.id };
+  if (!reuse) state.threads.unshift(t);
+  const history = t.messages.filter((x) => (x.role === 'user' || x.role === 'assistant') && typeof x.content === 'string').map(({ role, content }) => ({ role, content }));
+  t.messages.push({ role: 'user', content: prompt, turn: Date.now(), automation: trigger });
+  saveThreads(); renderThreads();
+  const [skills, os, memory, mcpAll, agents] = await Promise.all([desktop.skills.list(), desktop.system.os(), desktop.project.memory(task.folder).catch(() => ''),
+    desktop.mcp ? desktop.mcp.tools().catch(() => []) : [], desktop.project.agents(task.folder).catch(() => [])]);
   const allowList = store.get(`allow:${task.folder}`, []);
   const denied = [];
   const tools = [];
   // solo las herramientas de apps que el usuario permitió siempre (nadie puede aprobar las demás)
   const mcp = mcpAll.filter((x) => allowList.includes(`mcp:${x.name}`));
-  const sys = { workspace: task.folder, os, skills, mode: task.perm === 'edit' ? 'auto-edit' : 'plan', agent: task.perm === 'edit' ? 'build' : 'plan', memory, agents: [], style: 'concise', rules: store.get('rules', ''), mcp, quality: qualityBlock() };
-  const messages = [{ role: 'system', content: agentSystem(sys) + '\n\nEJECUCIÓN PROGRAMADA SIN SUPERVISIÓN: nadie puede aprobar acciones ahora. Si algo necesita permiso, no insistas: explica al final qué quedó pendiente.' }, { role: 'user', content: task.prompt }];
+  const perm = task.perm === 'edit' ? 'auto-edit' : 'plan';
+  const agentMode = task.perm === 'edit' ? 'build' : 'plan';
+  const sys = { workspace: task.folder, os, skills, mode: perm, agent: agentMode, memory, agents, style: 'concise', rules: store.get('rules', ''), mcp, quality: qualityBlock() };
+  // hooks: los del usuario siempre; los del proyecto solo si ya confiaste en ellos (aquí nadie puede confiar)
+  const project = await loadHooks(task.folder, { interactive: false });
+  const engine = await hookEngine(project, { folder: task.folder, sessionId: t.id, transcriptPath: await writeTranscript(t), perm, agent: agentMode, model: m });
+  const notes = [];
+  if (project.untrusted) notes.push('Los hooks de este proyecto no se ejecutaron: aún no confiaste en ellos (abre la carpeta en el agente para revisarlos).');
+  const collect = (ev, res) => { for (const x of [...(res?.messages || []), ...(res?.outputs || [])]) notes.push(`[hook ${ev}] ${x}`); };
+  let sessionContext = '';
+  if (engine.has('SessionStart')) { const ss = await engine.run('SessionStart', { source: reuse ? 'resume' : 'startup' }); collect('SessionStart', ss); sessionContext = ss.context; }
+  let userText = prompt;
+  if (engine.has('UserPromptSubmit')) {
+    const up = await engine.run('UserPromptSubmit', { prompt });
+    collect('UserPromptSubmit', up);
+    if (up.blocked || up.stop) {
+      t.messages.push({ role: 'assistant', content: `Un hook no dejó ejecutar la tarea: ${up.reason || up.stopReason}` });
+      saveThreads(); renderThreads();
+      return { status: 'error', summary: `bloqueada por un hook: ${up.reason || up.stopReason}`, thread: t.id };
+    }
+    if (up.context) userText += `\n\n[CONTEXTO DE UN HOOK]\n${up.context}`;
+  }
+  if (sessionContext) sys.rules = `${sys.rules || ''}\n\nCONTEXTO DE INICIO (hooks SessionStart):\n${sessionContext}`;
+  const messages = [{ role: 'system', content: agentSystem(sys) + '\n\nEJECUCIÓN PROGRAMADA SIN SUPERVISIÓN: nadie puede aprobar acciones ahora. Si algo necesita permiso, no insistas: explica al final qué quedó pendiente.' },
+    ...history, { role: 'user', content: userText }];
   const ac = new AbortController();
   const ctx = {
-    ep: m.ep, model: m.id, desktop, workspace: task.folder, mode: sys.mode, agent: sys.agent, sys, think: false, signal: ac.signal, mcp,
+    ep: m.ep, model: m.id, desktop, workspace: task.folder, mode: perm, agent: agentMode, sys, think: false, signal: ac.signal, mcp, hooks: engine,
     chat: (o) => routedChat({ id: o.model, ep: o.ep }, o, { models: state.routable || state.models, mode: 'agent', endpoints: getEndpoints(), decision, need: { tools: true } }).then((r) => r.text),
     confirm: async (o) => { denied.push(`${o.title}: ${String(o.command || o.path || '').split('\n')[0].slice(0, 120)}`); return false; },
     isAllowed: (cmd) => !UNSAFE_CMD.test(cmd.trim()) && allowList.includes(cmd.trim()), allowCommand: () => {},
-    onEvent: (ev) => { if (ev.type === 'tool-end' && !ev.nested) tools.push(`${ev.call.tool}${/^(ERROR|DENEGADO|RECHAZADO)/.test(String(ev.result)) ? ' ✕' : ' ✓'}`); },
+    scheduler: schedulerFor(t, task.folder, perm),
+    onEvent: (ev) => {
+      if (ev.type === 'tool-end' && !ev.nested) tools.push(`${ev.call.tool}${/^(ERROR|DENEGADO|RECHAZADO|BLOQUEADO)/.test(String(ev.result)) ? ' ✕' : ' ✓'}`);
+      if (ev.type === 'hook') collect(ev.event, ev);
+    },
   };
   const timer = setTimeout(() => ac.abort(), 30 * 60000); // como mucho 30 minutos por ejecución
   let final;
   try { final = await runAgent(ctx, messages); } finally { clearTimeout(timer); }
-  const extra = [tools.length ? `Herramientas: ${tools.join(', ')}` : '', denied.length ? `Quedó pendiente de tu permiso:\n- ${denied.join('\n- ')}` : ''].filter(Boolean).join('\n\n');
-  t.messages.push({ role: 'assistant', content: `${stripToolBlocks(final) || final}${extra ? `\n\n---\n${extra}` : ''}` });
+  if (engine.has('SessionEnd')) collect('SessionEnd', await engine.run('SessionEnd', { reason: 'other' }).catch(() => null));
+  const tail = [tools.length ? `Herramientas: ${tools.join(', ')}` : '', denied.length ? `Quedó pendiente de tu permiso:\n- ${denied.join('\n- ')}` : '', notes.join('\n')].filter(Boolean).join('\n\n');
+  const answer = stripToolBlocks(final) || final;
+  t.messages.push({ role: 'assistant', content: `${answer}${tail ? `\n\n---\n${tail}` : ''}`, model: ctx.model, at: Date.now() });
   t.updated = Date.now(); saveThreads(); renderThreads();
-  return { ok: true, summary: (stripToolBlocks(final) || final).replace(/\s+/g, ' ').slice(0, 200), thread: t.id };
+  if (state.current === t.id) openThread(t.id, { keepTop: true });
+  return { status: denied.length ? 'denied' : 'ok', summary: answer.replace(/\s+/g, ' ').slice(0, 200), thread: t.id };
+}
+
+/** Lo que el agente puede hacer con las tareas programadas (schedule_task, send_later, schedule_wakeup). */
+/** perm = modo de permisos de QUIEN programa: lo que cree nunca tendrá más permisos que él. */
+function schedulerFor(t, folder, perm) {
+  if (!automations) return null;
+  const pick = (a) => {
+    if (a.cron) return { type: 'cron', cron: String(a.cron) };
+    if (a.run_once_at) return { type: 'once', at: Date.parse(String(a.run_once_at)) };
+    if (a.delay_minutes) return { type: 'once', at: Date.now() + Math.max(1, Number(a.delay_minutes)) * 60000 };
+    return a.manual ? { type: 'manual' } : undefined;
+  };
+  const describe = (x) => `«${x.name}» · ${describeTaskSchedule(x.schedule)}${x.schedule.type === 'cron' ? ` (${x.schedule.cron})` : ''} · ${x.perm === 'edit' ? 'puede editar' : 'solo lectura'} · ${x.target === 'same' ? 'misma conversación' : 'conversación nueva'}\nCarpeta: ${x.folder}\n\n${x.prompt}`;
+  return {
+    list: () => automations.list().map(taskSummary).join('\n') || 'No hay tareas programadas.',
+    runs(id) {
+      const x = automations.get(String(id || ''));
+      if (!x) return `ERROR: no existe la tarea ${id}. Usa schedule_task {"action": "list"}.`;
+      return x.runs.length ? x.runs.slice().reverse().map(runSummary).join('\n') : 'Aún no se ha ejecutado.';
+    },
+    async act(action, a, ask) {
+      if (action === 'create') {
+        const draft = validateTask({ name: a.name, prompt: a.prompt, folder: a.folder || folder, schedule: pick(a) || { type: 'manual' },
+          perm: a.permission === 'edit' ? 'edit' : 'read', target: a.same_conversation ? 'same' : 'new', notify: a.notify !== false });
+        if (!(await ask({ title: 'PROGRAMAR TAREA', command: describe(draft) }))) return 'RECHAZADO por el usuario.';
+        const x = automations.create(draft, { by: 'agent' });
+        return `Tarea creada. ${taskSummary(x)}`;
+      }
+      const cur = automations.get(String(a.id || ''));
+      if (!cur) return `ERROR: no existe la tarea ${a.id}. Usa schedule_task {"action": "list"}.`;
+      if (action === 'update') {
+        const patch = Object.fromEntries(Object.entries({ name: a.name, prompt: a.prompt, folder: a.folder, schedule: pick(a), enabled: a.enabled,
+          perm: a.permission ? (a.permission === 'edit' ? 'edit' : 'read') : undefined, target: a.same_conversation == null ? undefined : (a.same_conversation ? 'same' : 'new'), notify: a.notify }).filter(([, v]) => v !== undefined));
+        const preview = validateTask({ ...cur, ...patch });
+        if (!(await ask({ title: 'CAMBIAR TAREA', command: `Antes:\n${describe(cur)}\n\nDespués:\n${describe(preview)}${patch.enabled === false ? '\n(en pausa)' : ''}` }))) return 'RECHAZADO por el usuario.';
+        return `Tarea actualizada. ${taskSummary(automations.update(cur.id, patch))}`;
+      }
+      if (action === 'delete') {
+        if (!(await ask({ title: 'BORRAR TAREA', command: describe(cur) }))) return 'RECHAZADO por el usuario.';
+        automations.remove(cur.id);
+        return `Tarea «${cur.name}» borrada.`;
+      }
+      if (action === 'run') {
+        if (!(await ask({ title: 'EJECUTAR TAREA AHORA', command: `${describe(cur)}${a.text ? `\n\nInstrucciones extra: ${a.text}` : ''}` }))) return 'RECHAZADO por el usuario.';
+        automations.runNow(cur.id, String(a.text || ''), 'agent'); // en segundo plano: el resultado queda en su historial
+        return `Tarea «${cur.name}» lanzada. Su resultado quedará en el historial (schedule_task {"action": "runs", "id": "${cur.id}"}).`;
+      }
+      return `ERROR: acción desconocida "${action}". Usa list, runs, create, update, delete o run.`;
+    },
+    /** send_later: un mensaje para ESTA conversación más tarde (una tarea de una sola vez, visible en Automatizaciones). */
+    sendLater(a) {
+      const at = a.at ? Date.parse(String(a.at)) : Date.now() + Math.max(1, Number(a.delay_minutes) || 0) * 60000;
+      if (!Number.isFinite(at) || (!a.at && !a.delay_minutes)) return 'ERROR: indica "delay_minutes" (mínimo 1) o "at" (fecha ISO).';
+      const msg = String(a.message || '').trim();
+      if (!msg) return 'ERROR: falta "message".';
+      const x = automations.create({ name: a.name || `↩ ${msg.slice(0, 40)}`, prompt: msg, folder, schedule: { type: 'once', at }, perm: perm === 'auto-edit' ? 'edit' : 'read',
+        target: 'same', threadId: t.id, kind: 'send_later', notify: true }, { by: 'agent' });
+      return `Programado: este mensaje volverá a esta conversación ${fmtWhen(x.schedule.at)}. Se puede cancelar en Automatizaciones.`;
+    },
+    /** schedule_wakeup: siguiente iteración de un /loop sin intervalo (el modelo marca el ritmo). */
+    wakeup(a) {
+      if (a.stop) { stopLoop('BUCLE TERMINADO POR EL AGENTE'); return 'Bucle terminado.'; }
+      if (!state.loop?.dynamic || state.loop.thread !== t.id) return 'ERROR: schedule_wakeup solo sirve dentro de un /loop sin intervalo en esta conversación.';
+      const sec = Math.min(Math.max(Number(a.delaySeconds) || 0, 60), 3600);
+      state.loop.pending = { ms: sec * 1000, reason: String(a.reason || '').slice(0, 200), prompt: a.prompt ? String(a.prompt) : '' };
+      return `Siguiente iteración en ${sec} s.`;
+    },
+  };
+}
+
+/** Al terminar un turno en un /loop sin intervalo: programa la siguiente iteración o da el bucle por terminado. */
+function loopAfterTurn(t) {
+  const L = state.loop;
+  if (!L?.dynamic || L.thread !== t.id) return;
+  if (Date.now() > L.until) { stopLoop('BUCLE TERMINADO (7 DÍAS)'); return; }
+  const next = L.pending;
+  L.pending = null;
+  if (!next) { stopLoop('BUCLE TERMINADO: el agente no programó otra iteración'); addMessage('system', '/loop terminado: el agente no pidió otra iteración (schedule_wakeup).'); return; }
+  if (next.prompt) L.msg = next.prompt;
+  addMessage('system', `/loop · siguiente iteración ${fmtWhen(Date.now() + next.ms)}${next.reason ? ` · ${next.reason}` : ''}`);
+  L.timer = setTimeout(() => { if (state.loop === L) { if (state.abort) { L.pending = { ms: 60000, reason: 'la conversación estaba ocupada' }; loopAfterTurn(t); } else send(L.msg); } }, next.ms);
 }
 
 /** Resumen de reentrada: no sustituye la conversación, solo recuerda dónde quedó. */
@@ -1418,9 +2059,18 @@ async function reentrySummary(t, row) {
   } catch (err) { if (err.name !== 'AbortError') $('.bubble', row).textContent = 'No se pudo resumir: ' + err.message; } finally { state.abort = null; busy(false); }
 }
 
-async function compact(t) {
+async function compact(t, { trigger = 'manual', instructions = '' } = {}) {
   const m = currentModel();
   if (!t || !t.messages.length || !m) { toast('NADA QUE RESUMIR'); return; }
+  // PreCompact (como en Claude Code): trigger manual | auto, custom_instructions = lo escrito tras /compact
+  if (desktop && state.mode === 'agent' && state.workspace) {
+    const engine = hookSessions.get(t.id) || await hookEngine(await loadHooks(state.workspace, { interactive: false }), { sessionId: t.id });
+    if (engine.has('PreCompact')) {
+      const pc = await engine.run('PreCompact', { trigger, custom_instructions: instructions });
+      showHookResult('PreCompact', pc);
+      if (pc.blocked || pc.stop) { addMessage('system', `Un hook impidió compactar: ${pc.reason || pc.stopReason}`); return; }
+    }
+  }
   state.abort = new AbortController();
   busy(true);
   const row = addMessage('system', 'Resumiendo la conversación…');
@@ -1430,12 +2080,14 @@ async function compact(t) {
       .slice(-Math.min(120000, Math.round(contextWindow(m).limit * 2.2))); // ≈ 60 % de la ventana: cabe en modelos pequeños
     const { text: summary } = await routedChat(m, {
       signal: state.abort.signal, think: false,
-      messages: [{ role: 'system', content: PROMPTS.compact }, { role: 'user', content: transcript }],
+      messages: [{ role: 'system', content: PROMPTS.compact + (instructions ? `\n\nInstrucciones del usuario para este resumen: ${instructions}` : '') }, { role: 'user', content: transcript }],
     }, routeCtx());
     const content = `RESUMEN DE LA CONVERSACIÓN ANTERIOR (lo que el modelo recordará; edítalo con /clear si algo falta):\n${summary.trim()}`;
     t.messages = [{ role: 'assistant', content }];
     t.agentMessages = null;
     t.lastContext = 0;
+    // la próxima vez el agente empieza sesión con SessionStart source "compact"
+    if (hookSessions.has(t.id)) { hookSessions.delete(t.id); t.sessionSource = 'compact'; }
     saveThreads();
     openThread(t.id);
     toast('CONVERSACIÓN COMPACTADA');
@@ -1498,7 +2150,7 @@ function agentSys({ os, skills, memory }) {
 async function sendChat(t, m, { regen = null } = {}) {
   const sys = chatSystem(t) + (regen?.instruction ? `\n\nPARA ESTA RESPUESTA: reescribe tu respuesta anterior a la última pregunta. ${regen.instruction}` : '');
   const upto = regen ? t.messages.slice(0, regen.index) : t.messages;
-  const history = upto.slice(-24).map(({ role, content }) => ({ role, content }));
+  const history = await withImages(upto.slice(-24), loadAttachment);
   const row = regen ? regen.row : addMessage('assistant', '', { streaming: true, model: m.id });
   if (regen) { $('.msg-actions', row)?.remove(); $('.who', row).textContent = `JEAN · ${m.id.toUpperCase()}`; updateMessage(row, '', '', true); }
   let answeredBy = m.id;
@@ -1869,35 +2521,88 @@ function allowCommand(cmd) {
   toast(`PERMITIDO SIEMPRE AQUÍ: ${p.slice(0, 60)}`);
 }
 
-/* hooks del proyecto: se piden confianza la primera vez y cada vez que cambian */
-async function loadHooks() {
-  const h = await desktop.project.hooks(state.workspace).catch(() => null);
-  if (!h) return null;
-  if (h.error) { addMessage('system', h.error); return null; }
-  const trusted = store.get(`hooksTrust:${state.workspace}`, '');
-  if (trusted === h.hash) return h.hooks;
+/* Hooks del proyecto (.claude/settings*.json, .jeancode/settings*.json, .jeancode/hooks.json): se pide confianza
+   la primera vez y cada vez que cambian. Sin interacción (tareas programadas) solo corren si ya se confió en ellos. */
+async function loadHooks(folder = state.workspace, { interactive = true } = {}) {
+  const none = { sources: [], disableAll: false };
+  const h = desktop?.project?.hooks ? await desktop.project.hooks(folder).catch(() => null) : null;
+  if (!h) return none;
+  if (h.error) { if (interactive) addMessage('system', h.error); return { ...none, error: h.error }; }
+  const res = { sources: h.sources.map((s) => ({ hooks: s.hooks, label: s.file })), disableAll: h.disableAll };
+  // Como en Claude Code, "disableAllHooks" de un proyecto apaga TODOS los hooks (también los tuyos), pero solo
+  // si confiaste en ese proyecto: hasta entonces ni sus hooks corren ni su disableAllHooks cuenta.
+  if (store.get(`hooksTrust:${folder}`, '') === h.hash) return res;
+  if (!interactive) return { ...none, untrusted: true };
+  const parts = h.sources.map((s) => `${s.file}\n${JSON.stringify(s.hooks, null, 2)}`);
+  if (h.disableAll) parts.push('"disableAllHooks": true → desactiva TODOS los hooks mientras trabajes aquí, también los tuyos de usuario.');
   const ok = await confirmDialog({
     title: 'HOOKS DEL PROYECTO',
-    command: `Esta carpeta define comandos que se ejecutarán solos:\n\n${JSON.stringify(h.hooks, null, 2)}\n\nPermítelos solo si confías en el proyecto.`,
+    command: `${h.sources.length ? 'Esta carpeta define comandos que se ejecutarán solos' : 'Esta carpeta cambia cómo funcionan los hooks'}:\n\n${parts.join('\n\n')}\n\nAcéptalo solo si confías en el proyecto.`,
   });
-  if (!ok) { addMessage('system', 'Hooks del proyecto desactivados para esta sesión.'); return null; }
-  store.set(`hooksTrust:${state.workspace}`, h.hash);
-  return h.hooks;
+  if (!ok) { addMessage('system', 'La configuración de hooks del proyecto no se aplica en esta sesión.'); return none; }
+  store.set(`hooksTrust:${folder}`, h.hash);
+  return res;
 }
 
-/** Hooks globales (Ajustes) + los del proyecto (si confiaste): motor común para todo el turno. */
-async function hookEngine(projectHooks) {
+/** Hooks de tipo "prompt": los evalúa un modelo (el de la conversación o el de la tarea). */
+async function hookLlm(prompt, timeoutSec, model) {
+  const m = model || currentModel();
+  if (!m) throw new Error('no hay modelo disponible para evaluar el hook');
+  const ac = new AbortController();
+  const timer = setTimeout(() => ac.abort(), timeoutSec * 1000);
+  try {
+    const { text } = await routedChat(m, { signal: ac.signal, think: false, messages: [
+      { role: 'system', content: 'Evalúas un hook de JeanCode: decides si la acción descrita debe permitirse. Responde solo con JSON.' },
+      { role: 'user', content: prompt }] }, routeCtx());
+    return text;
+  } finally { clearTimeout(timer); }
+}
+
+/** Motor de hooks del usuario (Ajustes → settings.json) + los del proyecto. o: { folder, sessionId, transcriptPath, perm, agent, model } */
+async function hookEngine(project, o = {}) {
+  const folder = o.folder || state.workspace;
   const global = desktop.hooks ? await desktop.hooks.global().catch(() => null) : null;
-  if (global?.error) addMessage('system', `Los hooks globales no son válidos (${global.error}): Ajustes → Comportamiento.`);
-  const engine = createHooks([{ hooks: global?.hooks, label: 'globales' }, { hooks: projectHooks, label: 'proyecto' }],
-    (command, input, timeout) => desktop.hooks.exec(state.workspace, command, { ...input, workspace: state.workspace }, timeout));
-  // compatibilidad: post_edit y post_turn devuelven texto para el resultado o el chat
-  engine.text = async (event, vars = {}) => {
-    if (!engine.has(event)) return '';
-    const r = await engine.run(event, vars);
-    return [r.context, r.blocked ? r.reason : '', ...r.notes].filter(Boolean).map((x) => `\n[hook ${event}] ${x.slice(0, 1500)}`).join('');
-  };
+  if (global?.error) addMessage('system', `Los hooks del usuario no son válidos (${global.error}): Ajustes → Comportamiento.`);
+  // "disableAllHooks": true en cualquier settings los apaga todos, como en Claude Code. El de un proyecto solo llega
+  // aquí si confiaste en él (loadHooks), así que un repositorio ajeno no puede apagar tus hooks sin que lo aceptes.
+  const off = !!(global?.disableAll || project?.disableAll);
+  const sources = off ? [] : [{ hooks: global?.hooks, label: 'usuario' }, ...(project?.sources || [])];
+  const engine = createHooks(sources, {
+    exec: (command, input, timeout) => desktop.hooks.exec(folder, command, input, timeout),
+    llm: (prompt, timeout) => hookLlm(prompt, timeout, o.model),
+    base: () => ({ session_id: o.sessionId || '', transcript_path: o.transcriptPath || '', cwd: folder, permission_mode: permissionMode(o.perm ?? state.perm, o.agent ?? state.agent) }),
+  });
+  engine.disabled = !!off;
   return engine;
+}
+
+/** Muestra al usuario lo que un hook quiere enseñarle (systemMessage, errores, salida de texto). */
+function showHookResult(event, res) {
+  for (const m of res?.messages || []) addMessage('system', `[hook ${event}] ${m}`);
+  for (const o of res?.outputs || []) addMessage('tool', `[hook ${event}] ${o}`);
+}
+
+/* Sesiones del agente (para SessionStart / SessionEnd): conversación → motor de hooks con que empezó */
+const hookSessions = new Map();
+async function endSession(threadId, reason) {
+  const engine = hookSessions.get(threadId);
+  hookSessions.delete(threadId);
+  if (!engine?.has('SessionEnd')) return;
+  showHookResult('SessionEnd', await engine.run('SessionEnd', { reason }).catch(() => null));
+}
+/** Notification: avisos que JeanCode da al usuario (permiso pedido, agente esperando). */
+function hookNotify(threadId, type, message) {
+  const engine = hookSessions.get(threadId);
+  if (engine?.has('Notification')) engine.run('Notification', { notification_type: type, message }).then((r) => showHookResult('Notification', r)).catch(() => {});
+}
+window.addEventListener('beforeunload', () => { for (const id of [...hookSessions.keys()]) endSession(id, 'prompt_input_exit'); });
+
+/** Copia de la conversación en JSONL (como transcript_path de Claude Code) para los hooks que la lean. */
+async function writeTranscript(t) {
+  if (!desktop.hooks?.transcript) return '';
+  const lines = (t.agentMessages || t.messages).filter((m) => m.role === 'user' || m.role === 'assistant')
+    .map((m) => ({ type: m.role, message: { role: m.role, content: typeof m.content === 'string' ? m.content : '(imagen)' } }));
+  return desktop.hooks.transcript(t.id, lines).catch(() => '');
 }
 
 function renderTodos(todos) {
@@ -1927,18 +2632,36 @@ async function sendAgent(t, m, text, turn) {
     store.set(`nogitWarned:${state.workspace}`, true);
     addMessage('system', 'Esta carpeta no es un repo git: «volver aquí» deshará los archivos que edite el agente, pero no lo que cambien los comandos de terminal. Con git init se cubre todo.');
   }
-  const engine = await hookEngine(hooks);
-  // user_prompt: un hook puede rechazar el mensaje (salida 2) o añadirle contexto
+  const transcriptPath = await writeTranscript(t);
+  const engine = await hookEngine(hooks, { sessionId: t.id, transcriptPath });
+  // SessionStart: al empezar (startup), al volver a una conversación (resume), tras /clear o tras compactar.
+  // Su contexto queda para toda la sesión.
+  if (!hookSessions.has(t.id)) {
+    const source = t.sessionSource || (t.agentMessages ? 'resume' : 'startup');
+    delete t.sessionSource;
+    hookSessions.set(t.id, engine);
+    if (engine.has('SessionStart')) {
+      const ss = await engine.run('SessionStart', { source });
+      showHookResult('SessionStart', ss);
+      t.sessionContext = ss.context || '';
+    }
+  } else hookSessions.set(t.id, engine);
+  // UserPromptSubmit: un hook puede rechazar el mensaje (código 2 / decision block / continue:false) o añadirle contexto
   let hookContext = '';
-  if (engine.has('user_prompt')) {
-    const up = await engine.run('user_prompt', { prompt: text });
+  if (engine.has('UserPromptSubmit')) {
+    const up = await engine.run('UserPromptSubmit', { prompt: text });
+    showHookResult('UserPromptSubmit', up);
+    if (up.stop) { addMessage('system', `Un hook detuvo el turno: ${up.stopReason}`); return; }
     if (up.blocked) { addMessage('system', `Un hook no dejó enviar el mensaje: ${up.reason}`); return; }
     hookContext = up.context;
   }
-  // session_start: al empezar una conversación del agente, su salida queda como contexto de la sesión
-  if (!t.agentMessages && engine.has('session_start')) t.sessionContext = (await engine.run('session_start', {})).context || '';
   const sys = agentSys({ os, skills, memory });
-  if (t.sessionContext) sys.rules = `${sys.rules || ''}\n\nCONTEXTO DE INICIO (hooks session_start):\n${t.sessionContext}`;
+  // con un modelo local, instrucciones y herramientas más cortas: cada token cuenta
+  sys.lean = capsOf(m.ep, m.id).local === true && (capsOf(m.ep, m.id).context ?? 0) <= 32768;
+  if (t.sessionContext) sys.rules = `${sys.rules || ''}\n\nCONTEXTO DE INICIO (hooks SessionStart):\n${t.sessionContext}`;
+  if (state.loop?.dynamic && state.loop.thread === t.id) {
+    sys.rules = `${sys.rules || ''}\n\nESTÁS EN UN /loop SIN INTERVALO: haz la tarea y, si hay que volver a mirarla más tarde, llama a schedule_wakeup {"delaySeconds": 60-3600, "reason": "qué esperas"} eligiendo el plazo según lo rápido que cambia lo que vigilas. Si la tarea terminó, no lo llames: el bucle acaba.`;
+  }
   // apps conectadas (MCP): las herramientas de las conexiones activas en este momento
   const mcpTools = desktop.mcp ? await desktop.mcp.tools().catch(() => []) : [];
   sys.mcp = mcpTools;
@@ -1958,16 +2681,24 @@ async function sendAgent(t, m, text, turn) {
     const w = await actComputer('list_windows', {}, computer.vision);
     if (!String(w).startsWith('ERROR')) observed = `\n\n[OBSERVACIÓN INICIAL · ventanas abiertas]\n${w}`;
   }
-  t.agentMessages.push({ role: 'user', content: (await expandMentions(text)) + observed + (hookContext ? `\n\n[CONTEXTO DE UN HOOK]\n${hookContext}` : '') });
+  const fullText = (await expandMentions(text)) + observed + (hookContext ? `\n\n[CONTEXTO DE UN HOOK]\n${hookContext}` : '');
+  const [firstTurn] = await withImages([{ role: 'user', content: fullText, attachments: userMsg.attachments }], loadAttachment);
+  t.agentMessages.push(firstTurn);
 
   let row = null;
   const ctx = {
     ep: m.ep, model: m.id, desktop, workspace: state.workspace, mode: state.perm, agent: state.agent, sys, reasoning: reasoningFor(m),
     // el agente pide cada paso al enrutador; si cambia de backend, los pasos siguientes siguen en el nuevo
     chat: (o) => routedChat({ id: o.model, ep: o.ep }, o, routeCtx((to) => { ctx.ep = to.ep; ctx.model = to.id; })).then((r) => r.text),
-    signal: state.abort.signal, confirm: confirmWithAttention, isAllowed, allowCommand, hooks: engine, runHooks: engine.text, computer,
-    autoDiagnostics: store.get('autoDiag', true), mcp: mcpTools,
+    signal: state.abort.signal, confirm: confirmWithAttention, isAllowed, allowCommand, hooks: engine, computer,
+    notify: (type, message) => hookNotify(t.id, type, message), scheduler: schedulerFor(t, state.workspace, state.agent === 'plan' ? 'plan' : state.perm),
+    autoDiagnostics: store.get('autoDiag', true), mcp: mcpTools, media: agentMedia,
     onEvent: (ev) => {
+      if (ev.type === 'media') {
+        const r = addMessage('assistant', '', { cls: ev.nested ? 'nested' : '' });
+        t.messages.push({ role: 'assistant', content: '', media: ev.ids, model: ctx.model, at: Date.now() });
+        showMedia(r, ev.ids);
+      }
       if (ev.type === 'usage') { addUsage(t, ev.usage, { ep: ctx.ep, id: ctx.model }); if (row) setUsage(row, ev.usage); }
       if (ev.type === 'assistant-start') row = addMessage('assistant', '', { streaming: true, cls: ev.nested ? 'nested' : '' });
       if (ev.type === 'assistant-delta' && row) updateMessage(row, ev.text, ev.reasoning, true);
@@ -1983,6 +2714,8 @@ async function sendAgent(t, m, text, turn) {
       if (ev.type === 'subagent-end') addMessage('system', subagentSummary(ev));
       if (ev.type === 'todos' && !ev.nested) { t.todos = ev.todos; renderTodos(ev.todos); }
       if (ev.type === 'file-changed') state.fileCache = null;
+      if (ev.type === 'hook') showHookResult(ev.event, ev);
+      remoteEmit(t.id, ev);
       updateContext();
     },
   };
@@ -1993,8 +2726,9 @@ async function sendAgent(t, m, text, turn) {
     if (computer) await endComputer();
   }
   t.messages.push({ role: 'assistant', content: stripToolBlocks(final) || final, model: ctx.model, at: Date.now() });
-  const post = await ctx.runHooks('post_turn');
-  if (post) addMessage('tool', post.trim());
+  // Notification idle_prompt: el agente terminó y espera, con la ventana en segundo plano
+  if (document.hidden) hookNotify(t.id, 'idle_prompt', 'JeanCode terminó y espera tu respuesta');
+  loopAfterTurn(t);
   // PLAN → BUILD: el plan se aprueba con un clic (y se puede editar antes en el campo de texto)
   if (state.agent === 'plan') {
     const bar = document.createElement('div');
@@ -2039,7 +2773,15 @@ streamElAll().forEach((el) => el.addEventListener('click', async (e) => {
 
 function streamElAll() { return [$('#chat-stream'), $('#code-stream'), $('#agent-stream')]; }
 
-function confirmDialog({ title, command, path, before, after, allowAlways = false, alwaysLabel = '', where = null }) {
+function confirmDialog(opts) {
+  // con un móvil conectado, la misma pregunta llega al móvil y vale la primera respuesta (salvo localOnly)
+  const remote = !opts.localOnly && remoteHost?.connected() ? remoteHost.ask({ ...opts, where: opts.where ?? state.workspace ?? '' }) : null;
+  const local = localConfirm(opts, remote?.promise);
+  mascot.ask(local);
+  if (remote) local.finally(() => remote.cancel());
+  return local;
+}
+function localConfirm({ title, command, path, before, after, allowAlways = false, alwaysLabel = '', where = null }, remoteAnswer = null) {
   return new Promise((resolve) => {
     const d = $('#panel-confirm');
     $('#confirm-title').textContent = title;
@@ -2053,7 +2795,9 @@ function confirmDialog({ title, command, path, before, after, allowAlways = fals
       $('#confirm-path').textContent = `${path}   +${st.add} −${st.del}`;
       body.innerHTML = `<pre class="diff">${ops.map((o) => `<span class="d d${o.t === '+' ? 'a' : o.t === '-' ? 'r' : o.t === '@' ? 's' : 'c'}">${o.t === '@' ? '' : esc(o.t)} ${esc(o.s)}</span>`).join('\n')}</pre>`;
     }
-    const done = (v) => { d.close(); resolve(v); };
+    let settled = false;
+    const done = (v) => { if (settled) return; settled = true; d.close(); resolve(v); };
+    remoteAnswer?.then((v) => done(v));
     const always = $('#confirm-always');
     const canAlways = allowAlways && command && (alwaysLabel || !UNSAFE_CMD.test(command.trim()));
     always.hidden = !canAlways;
@@ -2061,7 +2805,7 @@ function confirmDialog({ title, command, path, before, after, allowAlways = fals
     always.onclick = () => done('always');
     $('#confirm-yes').onclick = () => done(true);
     $('#confirm-no').onclick = () => done(false);
-    d.oncancel = () => resolve(false);
+    d.oncancel = () => { if (!settled) { settled = true; resolve(false); } };
     d.showModal();
     $('#confirm-no').focus();
   });
@@ -2086,6 +2830,7 @@ function openPanel(name) {
   if (name === 'settings') renderSettings();
   if (name === 'download') loadReleases();
   if (name === 'skills') renderSkills();
+  if (name === 'plugins') renderPlugins();
   if (name === 'help') renderHelp();
   if (name === 'hf') initHf();
   d.showModal();
@@ -2318,6 +3063,7 @@ function renderSettings() {
   $('#directness-select').value = store.get('directness', 'normal');
   $('#length-select').value = store.get('length', 'auto');
   $('#auto-compact').checked = store.get('autoCompact', true);
+  $('#mascot-on').checked = store.get('mascot', true) !== false;
   { const r = store.get('relay', null); $('#relay-url').value = r?.url || ''; $('#relay-key').value = r?.key || ''; }
   renderAllowList();
   renderFenix();
@@ -2350,6 +3096,7 @@ $('#auto-diag').addEventListener('change', (e) => store.set('autoDiag', e.target
 $('#directness-select').addEventListener('change', (e) => store.set('directness', e.target.value));
 $('#length-select').addEventListener('change', (e) => store.set('length', e.target.value));
 $('#auto-compact').addEventListener('change', (e) => store.set('autoCompact', e.target.checked));
+$('#mascot-on').addEventListener('change', (e) => { store.set('mascot', e.target.checked); placeMascot(); });
 
 /* hooks globales (escritorio): <userData>/hooks.json */
 if (desktop?.hooks) {
@@ -2387,7 +3134,12 @@ const pcPolicy = () => normalizePolicy(store.get('pcPolicy', null));
 
 if (desktop?.computer) {
   initApps({ $, esc, toast, desktop, confirmDialog });
-  initAutomations({ $, esc, toast, store, desktop, confirmDialog, run: runAutomation, openThread: (id) => { const t = state.threads.find((x) => x.id === id); if (t) { setMode('agent'); openThread(id); } } });
+  automations = initAutomations({
+    $, esc, toast, store, desktop, confirmDialog, run: runAutomation,
+    openThread: (id) => { const t = state.threads.find((x) => x.id === id); if (t) { setMode('agent'); openThread(id); } },
+    models: () => (state.visible || []).map((x) => ({ key: modelKey(x), label: `${modelLabel(x.id)} · ${providerOf(x.ep).name}` })),
+    defaultFolder: () => state.workspace || '',
+  });
   desktop.computer.supported().then((r) => { pc.supported = !!r.supported; pc.platform = r.platform; renderPcSettings(); }).catch(() => {});
   desktop.computer.onState((s) => renderPcStatus(s));
   desktop.computer.onEmergency((reason) => { state.abort?.abort(); toast(String(reason).toUpperCase()); });
@@ -2708,7 +3460,7 @@ $('#export-btn').addEventListener('click', () => {
 $('#wipe-btn').addEventListener('click', () => {
   if (!window.confirm('Esto borra la URL, la clave y todo el historial de este equipo. ¿Seguir?')) return;
   store.wipe();
-  wipeThreads().finally(() => location.reload());
+  Promise.allSettled([wipeThreads(), mediaLibrary.wipe()]).finally(() => location.reload());
 });
 
 async function renderSkills() {
@@ -2772,6 +3524,55 @@ if (desktop) {
   });
 }
 
+/* plugins (web/js/plugins-catalog.js): skills + subagentes + comandos con formato de Claude Code */
+const countsText = (c) => `${c.skills} skills · ${c.agents} subagentes · ${c.commands} comandos`;
+async function renderPlugins() {
+  if (!desktop) return;
+  const installed = await desktop.plugins.list().catch(() => []);
+  $('#plugin-list').innerHTML = installed.map((p) => `<li>
+    <span class="ep-prov">${esc(PLUGIN_CATALOG.find((c) => c.id === p.id)?.name || p.displayName)}</span>
+    <span class="ep-url apps-desc">${esc(countsText(p.counts))}${p.enabled ? '' : ' · DESACTIVADO'}</span>
+    <span class="ep-meta">${esc(p.version || '')}${p.license ? ` · ${esc(p.license)}` : ''}</span>
+    <button class="btn ghost sm" type="button" data-plugin-toggle="${esc(p.id)}" data-on="${p.enabled ? '1' : ''}">${p.enabled ? 'DESACTIVAR' : 'ACTIVAR'}</button>
+    <button class="btn ghost sm" type="button" data-plugin-del="${esc(p.id)}">QUITAR</button>
+  </li>`).join('') || '<li>Sin plugins instalados.</li>';
+  const have = new Set(installed.map((p) => p.id));
+  $('#plugin-catalog').innerHTML = `<ul class="rows">${PLUGIN_CATALOG.map((c) => `<li>
+    <span class="ep-prov">${esc(c.name)}</span><span class="ep-url apps-desc">${esc(c.desc)}</span>
+    <span class="ep-meta">${esc(c.repo)} · ${esc(c.license)}</span>
+    ${have.has(c.id) ? `<button class="btn ghost sm" type="button" data-plugin-add="${esc(c.id)}">Actualizar</button>` : `<button class="btn sm" type="button" data-plugin-add="${esc(c.id)}">Instalar</button>`}
+  </li>`).join('')}</ul>`;
+}
+async function installPlugin(run, btn) {
+  if (btn) { btn.disabled = true; btn.textContent = 'Instalando…'; }
+  try {
+    const r = await run();
+    if (r) toast(`PLUGIN ${String(r.name).toUpperCase()} ${r.version || ''}: ${countsText(r.counts).toUpperCase()}`);
+    await loadProject(); // sus subagentes y comandos entran ya en la sesión actual
+  } catch (err) { toast(String(err.message).toUpperCase().slice(0, 140)); }
+  renderPlugins();
+}
+if (desktop?.plugins) {
+  $('#plugin-catalog').addEventListener('click', (e) => {
+    const b = e.target.closest('[data-plugin-add]');
+    const c = b && PLUGIN_CATALOG.find((x) => x.id === b.dataset.pluginAdd);
+    if (c) installPlugin(() => desktop.plugins.installGit(pluginUrl(c)), b);
+  });
+  $('#plugin-list').addEventListener('click', async (e) => {
+    const t = e.target.closest('[data-plugin-toggle]');
+    const d = e.target.closest('[data-plugin-del]');
+    if (t) await desktop.plugins.setEnabled(t.dataset.pluginToggle, !t.dataset.on);
+    if (d) await desktop.plugins.remove(d.dataset.pluginDel);
+    if (t || d) { await loadProject(); renderPlugins(); }
+  });
+  $('#plugin-folder').addEventListener('click', () => installPlugin(() => desktop.plugins.installFolder()));
+  $('#plugin-url-form').addEventListener('submit', (e) => {
+    e.preventDefault();
+    const url = $('#plugin-url').value.trim();
+    if (url) installPlugin(() => desktop.plugins.installGit(url)).then(() => { $('#plugin-url').value = ''; });
+  });
+}
+
 /* ------------------------------------------------------------------ init */
 /* Modo de razonamiento (NORMAL / PENSAR / ESFUERZO). Se recuerda por modelo; si el modelo no admite
    el modo guardado se usa el más parecido. reasoning.js decide qué ofrece cada modelo y cómo se pide. */
@@ -2827,6 +3628,14 @@ if ('serviceWorker' in navigator && location.protocol.startsWith('http') && !des
   navigator.serviceWorker.register('sw.js').catch(() => { /* sin SW la web funciona igual */ });
 }
 
+/** Quita la pantalla de arranque: se ve al menos un momento para que no sea un parpadeo. */
+function hideBoot() {
+  const boot = $('#boot');
+  if (!boot) return;
+  const wait = Math.max(0, 1300 - performance.now());
+  setTimeout(() => { boot.classList.add('out'); setTimeout(() => boot.remove(), 420); }, wait);
+}
+
 (async function init() {
   applyBrand();
   $('#splash-version').textContent = `v${VERSION}`;
@@ -2848,10 +3657,33 @@ if ('serviceWorker' in navigator && location.protocol.startsWith('http') && !des
   let warned = false;
   state.threads = await loadThreads(() => { if (!warned) { warned = true; toast('NO SE PUDO GUARDAR EL HISTORIAL: REVISA EL ESPACIO DEL DISCO'); } });
   window.addEventListener('pagehide', () => { saveThreadsNow(state.threads.slice(0, 200)); });
-  if (getEndpoints().length) await enterApp();
+  if (isNativeApp()) {
+    const { initPhoneAgent } = await import('./mobile/agent-ui.js');
+    phoneAgent = initPhoneAgent({
+      $, esc, store, toast, renderMarkdown, confirmDialog, agentSystem, runAgent, stripToolBlocks, capsOf, media: agentMedia,
+      model: () => currentModel(),
+      chat: (m, o) => routedChat(m, o, { models: state.routable || state.models, mode: 'agent', endpoints: getEndpoints(), need: { tools: true } }).then((r) => r.text),
+    });
+  }
+  window.addEventListener('jc:media-full', () => toast('SIN ESPACIO: ESTE RESULTADO NO SE GUARDARÁ AL CERRAR. BORRA ALGO DE LA GALERÍA'));
+  if (!desktop) remotePhone = initRemotePhone({ $, esc, store, toast, renderMarkdown, platform: isNativeApp() ? 'app' : 'web' });
+  if (desktop?.remote) initRemoteHostUi().catch((e) => console.warn('control remoto', e));
+  // controlar un PC no necesita API propia: un enlace de emparejamiento o un PC ya emparejado entran directos
+  const wantsRemote = !!remotePhone && (remotePhone.fromLink || (!getEndpoints().length && store.get('remotePCs', []).length));
+  if (getEndpoints().length || wantsRemote) await enterApp();
   else showSplash();
+  if (wantsRemote) setMode('remote');
+  placeMascot();
+  hideBoot();
+  setTimeout(() => pruneAttachments().catch(() => {}), 8000);
+  $('#splash-remote')?.addEventListener('click', async () => { await enterApp(); setMode('remote'); });
   setTimeout(() => checkUpdate(), 1500); // escritorio y móvil, también antes de conectar una API
-})();
+})().catch((e) => {
+  // un arranque roto se ve: sin esto quedaría la pantalla de arranque o un fondo negro
+  console.error('arranque', e);
+  hideBoot();
+  toast(`NO SE PUDO INICIAR: ${String(e?.message || e).slice(0, 120)}`);
+});
 
 // la tarjeta de ruta se recalcula al abrirla (la conversación pudo crecer y cambiar lo que cabe)
 $('#route-menu').addEventListener('toggle', (e) => { if (e.target.open) renderRouteCard(); });

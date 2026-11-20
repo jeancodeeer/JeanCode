@@ -7,11 +7,15 @@ const { McpManager } = require('./lib/mcp');
 const diagnostics = require('./lib/diagnostics');
 const { checkLink } = require('./lib/linkcheck');
 const skillsLib = require('./lib/skills');
+const pluginsLib = require('./lib/plugins');
 const { ComputerControl } = require('./lib/computer/control');
 const runner = require('./lib/runner');
 
 const CONFIG_FILE = () => path.join(app.getPath('userData'), 'config.json');
 const skills = () => skillsLib.create(path.join(app.getPath('userData'), 'skills'));
+// una sola instancia: guarda en memoria el índice de los plugins (cientos de SKILL.md) hasta que cambian
+let pluginStore;
+const plugins = () => (pluginStore ||= pluginsLib.create(path.join(app.getPath('userData'), 'plugins')));
 const streams = new Map();
 let win;
 
@@ -93,6 +97,13 @@ ipcMain.handle('http', async (_e, req) => {
   if (!['GET', 'POST'].includes(method)) return { error: 'método no permitido' };
   // sin límite, un servidor colgado dejaba la interfaz esperando para siempre
   const timeout = Math.min(Math.max(Number(req.timeout) || 60000, 1000), 3600000);
+  // imagen o vídeo generado: con tope de tamaño y comprobando cada salto (lib/tools.js)
+  if (req.binary) {
+    try {
+      const r = await tools.downloadBinary(req.url, { headers: req.headers, publicOnly: req.publicOnly !== false, timeout, method, body: req.body });
+      return { status: r.status, type: r.type, b64: r.data ? r.data.toString('base64') : '' };
+    } catch (e) { return { error: e.message }; }
+  }
   try {
     // noRedirect: comprobar un enlace sin seguir redirecciones (podrían llevar a la red local)
     const res = await fetch(req.url, { method, headers: req.headers, body: req.body, signal: AbortSignal.timeout(timeout), redirect: req.noRedirect ? 'manual' : 'follow' });
@@ -127,9 +138,10 @@ ipcMain.on('stream:start', async (e, id, req) => {
       while ((nl = buf.indexOf('\n')) >= 0) {
         const line = buf.slice(0, nl).trim();
         buf = buf.slice(nl + 1);
-        if (!line.startsWith('data:')) continue;
-        const payload = line.slice(5).trim();
-        if (payload === '[DONE]') continue;
+        // Ollama responde una línea JSON por trozo, sin el prefijo data:
+        if (!req.ndjson && !line.startsWith('data:')) continue;
+        const payload = req.ndjson ? line : line.slice(5).trim();
+        if (!payload || payload === '[DONE]') continue;
         if (wc.isDestroyed()) { ctrl.abort(); break; }
         try { wc.send('stream:event', id, JSON.parse(payload)); } catch { /* parcial */ }
       }
@@ -154,6 +166,7 @@ ipcMain.handle('fs:pickFolder', async () => {
 ipcMain.handle('fs:list', (_e, root, rel) => tools.list(root, rel));
 ipcMain.handle('fs:read', (_e, root, rel, off, lim) => tools.read(root, rel, off, lim));
 ipcMain.handle('fs:write', (_e, root, rel, content) => tools.write(root, rel, content));
+ipcMain.handle('fs:writeBinary', (_e, root, rel, b64) => tools.writeBinary(root, rel, b64));
 ipcMain.handle('fs:edit', (_e, root, rel, a, b) => tools.edit(root, rel, a, b));
 ipcMain.handle('fs:search', (_e, root, pat, rel) => tools.search(root, pat, rel));
 ipcMain.handle('shell:run', (_e, root, cmd, timeout) => tools.run(root, cmd, timeout));
@@ -201,21 +214,43 @@ ipcMain.handle('mcp:call', (_e, id, tool, args) => mcp.call(id, tool, args));
 ipcMain.handle('fs:diagnose', (_e, root, rel, opts) => diagnostics.diagnose(root, rel, { deep: !!opts?.deep, auto: !!opts?.auto }));
 ipcMain.handle('web:fetch', (_e, url) => tools.webfetch(url));
 ipcMain.handle('project:memory', (_e, root) => tools.projectMemory(root));
-ipcMain.handle('project:commands', (_e, root) => tools.commands(root));
-ipcMain.handle('project:agents', (_e, root) => tools.agents(root));
+// los del proyecto primero: si un nombre coincide con el de un plugin, gana el proyecto
+const merge = (own, extra) => [...own, ...extra.filter((x) => !own.some((o) => o.name === x.name))];
+ipcMain.handle('project:commands', async (_e, root) => merge(await tools.commands(root), await plugins().commands().catch(() => [])));
+ipcMain.handle('project:agents', async (_e, root) => merge(await tools.agents(root), await plugins().agents().catch(() => [])));
 ipcMain.handle('project:hooks', (_e, root) => tools.hooks(root));
-// hooks globales del usuario (Ajustes): <userData>/hooks.json, no piden confianza porque los escribe él
-const GLOBAL_HOOKS = () => path.join(app.getPath('userData'), 'hooks.json');
+// Hooks globales del usuario (Ajustes): <userData>/settings.json, como ~/.claude/settings.json de Claude Code.
+// No piden confianza porque los escribe él. Se sigue leyendo <userData>/hooks.json (formato antiguo) si no hay settings.json.
+const hookconfig = require('./lib/hookconfig');
+const USER_SETTINGS = () => path.join(app.getPath('userData'), 'settings.json');
+const LEGACY_HOOKS = () => path.join(app.getPath('userData'), 'hooks.json');
 ipcMain.handle('hooks:global', async () => {
-  const text = await fs.readFile(GLOBAL_HOOKS(), 'utf8').catch(() => '');
-  if (!text.trim()) return { text: '', hooks: {} };
-  try { return { text, hooks: tools.cleanHooks(JSON.parse(text)) }; } catch (e) { return { text, hooks: {}, error: e.message }; }
+  let file = USER_SETTINGS();
+  let text = await fs.readFile(file, 'utf8').catch(() => '');
+  if (!text.trim()) { file = LEGACY_HOOKS(); text = await fs.readFile(file, 'utf8').catch(() => ''); }
+  if (!text.trim()) return { text: '', hooks: {}, file: USER_SETTINGS() };
+  try {
+    const n = hookconfig.normalize(JSON.parse(text));
+    return { text, hooks: n.disableAll ? {} : n.hooks, disableAll: n.disableAll, file };
+  } catch (e) { return { text, hooks: {}, error: e.message, file }; }
 });
 ipcMain.handle('hooks:saveGlobal', async (_e, text) => {
   const t = String(text || '').trim();
-  if (t) tools.cleanHooks(JSON.parse(t)); // lanza si no es válido: no se guarda
-  await fs.writeFile(GLOBAL_HOOKS(), t ? `${t}\n` : '', 'utf8');
+  if (t) hookconfig.normalize(JSON.parse(t)); // lanza si no es válido: no se guarda
+  await fs.writeFile(USER_SETTINGS(), t ? `${t}
+` : '', 'utf8');
+  await fs.rm(LEGACY_HOOKS(), { force: true }); // ya migrado al formato nuevo
   return true;
+});
+// transcript_path de los hooks: la conversación en JSONL (como Claude Code), en <userData>/transcripts/<id>.jsonl
+ipcMain.handle('hooks:transcript', async (_e, id, lines) => {
+  const safe = String(id).replace(/[^\w-]/g, '').slice(0, 80);
+  if (!safe) throw new Error('id inválido');
+  const dir = path.join(app.getPath('userData'), 'transcripts');
+  await fs.mkdir(dir, { recursive: true });
+  const file = path.join(dir, `${safe}.jsonl`);
+  await fs.writeFile(file, (Array.isArray(lines) ? lines : []).map((l) => JSON.stringify(l)).join('\n') + '\n', 'utf8');
+  return file;
 });
 ipcMain.handle('hooks:exec', (_e, root, command, input, timeout) => tools.execHook(root, command, input, timeout));
 ipcMain.handle('turn:begin', (_e, root, turn) => tools.beginTurn(root, turn));
@@ -331,8 +366,17 @@ ipcMain.handle('run:input', (_e, id, text) => runner.input(id, text));
 ipcMain.handle('run:stop', (_e, id) => runner.stop(id));
 
 /* ---------------- skills ---------------- */
-ipcMain.handle('skills:list', () => skills().list());
-ipcMain.handle('skills:read', (_e, name) => skills().read(name));
+ipcMain.handle('skills:list', async () => merge(await skills().list(), await plugins().skills().catch(() => [])));
+// skill propia primero; si no, la de un plugin (o el índice/archivo de un plugin con "file")
+ipcMain.handle('skills:read', async (_e, name, file) => {
+  name = String(name);
+  const own = (await skills().list()).some((s) => s.name === name || s.id === name);
+  if (own && !file) return skills().read(name);
+  const r = await plugins().read(name, file ? String(file) : '');
+  if (r != null) return r;
+  if (own) throw new Error('las skills propias no admiten "file"; usa read_file si la skill está en la carpeta de trabajo');
+  return skills().read(name); // lanza el error con la lista de instaladas
+});
 ipcMain.handle('skills:remove', (_e, id) => skills().remove(id));
 ipcMain.handle('skills:installFolder', async () => {
   const r = await dialog.showOpenDialog(win, { properties: ['openDirectory'], title: 'Carpeta de la skill (con SKILL.md)' });
@@ -340,6 +384,41 @@ ipcMain.handle('skills:installFolder', async () => {
 });
 ipcMain.handle('skills:installUrl', (_e, url) => skills().installUrl(url, app.getPath('temp')));
 ipcMain.handle('skills:installGithub', (_e, repo, dir, branch) => skills().installGithubDir(repo, dir, branch));
+
+/* ---------------- plugins (formato de Claude Code: skills + subagentes + comandos) ---------------- */
+ipcMain.handle('plugins:list', () => plugins().list());
+ipcMain.handle('plugins:installGit', (_e, url) => plugins().installGit(String(url), app.getPath('temp')));
+ipcMain.handle('plugins:installFolder', async () => {
+  const r = await dialog.showOpenDialog(win, { properties: ['openDirectory'], title: 'Carpeta del plugin (con .claude-plugin/plugin.json)' });
+  return r.canceled ? null : plugins().installFrom(r.filePaths[0], r.filePaths[0]);
+});
+ipcMain.handle('plugins:setEnabled', (_e, id, on) => plugins().setEnabled(String(id), !!on));
+ipcMain.handle('plugins:remove', (_e, id) => plugins().remove(String(id)));
+
+/* ---------------- control remoto desde el móvil ---------------- */
+// Móviles emparejados (con su clave) y ajustes en <userData>/remote.json, cifrado con el llavero del sistema.
+const REMOTE_FILE = () => path.join(app.getPath('userData'), 'remote.json');
+const remoteLan = require('./lib/remote-lan').create({ onEvent: (ev) => win?.webContents.send('remote:lan', ev) });
+ipcMain.handle('remote:load', async () => {
+  try {
+    const j = JSON.parse(await fs.readFile(REMOTE_FILE(), 'utf8'));
+    return j.enc ? JSON.parse(decrypt(j.enc)) : j.data || {};
+  } catch { return {}; }
+});
+ipcMain.handle('remote:save', async (_e, data) => {
+  const text = JSON.stringify(data ?? {});
+  if (text.length > 200000) throw new Error('datos del control remoto demasiado grandes');
+  const body = safeStorage.isEncryptionAvailable() ? { enc: encrypt(text) } : { data: JSON.parse(text) };
+  await fs.writeFile(REMOTE_FILE(), JSON.stringify(body), 'utf8');
+  return true;
+});
+ipcMain.handle('remote:lanStart', (_e, port) => remoteLan.start(Number(port) || undefined));
+ipcMain.handle('remote:lanStop', () => remoteLan.stop());
+ipcMain.handle('remote:lanStatus', () => remoteLan.status());
+ipcMain.handle('remote:lanSend', (_e, conn, text) => remoteLan.send(Number(conn), String(text)));
+ipcMain.handle('remote:lanClose', (_e, conn) => remoteLan.close(Number(conn)));
+ipcMain.handle('remote:qr', (_e, text) => require('qrcode').toDataURL(String(text).slice(0, 2000), { margin: 2, scale: 6, errorCorrectionLevel: 'M', color: { dark: '#000000', light: '#f2f1ec' } }));
+app.on('before-quit', () => remoteLan.stop());
 
 app.whenReady().then(() => {
   createWindow();

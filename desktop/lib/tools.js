@@ -15,12 +15,18 @@ async function inside(root, rel = '.') {
   if (relToBase.startsWith('..') || path.isAbsolute(relToBase)) {
     throw new Error(`ruta fuera del espacio de trabajo: ${rel}`);
   }
-  try {
-    const real = await fs.realpath(target);
-    const r2 = path.relative(base, real);
-    if (r2.startsWith('..') || path.isAbsolute(r2)) throw new Error(`enlace fuera del espacio de trabajo: ${rel}`);
-  } catch (e) {
-    if (e.code !== 'ENOENT') throw e;
+  // lo que aún no existe se comprueba por su antepasado más cercano: una carpeta enlazada no saca la escritura fuera
+  for (let p = target; ; p = path.dirname(p)) {
+    try {
+      const r2 = path.relative(base, await fs.realpath(p));
+      if (r2.startsWith('..') || path.isAbsolute(r2)) throw new Error(`enlace fuera del espacio de trabajo: ${rel}`);
+      break;
+    } catch (e) {
+      if (e.code !== 'ENOENT') throw e;
+      // un enlace roto tampoco: al escribir, crearía su destino fuera de la carpeta
+      if ((await fs.lstat(p).catch(() => null))?.isSymbolicLink()) throw new Error(`enlace fuera del espacio de trabajo: ${rel}`);
+      if (path.dirname(p) === p) break;
+    }
   }
   return target;
 }
@@ -122,8 +128,8 @@ function killTree(child) {
   } catch { try { child.kill('SIGKILL'); } catch { /* ya terminó */ } }
 }
 
-const spawnShell = (command, cwd) => spawn(command, {
-  cwd, shell: true, windowsHide: true, env: process.env, detached: process.platform !== 'win32',
+const spawnShell = (command, cwd, env = process.env) => spawn(command, {
+  cwd, shell: true, windowsHide: true, env, detached: process.platform !== 'win32',
 });
 
 const runningCommands = new Set(); // comandos en primer plano, para poder cancelarlos
@@ -360,6 +366,14 @@ async function rewind(root, turn) {
   return n ? `restaurados ${n} cambio(s) de archivo hechos por el agente (sin git, los comandos de terminal no se pueden deshacer)`
     : 'no había cambios del agente desde ese mensaje';
 }
+/** Archivo binario (imagen o vídeo generado) dentro de la carpeta de trabajo; nunca pisa uno que ya exista. */
+async function writeBinary(root, rel, b64) {
+  const file = await inside(root, rel);
+  await fs.mkdir(path.dirname(file), { recursive: true });
+  const data = Buffer.from(String(b64), 'base64');
+  await fs.writeFile(file, data, { flag: 'wx' });
+  return `${rel} (${Math.round(data.length / 1024)} KB)`;
+}
 async function writeTracked(root, rel, content) { await snapshot(root, rel); return write(root, rel, content); }
 async function editTracked(root, rel, a, b) { await snapshot(root, rel); return edit(root, rel, a, b); }
 async function undo(root) {
@@ -420,27 +434,130 @@ function privateIp(ip) {
   return BLOCKED.check(ip, net.isIPv6(ip) ? 'ipv6' : 'ipv4');
 }
 
-async function assertPublic(u) {
+/** Direcciones públicas a las que resuelve la URL (o error). Son las ÚNICAS a las que se conectará pinnedGet. */
+async function assertPublic(u, lookup = dns.lookup) {
   if (!['http:', 'https:'].includes(u.protocol)) throw new Error('solo http/https');
+  if (u.username || u.password) throw new Error('URL con usuario o contraseña');
   const host = u.hostname.replace(/^\[|\]$/g, '');
-  const addrs = net.isIP(host) ? [{ address: host }] : await dns.lookup(host, { all: true });
+  const addrs = net.isIP(host) ? [{ address: host, family: net.isIP(host) }] : await lookup(host, { all: true });
   if (!addrs.length || addrs.some((a) => privateIp(a.address))) throw new Error(`destino no permitido (red local o privada): ${u.hostname}`);
+  return addrs.map((a) => ({ address: a.address, family: a.family || net.isIP(a.address) }));
 }
 
-async function webfetch(url) {
+const http = require('node:http');
+const https = require('node:https');
+const zlib = require('node:zlib');
+const MAX_PAGE = 5 * 1024 * 1024;
+
+/**
+ * GET que se conecta SOLO a las direcciones ya comprobadas: el `lookup` de la petición las devuelve tal cual, sin
+ * volver a preguntar al DNS, así que un DNS que cambie de respuesta (DNS rebinding) no cuela una IP privada.
+ * TLS verifica el certificado con el nombre de la URL. No sigue redirecciones. → { status, location, type, text }
+ */
+function pinnedGet(u, addrs, { timeout = 20000 } = {}) {
+  const host = u.hostname.replace(/^\[|\]$/g, '');
+  const lib = u.protocol === 'https:' ? https : http;
+  return new Promise((resolve, reject) => {
+    const req = lib.request({
+      protocol: u.protocol, hostname: host, port: u.port || undefined, path: `${u.pathname}${u.search}`, method: 'GET',
+      headers: { 'User-Agent': 'JeanCode', Accept: '*/*', 'Accept-Encoding': 'gzip, deflate, br' },
+      servername: net.isIP(host) ? undefined : host,
+      lookup: (_h, opts, cb) => (opts && opts.all ? cb(null, addrs) : cb(null, addrs[0].address, addrs[0].family)),
+      agent: false, // sin sockets reutilizados de otra petición
+      timeout,
+    }, (res) => {
+      const chunks = [];
+      let size = 0;
+      res.on('data', (c) => {
+        size += c.length;
+        if (size > MAX_PAGE) { res.destroy(); return; }
+        chunks.push(c);
+      });
+      res.on('close', () => {
+        let body = Buffer.concat(chunks);
+        const enc = String(res.headers['content-encoding'] || '').toLowerCase();
+        const opts = { maxOutputLength: MAX_PAGE }; // una «bomba» comprimida no llena la memoria
+        try {
+          if (enc.includes('gzip')) body = zlib.gunzipSync(body, { ...opts, finishFlush: zlib.constants.Z_SYNC_FLUSH });
+          else if (enc.includes('deflate')) body = zlib.inflateSync(body, { ...opts, finishFlush: zlib.constants.Z_SYNC_FLUSH });
+          else if (enc.includes('br')) body = zlib.brotliDecompressSync(body, opts);
+        } catch (e) { return reject(new Error(e.code === 'ERR_BUFFER_TOO_LARGE' ? 'página demasiado grande' : `respuesta comprimida no válida (${e.message})`)); }
+        resolve({ status: res.statusCode || 0, location: res.headers.location || '', type: res.headers['content-type'] || '', text: body.toString('utf8') });
+      });
+      res.on('error', reject);
+    });
+    const deadline = setTimeout(() => req.destroy(new Error('sin respuesta a tiempo')), timeout + 10000);
+    req.on('timeout', () => req.destroy(new Error('sin respuesta a tiempo')));
+    req.on('error', reject);
+    req.on('close', () => clearTimeout(deadline));
+    req.end();
+  });
+}
+
+const MAX_DOWNLOAD = 300 * 1024 * 1024;
+/** Una petición de descarga: corta en cuanto pasa del tope, sin cargar antes el archivo entero en memoria. */
+function binaryGet(u, addrs, headers, { max, timeout, method = 'GET', body }) {
+  const host = u.hostname.replace(/^\[|\]$/g, '');
+  const lib = u.protocol === 'https:' ? https : http;
+  return new Promise((resolve, reject) => {
+    const req = lib.request({
+      protocol: u.protocol, hostname: host, port: u.port || undefined, path: `${u.pathname}${u.search}`, method, agent: false,
+      headers: { 'User-Agent': 'JeanCode', Accept: '*/*', 'Accept-Encoding': 'identity', ...headers },
+      servername: net.isIP(host) ? undefined : host, timeout: 60000,
+      ...(addrs ? { lookup: (_h, opts, cb) => (opts && opts.all ? cb(null, addrs) : cb(null, addrs[0].address, addrs[0].family)) } : {}),
+    }, (res) => {
+      const status = res.statusCode || 0;
+      const done = (extra = {}) => resolve({ status, type: res.headers['content-type'] || '', location: res.headers.location || '', ...extra });
+      if (status >= 300 && status < 400) { res.destroy(); return done(); }
+      const tooBig = () => req.destroy(new Error(`el archivo pasa de ${Math.round(max / 1048576)} MB`));
+      if (Number(res.headers['content-length']) > max) return tooBig();
+      const chunks = [];
+      let size = 0;
+      res.on('data', (c) => { size += c.length; if (size > max) tooBig(); else chunks.push(c); });
+      res.on('end', () => done({ data: Buffer.concat(chunks) }));
+      res.on('error', reject);
+    });
+    const deadline = setTimeout(() => req.destroy(new Error('sin respuesta a tiempo')), timeout);
+    req.on('timeout', () => req.destroy(new Error('sin respuesta a tiempo')));
+    req.on('error', reject);
+    req.on('close', () => clearTimeout(deadline));
+    req.end(body);
+  });
+}
+
+/**
+ * Descarga un archivo generado. Con publicOnly, cada salto se resuelve, se comprueba y se conecta a esa IP: una
+ * redirección o un DNS del proveedor no pueden llevar a la red local. Las cabeceras (la clave) no cambian de origen.
+ */
+async function downloadBinary(url, { headers = {}, publicOnly = true, max = MAX_DOWNLOAD, timeout = 600000, check = assertPublic, method = 'GET', body } = {}) {
+  let u;
+  try { u = new URL(url); } catch { throw new Error('URL inválida'); }
+  let sent = headers;
+  for (let hop = 0; hop <= 5; hop++) {
+    if (!['http:', 'https:'].includes(u.protocol)) throw new Error('solo http/https');
+    const r = await binaryGet(u, publicOnly ? await check(u) : null, sent, { max, timeout, method, body });
+    if (!(r.status >= 300 && r.status < 400 && r.location)) return r;
+    const next = new URL(r.location, u);
+    if (next.origin !== u.origin) sent = {};
+    u = next;
+  }
+  throw new Error('demasiadas redirecciones');
+}
+
+async function webfetch(url, { lookup } = {}) {
   let u;
   try { u = new URL(url); } catch { throw new Error('URL inválida'); }
   let res;
   for (let hop = 0; hop < 5; hop++) {
-    await assertPublic(u);
-    res = await fetch(u, { headers: { 'User-Agent': 'JeanCode' }, redirect: 'manual', signal: AbortSignal.timeout(20000) });
-    const loc = res.status >= 300 && res.status < 400 ? res.headers.get('location') : null;
+    const addrs = await assertPublic(u, lookup);
+    res = await pinnedGet(u, addrs);
+    const loc = res.status >= 300 && res.status < 400 ? res.location : null;
     if (!loc) break;
     u = new URL(loc, u);
     if (hop === 4) throw new Error('demasiadas redirecciones');
   }
-  const type = res.headers.get('content-type') || '';
-  let text = await res.text();
+  const type = res.type;
+  let text = res.text;
   if (type.includes('html')) {
     text = text.replace(/<(script|style|noscript)[\s\S]*?<\/\1>/gi, ' ').replace(/<br\s*\/?>|<\/(p|div|h\d|li|tr)>/gi, '\n')
       .replace(/<[^>]+>/g, ' ').replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>')
@@ -491,51 +608,41 @@ async function agents(root) {
   return out;
 }
 
-/** Hooks del proyecto (.jeancode/hooks.json). Se devuelven con su huella para que la interfaz
- *  pida confianza antes de ejecutarlos (un repo ajeno no debe poder correr comandos solo). */
 /*
- * Hooks (como los de Claude Code). .jeancode/hooks.json del proyecto (pide confianza) o hooks.json global
- * del usuario (Ajustes). Cada evento: lista de comandos ("cmd") o de { "matcher": "regex de herramienta", "command": "cmd" }.
- *   session_start  al empezar un turno del agente     stdout = contexto extra para el modelo
- *   user_prompt    antes de enviar tu mensaje         salida 2 = no se envía · stdout = contexto extra
- *   pre_tool       antes de cada herramienta          salida 2 = bloqueada (stderr = motivo para el modelo)
- *   post_tool      después de cada herramienta        stdout = se añade al resultado
- *   post_edit      tras escribir/editar un archivo    (compatibilidad: {path} en el comando)
- *   stop           cuando el agente va a terminar     salida 2 = sigue trabajando con stderr como instrucción
- *   post_turn      al final del turno
- * Entrada: JSON por stdin ({ event, tool, args, result, prompt, workspace }). Salida JSON opcional en stdout:
- * { "decision": "block" | "allow" | "ask", "reason": "...", "context": "..." }.
+ * Hooks del proyecto con el esquema de Claude Code (lib/hookconfig.js). Se leen, por orden:
+ *   .claude/settings.json · .claude/settings.local.json · .jeancode/settings.json · .jeancode/settings.local.json
+ *   · .jeancode/hooks.json (formato antiguo de JeanCode, se convierte).
+ * Se devuelven con su huella: la interfaz pide confianza antes de ejecutarlos (un repo ajeno no debe poder
+ * correr comandos solo) y otra vez si cambian.
  */
-const HOOK_EVENTS = ['session_start', 'user_prompt', 'pre_tool', 'post_tool', 'post_edit', 'stop', 'post_turn'];
-
-function cleanHooks(data) {
-  const clean = {};
-  for (const ev of HOOK_EVENTS) {
-    if (!Array.isArray(data?.[ev])) continue;
-    const list = data[ev].slice(0, 10).map((h) => (typeof h === 'string' ? { command: h }
-      : h && typeof h.command === 'string' ? { command: h.command, ...(typeof h.matcher === 'string' ? { matcher: h.matcher.slice(0, 200) } : {}), ...(Number.isFinite(h.timeout) ? { timeout: Math.min(Math.max(h.timeout, 1), 600) } : {}) } : null))
-      .filter(Boolean);
-    for (const h of list) { if (h.matcher) { try { new RegExp(h.matcher); } catch { throw new Error(`matcher inválido en ${ev}: ${h.matcher}`); } } }
-    if (list.length) clean[ev] = list;
-  }
-  return clean;
-}
+const hookconfig = require('./hookconfig');
+const HOOK_FILES = ['.claude/settings.json', '.claude/settings.local.json', '.jeancode/settings.json', '.jeancode/settings.local.json', '.jeancode/hooks.json'];
+const cleanHooks = (data) => hookconfig.normalize(data).hooks; // compatibilidad
 
 async function hooks(root) {
-  const file = await inside(root, '.jeancode/hooks.json').catch(() => null);
-  const text = file ? await fs.readFile(file, 'utf8').catch(() => null) : null;
-  if (!text) return null;
-  let clean;
-  try { clean = cleanHooks(JSON.parse(text)); } catch (e) { return { error: 'hooks.json no es válido: ' + e.message }; }
-  const hash = require('node:crypto').createHash('sha256').update(JSON.stringify(clean)).digest('hex');
-  return { hooks: clean, hash };
+  const sources = [];
+  let disableAll = false;
+  for (const rel of HOOK_FILES) {
+    const file = await inside(root, rel).catch(() => null);
+    const text = file ? await fs.readFile(file, 'utf8').catch(() => null) : null;
+    if (!text || !text.trim()) continue;
+    let norm;
+    try { norm = hookconfig.normalize(JSON.parse(text)); } catch (e) { return { error: `${rel} no es válido: ${e.message}` }; }
+    if (norm.disableAll) disableAll = true;
+    if (hookconfig.count(norm.hooks)) sources.push({ file: rel, hooks: norm.hooks });
+  }
+  if (!sources.length && !disableAll) return null;
+  const hash = require('node:crypto').createHash('sha256').update(JSON.stringify({ sources, disableAll })).digest('hex');
+  return { sources, disableAll, hash };
 }
 
 /** Ejecuta un hook: JSON por stdin, devuelve { code, stdout, stderr }. Sin límite de confianza aquí: lo decide la interfaz. */
 async function execHook(root, command, input, timeoutSec = 60) {
   const cwd = await inside(root, '.');
+  // las mismas variables que Claude Code: los scripts de hooks escritos para Claude funcionan tal cual
+  const env = { ...process.env, CLAUDE_PROJECT_DIR: cwd, JEANCODE_PROJECT_DIR: cwd, JEANCODE_HOOK_EVENT: String(input?.hook_event_name || '') };
   return new Promise((resolve) => {
-    const child = spawnShell(command, cwd);
+    const child = spawnShell(command, cwd, env);
     let stdout = '', stderr = '';
     child.stdout.on('data', (b) => { if (stdout.length < 64 * 1024) stdout += b.toString(); });
     child.stderr.on('data', (b) => { if (stderr.length < 64 * 1024) stderr += b.toString(); });
@@ -548,7 +655,7 @@ async function execHook(root, command, input, timeoutSec = 60) {
 }
 
 module.exports = {
-  inside, list, read, write: writeTracked, edit: editTracked, search, run, cancelRuns, systemInfo, osShort,
+  inside, list, read, write: writeTracked, writeBinary, edit: editTracked, search, run, cancelRuns, systemInfo, osShort,
   startProcess, processOutput, listProcesses, stopProcess, stopAllProcesses, move, killTree,
-  undo, peek, glob, webfetch, projectMemory, commands, agents, hooks, cleanHooks, execHook, beginTurn, rewind,
+  undo, peek, glob, webfetch, pinnedGet, downloadBinary, projectMemory, commands, agents, hooks, cleanHooks, execHook, beginTurn, rewind,
 };

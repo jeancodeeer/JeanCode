@@ -146,7 +146,7 @@ export async function checkEndpoint(ep, { model, chat = false } = {}) {
   }
   const target = model || r.ids.find((id) => capsOf(ep, id).chat !== false);
   if (model) step('el modelo existe', r.ids.includes(model), r.ids.includes(model) ? model : `${model} no está en la lista`);
-  if (chat && target) {
+  if (chat && target && !providerOf(ep).mediaOnly) {
     const t0 = performance.now();
     let text = '';
     try {
@@ -460,7 +460,7 @@ export async function chat(target, opts, { models = [], mode = 'chat', endpoints
  * quedan como respaldo. Los que no son de chat (embeddings, audio, imagen) no se muestran.
  */
 export function visibleModels(models) {
-  const chatty = models.filter((m) => capsOf(m.ep, m.id).chat !== false);
+  const chatty = models.filter((m) => capsOf(m.ep, m.id).chat !== false && !providerOf(m.ep).mediaOnly);
   const routers = chatty.filter((m) => healthOf(m.ep)?.router || isRouterUrl(m.ep.url));
   return chatty.filter((m) => {
     if (routers.includes(m)) return true;
