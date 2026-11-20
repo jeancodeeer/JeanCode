@@ -4,6 +4,8 @@ JeanCode 1.0 reúne en una sola versión todo lo que se publicó por partes entr
 
 ## 1.3.0 — 19 de noviembre de 2026
 
+![Presentación de JeanCode 1.3.0](media/jeancode-v1.3.0.mp4)
+
 **Mini agente del móvil (Android con modo desarrollador, iPhone con jailbreak)**
 - Nueva pestaña **Móvil** en las apps: el agente de JeanCode trabaja dentro del teléfono con el modelo que tengas conectado. Lee y escribe archivos, ejecuta comandos y, en Android, maneja la pantalla (abrir apps, tocar, deslizar, escribir, capturas).
 - Android: con **Shizuku** (se activa con la depuración inalámbrica del modo desarrollador) el agente tiene permisos de shell, como `adb shell`, sin root.

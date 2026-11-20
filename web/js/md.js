@@ -69,6 +69,28 @@ function blocks(text) {
   return out.join('');
 }
 
+// Vídeos que pueden verse en las notas de versión: los del propio paquete de la app, los de las releases de JeanCode
+// y los adjuntos de GitHub. Nunca en el chat: ahí un modelo podría hacer que la app cargue lo que quiera.
+const NOTE_VIDEO = /^!\[([^\]\n]*)\]\(((?:media\/[\w.-]+|https:\/\/github\.com\/jeancodeeer\/JeanCode\/releases\/download\/[\w./-]+)\.(?:mp4|webm))\)$/;
+const NOTE_ATTACHMENT = /^(https:\/\/github\.com\/user-attachments\/assets\/[0-9a-f-]{36})$/;
+const MARK = '\u0001';
+
+/** Markdown de notas de versión y novedades: lo mismo que renderMarkdown, más los vídeos de arriba. */
+export function renderNotes(text) {
+  const videos = [];
+  const marked = String(text || '').split('\n').map((line) => {
+    const v = line.trim().match(NOTE_VIDEO) || line.trim().match(NOTE_ATTACHMENT);
+    if (!v) return line;
+    videos.push({ src: v[2] || v[1], label: v[2] ? v[1] : 'Vídeo' });
+    return `${MARK}VIDEO${videos.length - 1}${MARK}`;
+  }).join('\n');
+  const slot = new RegExp(`<p>${MARK}VIDEO(\\d+)${MARK}</p>|${MARK}VIDEO(\\d+)${MARK}`, 'g');
+  return renderMarkdown(marked).replace(slot, (_, a, b) => {
+    const v = videos[Number(a ?? b)];
+    return `<video class="note-video" src="${esc(v.src)}" controls playsinline preload="metadata" aria-label="${esc(v.label)}"></video>`;
+  });
+}
+
 /** Separa el razonamiento (<think>) del texto final y devuelve HTML. */
 export function renderMarkdown(text, reasoning = '', { open: openThink = false, label = 'RAZONAMIENTO', live = false } = {}) {
   let thinking = reasoning;

@@ -1947,3 +1947,19 @@ test('adjuntos: qué se acepta y qué viaja al modelo', async () => {
   assert.equal(CAP.capsOf(ep, 'jean-marvel').vision, false);
   assert.equal(CAP.capsOf(ep, 'modelo-raro').vision, null, 'lo desconocido no se da por hecho');
 });
+
+test('notas de versión: vídeos propios sí, ajenos no, y nunca en el chat', async () => {
+  const { renderNotes, renderMarkdown } = await import('../web/js/md.js');
+  const t = [
+    '![Presentación](media/jeancode-v1.3.0.mp4)', '',
+    '![x](https://evil.example/a.mp4)', '',
+    'https://github.com/user-attachments/assets/0123abcd-0123-0123-0123-0123456789ab', '',
+    '![y](media/x.mp4" onerror="alert(1))',
+  ].join('\n');
+  const html = renderNotes(t);
+  assert.equal((html.match(/<video /g) || []).length, 2);
+  assert.ok(html.includes('src="media/jeancode-v1.3.0.mp4"'));
+  assert.ok(!html.includes('evil.example/a.mp4"') || !/<video[^>]+evil/.test(html));
+  assert.ok(!/onerror="/.test(html));
+  assert.ok(!renderMarkdown(t).includes('<video'));
+});

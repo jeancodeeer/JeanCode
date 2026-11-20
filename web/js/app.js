@@ -3,7 +3,7 @@ import { CONFIG, BRAND } from './config.js';
 import { VERSION, isNewer } from './version.js';
 import { store } from './store.js';
 import { getEndpoints, saveEndpoints, addEndpoint, probe, generateKey, discoverSiblings, detectLocal, ollamaPull, isNativeApp } from './api.js';
-import { renderMarkdown, esc } from './md.js';
+import { renderMarkdown, renderNotes, esc } from './md.js';
 import { CODE_SYSTEM, parseFiles, projectContext } from './code.js';
 import { langOf, canRun, entryFor, runnableFiles, buildRunDoc, dependencies } from './run.js';
 import { makeZip, downloadBlob } from './zip.js';
@@ -229,7 +229,7 @@ function showUpdate(upd) {
   $('#upd-version').textContent = upd.version;
   $('#upd-kind').textContent = KIND_TEXT[upd.kind];
   $('#upd-from').innerHTML = `Tienes la <b>${esc(upd.current)}</b>. ${upd.date ? `Publicada el ${esc(new Date(upd.date).toLocaleDateString('es', { day: 'numeric', month: 'long', year: 'numeric' }))}.` : ''}`;
-  $('#upd-notes').innerHTML = upd.notes ? renderMarkdown(upd.notes.slice(0, 6000)) : '';
+  $('#upd-notes').innerHTML = upd.notes ? renderNotes(upd.notes.slice(0, 6000)) : '';
   const get = $('#upd-get');
   get.href = upd.url || CONFIG.releasesUrl;
   get.textContent = `Descargar ${upd.version}`;
@@ -1303,7 +1303,7 @@ async function openNews() {
     if (!r.ok) throw new Error(String(r.status));
     const md = await r.text();
     const parts = md.split(/\n(?=## )/).filter((p) => p.startsWith('## ')).slice(0, 2).join('\n');
-    box.innerHTML = renderMarkdown(parts || md.slice(0, 6000));
+    box.innerHTML = renderNotes(parts || md.slice(0, 6000));
   } catch {
     box.innerHTML = `<p>No se pudo cargar el registro de cambios ahora. Está en <a href="${esc(CONFIG.repoUrl)}/blob/main/CHANGELOG.md" target="_blank" rel="noopener">GitHub</a>.</p>`;
   }
@@ -2011,11 +2011,17 @@ function schedulerFor(t, folder, perm) {
       return `ERROR: acción desconocida "${action}". Usa list, runs, create, update, delete o run.`;
     },
     /** send_later: un mensaje para ESTA conversación más tarde (una tarea de una sola vez, visible en Automatizaciones). */
-    sendLater(a) {
+    async sendLater(a, ask) {
       const at = a.at ? Date.parse(String(a.at)) : Date.now() + Math.max(1, Number(a.delay_minutes) || 0) * 60000;
       if (!Number.isFinite(at) || (!a.at && !a.delay_minutes)) return 'ERROR: indica "delay_minutes" (mínimo 1) o "at" (fecha ISO).';
       const msg = String(a.message || '').trim();
       if (!msg) return 'ERROR: falta "message".';
+      // como cualquier tarea programada: con tu permiso (sin nadie delante, se deniega) y con un tope de pendientes
+      const pending = automations.list().filter((x) => x.kind === 'send_later' && x.enabled !== false && x.schedule?.type === 'once' && x.schedule.at > Date.now()).length;
+      if (pending >= 10) return 'ERROR: ya hay 10 mensajes programados pendientes. Cancela alguno en Automatizaciones.';
+      if (!(await ask({ title: 'PROGRAMAR MENSAJE', command: `${fmtWhen(at)} volverá a esta conversación:
+
+${msg}` }))) return 'RECHAZADO por el usuario.';
       const x = automations.create({ name: a.name || `↩ ${msg.slice(0, 40)}`, prompt: msg, folder, schedule: { type: 'once', at }, perm: perm === 'auto-edit' ? 'edit' : 'read',
         target: 'same', threadId: t.id, kind: 'send_later', notify: true }, { by: 'agent' });
       return `Programado: este mensaje volverá a esta conversación ${fmtWhen(x.schedule.at)}. Se puede cancelar en Automatizaciones.`;

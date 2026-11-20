@@ -467,7 +467,8 @@ ${r}` : '';
         }
         case 'send_later':
           if (sub) return 'DENEGADO: un subagente no puede programar mensajes.';
-          return ctx.scheduler ? ctx.scheduler.sendLater(args) : 'ERROR: solo en la app de escritorio.';
+          if (readOnly) return 'DENEGADO: modo PLAN / solo lectura: no puedes programar mensajes.';
+          return ctx.scheduler ? clip(await ctx.scheduler.sendLater(args, ask)) : 'ERROR: solo en la app de escritorio.';
         case 'schedule_wakeup':
           if (sub) return 'DENEGADO: un subagente no controla el /loop.';
           return ctx.scheduler ? ctx.scheduler.wakeup(args) : 'ERROR: solo en la app de escritorio.';
