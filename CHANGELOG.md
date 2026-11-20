@@ -2,7 +2,7 @@
 
 JeanCode 1.0 reúne en una sola versión todo lo que se publicó por partes entre la 0.1 y la 0.4. Las releases antiguas se retiraron de GitHub para que solo quede una descarga oficial. Su código sigue completo en las etiquetas de git (`v0.1.0` … `v0.4.2`), así que cualquier build anterior se puede reconstruir con `git checkout vX.Y.Z && cd desktop && npm ci && npm run dist`.
 
-## 1.3.0 — sin publicar
+## 1.3.0 — 19 de noviembre de 2026
 
 **Mini agente del móvil (Android con modo desarrollador, iPhone con jailbreak)**
 - Nueva pestaña **Móvil** en las apps: el agente de JeanCode trabaja dentro del teléfono con el modelo que tengas conectado. Lee y escribe archivos, ejecuta comandos y, en Android, maneja la pantalla (abrir apps, tocar, deslizar, escribir, capturas).
@@ -13,6 +13,7 @@ JeanCode 1.0 reúne en una sola versión todo lo que se publicó por partes entr
 - **Vídeo con HTML:** crea vídeos a MP4 en tu dispositivo, sin gastar créditos de vídeo: seis estilos, música y efectos, y un modo libre compatible con HyperFrames.
 - **Modelos locales:** Ollama con contexto real, datos reales de Ollama y LM Studio, agente más ligero y generación de imágenes con Stable Diffusion WebUI, Forge y ComfyUI.
 - **30 proveedores nuevos**, entre ellos Vercel AI Gateway, Poe, Venice, fal.ai, Replicate, Black Forest Labs, Recraft y Luma.
+- **Adjuntar imágenes** en el chat y el agente cuando el modelo puede verlas (PNG, JPG, WebP o GIF; se reducen solas si son grandes).
 - **Mascota y pantalla de arranque.** La mascota reacciona a lo que hace la app y se puede ocultar en Ajustes.
 - Errores más claros, con reintento automático en fallos pasajeros, y arranque más rápido.
 - `webfetch` (PC y móvil) se conecta solo a las direcciones IP ya comprobadas: un DNS que cambie de respuesta (*DNS rebinding*) ya no puede llevarlo a la red local. También rechaza URL con usuario y contraseña, y en el móvil, más rangos privados de IPv6.
