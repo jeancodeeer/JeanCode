@@ -204,7 +204,9 @@ export function createPhoneDesktop(dev) {
     const p = procs.get(id);
     if (!p) throw new Error(`no hay ningún proceso ${id}. Los que hay: ${[...procs.keys()].join(', ') || 'ninguno'}`);
     const f = procFiles(p, id);
-    const r = await sh(`pid=$(cat ${sq(f.pid)} 2>/dev/null); if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then echo vivo; else echo fin; fi; grep -o '__JEANCODE_EXIT__[0-9]*' ${sq(f.log)} 2>/dev/null | tail -n 1`);
+    // El marcador de salida del propio trabajo manda: un proceso terminado que nadie recoge (zombi, con su
+    // padre ya salido) sigue respondiendo a kill -0, así que sin marcador se mira si el pid vive.
+    const r = await sh(`pid=$(cat ${sq(f.pid)} 2>/dev/null); if grep -q '__JEANCODE_EXIT__' ${sq(f.log)} 2>/dev/null; then echo fin; elif [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then echo vivo; else echo fin; fi; grep -o '__JEANCODE_EXIT__[0-9]*' ${sq(f.log)} 2>/dev/null | tail -n 1`);
     const [state, exit] = r.out.trim().split('\n');
     return { p, f, running: state === 'vivo', exit: exit ? exit.replace('__JEANCODE_EXIT__', '') : null };
   };
