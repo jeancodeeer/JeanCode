@@ -4,8 +4,8 @@
 import { parseFrontmatter } from './skills-meta.js';
 
 const DB = 'jeancode-ext';
-const MAX_FILES = 1500;
-const MAX_BYTES = 40 * 2 ** 20;
+const MAX_FILES = 6000; // los mismos límites que la app de escritorio
+const MAX_BYTES = 80 * 2 ** 20;
 const MAX_FILE = 2 * 2 ** 20;
 const TEXT = /\.(md|markdown|txt|json|ya?ml|toml|py|js|ts|sh|html|css|csv|xml)$/i;
 const PLUGIN_KEEP = /^(\.claude-plugin\/|plugin\.json$|skills\/|agents\/|commands\/|docs\/|resources\/|LICENSE|README\.md$)/;
@@ -81,7 +81,7 @@ async function download(repo, branch, entries, base, onProgress) {
       onProgress?.(++done / list.length);
     }
   };
-  await Promise.all(Array.from({ length: 8 }, worker));
+  await Promise.all(Array.from({ length: 12 }, worker));
   return files;
 }
 /** Archivos elegidos con <input webkitdirectory> → { ruta: texto } (sin la carpeta raíz). */

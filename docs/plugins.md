@@ -50,4 +50,4 @@ que pide permiso como cualquier otro comando.
 Skills y plugins también se instalan en la web y en el móvil. Se descargan de GitHub y se guardan en el navegador
 (IndexedDB, `web/js/webext.js`); la carpeta local se elige con el selector del navegador. Como allí no hay agente,
 cada skill y cada comando de plugin se usa en el chat escribiendo `/nombre` y la petición: su texto viaja con el mensaje.
-Los plugins muy grandes pueden superar el límite del navegador (1500 archivos o 40 MB de texto).
+Los límites son los mismos que en el escritorio (6000 archivos, 80 MB de texto).

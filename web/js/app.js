@@ -31,7 +31,7 @@ import { MAX_ATTACHMENTS, prepareImage, rejectReason, withImages } from './attac
 import { isDocument, readDocument, docBlock, splitDocs } from './documents.js';
 import { SKILL_CATALOG, SKILL_CATEGORIES } from './skills-catalog.js';
 import * as webExt from './webext.js';
-import { recordUsage, usageSummary, budgetStatus, getBudget, setBudget, rateLimits, isLimited, keyBalance } from './usage.js';
+import { recordUsage, usageSummary, budgetStatus, getBudget, setBudget, rateLimits, isLimited, keyBalance, exportUsage, importUsage } from './usage.js';
 import { PLUGIN_CATALOG, pluginUrl } from './plugins-catalog.js';
 
 const $ = (s, el = document) => el.querySelector(s);
@@ -1203,10 +1203,14 @@ async function renderUsage() {
     <h3>Tu gasto</h3>
     <ul class="rows">${line('Hoy', s.today, b.daily)}${line('Este mes', s.month, b.monthly)}</ul>
     <div class="u-week" aria-label="Últimos 7 días">${s.week.map((d) => `<div title="${d.day}: ${fmtBig(d.prompt + d.completion)} tokens"><i style="height:${Math.round(((d.prompt + d.completion) / max) * 100)}%"></i><span>${new Date(`${d.day}T12:00`).toLocaleDateString(undefined, { weekday: 'narrow' })}</span></div>`).join('')}</div>
+    ${s.byDevice.length > 1 ? `<h3>Por dispositivo · este mes</h3><ul class="rows">${s.byDevice.map((x) => line(x.name, x)).join('')}</ul>` : ''}
     ${s.byModel.length ? `<h3>Por modelo · este mes</h3><ul class="rows">${s.byModel.slice(0, 8).map((x) => line(`${x.model} · ${x.provider}`, x)).join('')}</ul>` : ''}
     <h3>Límites del proveedor</h3>
     <ul class="rows" id="usage-limits">${limits || '<li>Todavía no hay datos. Aparecen cuando el proveedor los informa en sus respuestas (OpenAI, Groq, Anthropic, OpenRouter…) o cuando responde «límite alcanzado».</li>'}</ul>
-    <p class="fine">El gasto se cuenta con lo que informa cada respuesta y se guarda solo en este dispositivo. Tu límite real de pago está en la web de cada proveedor.</p>`;
+    <h3>Sumar otros dispositivos</h3>
+    <p class="note">Con el control remoto conectado, el PC y el móvil se pasan su gasto solos. Sin él, exporta el archivo en un dispositivo e impórtalo en el otro: se suma sin duplicar.</p>
+    <div class="row gap wrap"><button class="btn" type="button" id="usage-export">Exportar mi gasto</button><label class="btn">Importar gasto<input type="file" id="usage-import" accept=".json,application/json" hidden></label></div>
+    <p class="fine">El gasto se cuenta con lo que informa cada respuesta. Tu límite real de pago está en la web de cada proveedor.</p>`;
   $('#budget-daily').value = b.daily || '';
   $('#budget-monthly').value = b.monthly || '';
   // saldo de la clave (OpenRouter lo informa)
@@ -1220,6 +1224,19 @@ async function renderUsage() {
   }
 }
 $('#ctx-meter').addEventListener('click', () => openPanel('usage'));
+$('#usage-body').addEventListener('click', (e) => {
+  if (e.target.id !== 'usage-export') return;
+  const data = exportUsage();
+  downloadBlob(new Blob([JSON.stringify(data)], { type: 'application/json' }), `jeancode-gasto-${data.name.toLowerCase().replace(/[^a-z0-9]+/g, '-')}-${new Date().toISOString().slice(0, 10)}.json`);
+});
+$('#usage-body').addEventListener('change', async (e) => {
+  if (e.target.id !== 'usage-import' || !e.target.files?.[0]) return;
+  let ok = false;
+  try { ok = importUsage(JSON.parse(await e.target.files[0].text())); } catch { ok = false; }
+  toast(ok ? 'GASTO SUMADO' : 'ESE ARCHIVO NO ES UN GASTO DE OTRO DISPOSITIVO');
+  usageBadge();
+  renderUsage();
+});
 $('#usage-budget').addEventListener('submit', (e) => {
   e.preventDefault();
   setBudget({ daily: $('#budget-daily').value, monthly: $('#budget-monthly').value });

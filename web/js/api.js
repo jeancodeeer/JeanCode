@@ -181,6 +181,7 @@ async function nativeRequest(ep, url, { method = 'GET', headers, body, timeout }
   } catch (e) {
     throw new ApiError(networkHint(ep) + ` (${e.message || e})`, 0);
   }
+  try { if (r.headers) noteRateLimit({ id: ep.id, name: providerOf(ep).name }, new Headers(Object.entries(r.headers).filter(([k]) => /ratelimit|^retry-after$/i.test(k))), r.status); } catch { /* sin cabeceras */ }
   const text = typeof r.data === 'string' ? r.data : JSON.stringify(r.data ?? '');
   if (r.status >= 400) throw new ApiError(explain(r.status, text, ep), r.status, serverMessage(text));
   if (typeof r.data === 'object' && r.data) return r.data;
@@ -608,6 +609,7 @@ async function chatOnce({ ep, model, messages, signal, onDelta, onReasoning, onT
         { url: chatUrl, headers: headersFor(ep), body, timeout: waitFirst, ndjson: useOllama },
         {
           onEvent: (json) => { try { handleChunk(json); } catch (e) { b.abort(id); reject(e); } },
+          onHeaders: (h, status) => { try { noteRateLimit({ id: ep.id, name: providerOf(ep).name }, new Headers(h), status); } catch { /* sin cabeceras */ } },
           onDone: resolve,
           onError: (err) => reject(useOllama && err.status === 404 && !/model/i.test(err.body || '') ? Object.assign(new Error('sin /api/chat'), { ollamaLegacy: true }) : err.status
             ? new ApiError(explain(err.status, err.body, ep), err.status, serverMessage(err.body))

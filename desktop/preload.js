@@ -3,6 +3,7 @@ const { contextBridge, ipcRenderer } = require('electron');
 
 const streams = new Map();
 ipcRenderer.on('stream:event', (_e, id, json) => streams.get(id)?.onEvent(json));
+ipcRenderer.on('stream:headers', (_e, id, h, status) => streams.get(id)?.onHeaders?.(h, status));
 ipcRenderer.on('stream:done', (_e, id) => { streams.get(id)?.onDone(); streams.delete(id); });
 ipcRenderer.on('stream:error', (_e, id, err) => { streams.get(id)?.onError(err); streams.delete(id); });
 
