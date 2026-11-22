@@ -72,8 +72,11 @@ si no tienes ningún modelo de vídeo, al pedir un vídeo en el chat.
 - **Aislamiento:** la composición corre en un iframe sin origen y sin red. No ve tus claves ni tu historial.
 - **Tipografías:** Anton, Bebas Neue, Archivo Black, Playfair Display, DM Serif Display y Space Grotesk (SIL OFL), incluidas
   en la app.
-- **Límites:** hasta 120 s y sin vídeos dentro de la composición. Safari no permite leer este tipo de dibujo: en iPhone se
-  puede previsualizar, pero hay que exportar desde el escritorio, Android, Chrome o Edge.
+- **Límites:** hasta 120 s y sin vídeos dentro de la composición.
+- **Safari e iPhone:** Safari no deja leer un lienzo donde se dibujó HTML, así que allí JeanCode usa su propio dibujo:
+  recorre la composición y pinta cajas, degradados, bordes, sombras, texto (también con degradado y brillo), SVG,
+  `<canvas>`, recortes (`clip-path`), opacidad y transformaciones. No dibuja `filter` (desenfoque) ni efectos 3D.
+  El sonido depende de que el navegador pueda codificar audio; si no, el vídeo sale sin sonido.
 
 ## Modelos locales
 

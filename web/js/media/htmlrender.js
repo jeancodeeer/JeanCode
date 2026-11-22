@@ -34,7 +34,7 @@ const randomToken = () => Array.from(crypto.getRandomValues(new Uint8Array(16)),
  * Carga una composición en un iframe sin privilegios. → { frame, send(msg), on(fn), ready: Promise<{ duration }>, close() }
  * Solo se atienden mensajes de ESE iframe y con su token.
  */
-export function mountComposition(html, { width, height, duration, parent = document.body, hidden = false }) {
+export function mountComposition(html, { width, height, duration, parent = document.body, hidden = false, raster = false }) {
   const token = randomToken();
   const frame = document.createElement('iframe');
   frame.setAttribute('sandbox', 'allow-scripts');
@@ -57,7 +57,7 @@ export function mountComposition(html, { width, height, duration, parent = docum
     listeners.forEach((fn) => fn(e.data));
   };
   window.addEventListener('message', onMessage);
-  frame.srcdoc = buildCompositionDoc(html, { width, height, duration, token });
+  frame.srcdoc = buildCompositionDoc(html, { width, height, duration, token, raster });
   parent.appendChild(frame);
   return {
     frame, ready, errors,

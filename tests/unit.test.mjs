@@ -1731,6 +1731,8 @@ test('vídeo HTML: contrato de la composición, aislamiento y MP4', async () => 
   assert.equal(HV.extractHtml('no hay nada'), '');
   const doc = HV.buildCompositionDoc(`${good}<script src="https://mal.example/x.js"></script><meta http-equiv="refresh" content="0;url=https://mal.example"><iframe src="https://mal.example"></iframe><base href="https://mal.example/">`, { width: 1920, height: 1080, duration: 5, token: 'tok' });
   assert.match(doc, /default-src 'none'/);
+  assert.match(HV.buildCompositionDoc(good, { width: 10, height: 10, duration: 1, raster: true }), /"raster":true/, 'el dibujo propio (Safari) se puede forzar');
+  assert.match(doc, /rasterFrame/, 'el motor lleva el dibujo propio para Safari');
   assert.doesNotMatch(doc, /mal\.example/, 'lo externo se elimina aunque el modelo lo escriba');
   assert.ok(doc.indexOf('Content-Security-Policy') < doc.indexOf('<script'), 'la política va antes de cualquier script');
   assert.deepEqual(ME.detectMediaIntent('crea un vídeo en HTML de mi cafetería'), { kind: 'html', prompt: 'crea un vídeo en HTML de mi cafetería' });
