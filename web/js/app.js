@@ -28,6 +28,7 @@ import { createMediaService, library as mediaLibrary, blobToDataUrl, extOf, slug
 import { detectMediaIntent } from './media/engine.js';
 import { createMascot } from './mascot.js';
 import { MAX_ATTACHMENTS, prepareImage, rejectReason, withImages } from './attachments.js';
+import { isDocument, readDocument, docBlock, splitDocs } from './documents.js';
 import { SKILL_CATALOG, SKILL_CATEGORIES } from './skills-catalog.js';
 import { PLUGIN_CATALOG, pluginUrl } from './plugins-catalog.js';
 
@@ -424,6 +425,7 @@ function needFor() {
 
 /* ---------------------------------------------------------------- imágenes adjuntas */
 let attached = []; // { id, url, name } del mensaje que se está escribiendo
+let docs = []; // { name, text } documentos ya convertidos a texto
 const attachUrls = new Map();
 const attachUrl = (id, blob) => { if (!attachUrls.has(id)) attachUrls.set(id, URL.createObjectURL(blob)); return attachUrls.get(id); };
 const loadAttachment = async (id) => { const i = await mediaLibrary.get(id); return i?.blob ? blobToDataUrl(i.blob) : null; };
@@ -435,13 +437,26 @@ function canAttach() {
 }
 function renderAttachments() {
   const can = canAttach();
-  $('#att-btn').hidden = !can && !attached.length;
+  $('#att-btn').hidden = false; // los documentos sirven con cualquier modelo
+  $('#att-btn').title = can ? 'Adjuntar imágenes o documentos' : 'Adjuntar documentos (PDF, Word, Excel, texto…)';
   const list = $('#att-list');
-  list.hidden = !attached.length;
-  list.innerHTML = attached.map((a) => `<li><img src="${esc(a.url)}" alt="${esc(a.name)}"><button type="button" data-att-del="${esc(a.id)}" aria-label="Quitar ${esc(a.name)}"><svg class="i" aria-hidden="true"><use href="#i-close"/></svg></button></li>`).join('')
+  list.hidden = !attached.length && !docs.length;
+  list.innerHTML = docs.map((d, i) => `<li class="att-doc"><span title="${esc(d.name)}">${esc(d.name)}</span><button type="button" data-doc-del="${i}" aria-label="Quitar ${esc(d.name)}"><svg class="i" aria-hidden="true"><use href="#i-close"/></svg></button></li>`).join('') + attached.map((a) => `<li><img src="${esc(a.url)}" alt="${esc(a.name)}"><button type="button" data-att-del="${esc(a.id)}" aria-label="Quitar ${esc(a.name)}"><svg class="i" aria-hidden="true"><use href="#i-close"/></svg></button></li>`).join('')
     + (attached.length && !can ? '<li class="att-warn">Este modelo no ve imágenes: elige otro o quítalas.</li>' : '');
 }
 async function addAttachments(files) {
+  for (const file of files.filter(isDocument)) {
+    if (docs.length >= MAX_ATTACHMENTS) { toast(`HASTA ${MAX_ATTACHMENTS} DOCUMENTOS POR MENSAJE`); break; }
+    try {
+      toast(`LEYENDO ${file.name.toUpperCase()}…`);
+      const d = await readDocument(file);
+      docs.push(d);
+      if (d.cut) toast('DOCUMENTO MUY LARGO: SE ENVÍA RECORTADO');
+    } catch (err) { toast((err.message || 'No se pudo leer el documento').toUpperCase()); }
+    renderAttachments();
+  }
+  files = files.filter((f) => !isDocument(f));
+  if (!files.length) { renderAttachments(); return; }
   if (!canAttach()) { toast('ESTE MODELO NO ACEPTA IMÁGENES'); return; }
   for (const file of files) {
     const why = rejectReason(file, attached.length);
@@ -838,7 +853,15 @@ function addMessage(role, content, { reasoning = '', streaming = false, cls = ''
   row.innerHTML = '<div class="who"></div><div class="bubble"></div>';
   $('.who', row).textContent = who;
   el.appendChild(row);
+  let names = [];
+  if (role === 'user') ({ text: content, names } = splitDocs(content));
   updateMessage(row, content, reasoning, streaming);
+  if (names.length) {
+    const box = document.createElement('ul');
+    box.className = 'msg-docs';
+    box.innerHTML = names.map((n) => `<li>${esc(n)}</li>`).join('');
+    $('.bubble', row).after(box);
+  }
   if (role === 'user' && turn) addRewind(row, turn);
   el.scrollTop = el.scrollHeight;
   return row;
@@ -1317,6 +1340,10 @@ function busy(on) {
 }
 
 $('#model-select').addEventListener('change', () => setTimeout(renderAttachments));
+$('#att-list').addEventListener('click', (e) => {
+  const b = e.target.closest('[data-doc-del]');
+  if (b) { docs.splice(+b.dataset.docDel, 1); renderAttachments(); }
+});
 $('#att-input').addEventListener('change', (e) => { addAttachments([...e.target.files]); e.target.value = ''; });
 $('#att-list').addEventListener('click', (e) => {
   const b = e.target.closest('[data-att-del]');
@@ -1333,14 +1360,14 @@ $('#composer').addEventListener('dragover', (e) => { if ([...(e.dataTransfer?.ty
 $('#composer').addEventListener('dragleave', () => $('.composer-box').classList.remove('drop'));
 $('#composer').addEventListener('drop', (e) => {
   $('.composer-box').classList.remove('drop');
-  const files = [...(e.dataTransfer?.files || [])].filter((f) => f.type.startsWith('image/'));
+  const files = [...(e.dataTransfer?.files || [])].filter((f) => f.type.startsWith('image/') || isDocument(f));
   if (files.length) { e.preventDefault(); addAttachments(files); }
 });
 
 $('#composer').addEventListener('submit', async (e) => {
   e.preventDefault();
   let text = input.value.trim();
-  if ((!text && !attached.length) || state.abort) return;
+  if ((!text && !attached.length && !docs.length) || state.abort) return;
 
   const cmd = parseCommand(text);
   if (cmd) {
@@ -1497,8 +1524,9 @@ async function sendMedia(intent, text) {
 
 async function send(text) {
   if (!text && attached.length) text = '¿Qué ves en esta imagen?';
+  if (!text && docs.length) text = 'Revisa el documento adjunto.';
   // «genera una imagen de…» en el chat: va directo al modelo de imagen, sin pasar por el de texto
-  if (state.mode === 'chat') {
+  if (state.mode === 'chat' && !docs.length) {
     const intent = detectMediaIntent(text, { last: await lastMediaOf(thread()) });
     if (intent) return sendMedia(intent, text);
   }
@@ -1519,6 +1547,8 @@ async function send(text) {
     });
     if (!ok) { input.value = text; autosize(); input.focus(); return; }
   }
+  // los documentos viajan como texto dentro del mensaje (en el chat se muestran como fichas)
+  if (docs.length) { text += docBlock(docs); docs = []; renderAttachments(); }
   const t = thread() || newThread();
   // Compactación transparente: nunca a escondidas. Al 85 % se resume (sola, si así está en Ajustes) y se muestra el resumen.
   if (updateContext() >= 85 && t.messages.length > 4) {
