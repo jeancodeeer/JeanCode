@@ -3634,6 +3634,39 @@ if ('serviceWorker' in navigator && location.protocol.startsWith('http') && !des
   navigator.serviceWorker.register('sw.js').catch(() => { /* sin SW la web funciona igual */ });
 }
 
+// Aviso de instalación: Android/Chrome da su propio diálogo (beforeinstallprompt); en iOS hay que
+// hacerlo a mano desde Compartir. No aparece si ya va instalada o si se cerró antes.
+(() => {
+  if (desktop || window.Capacitor?.isNativePlatform?.()) return;
+  const installed = matchMedia('(display-mode: standalone)').matches || navigator.standalone;
+  let dismissed = false;
+  try { dismissed = localStorage.getItem('jc-install-dismissed') === '1'; } catch { /* sin almacenamiento */ }
+  if (installed || dismissed) return;
+  const show = (text, onInstall) => {
+    const bar = document.createElement('div');
+    bar.className = 'install-bar';
+    bar.setAttribute('role', 'status');
+    bar.innerHTML = '<p></p>' + (onInstall ? '<button class="btn sm" data-act="install">Instalar</button>' : '')
+      + '<button class="btn sm" data-act="close" aria-label="Cerrar">Ahora no</button>';
+    bar.querySelector('p').textContent = text;
+    bar.addEventListener('click', async (e) => {
+      const act = e.target.closest('button')?.dataset.act;
+      if (!act) return;
+      if (act === 'install') await onInstall();
+      else { try { localStorage.setItem('jc-install-dismissed', '1'); } catch { /* nada */ } }
+      bar.remove();
+    });
+    document.body.append(bar);
+  };
+  window.addEventListener('beforeinstallprompt', (e) => {
+    e.preventDefault();
+    show('Instala JeanCode como aplicación.', async () => { e.prompt(); await e.userChoice.catch(() => {}); });
+  });
+  const ios = /iphone|ipad|ipod/i.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+  if (ios) setTimeout(() => show('Para instalar JeanCode: pulsa Compartir y luego «Añadir a pantalla de inicio».'), 4000);
+  window.addEventListener('appinstalled', () => document.querySelector('.install-bar')?.remove());
+})();
+
 /** Quita la pantalla de arranque: se ve al menos un momento para que no sea un parpadeo. */
 function hideBoot() {
   const boot = $('#boot');
