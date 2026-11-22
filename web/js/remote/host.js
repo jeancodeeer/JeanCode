@@ -10,6 +10,7 @@
 //   PC → móvil   paired · state · threads · thread · event {ev} · confirm {id, …} · confirm-done {id} · error {message}
 import { deriveKeys, randomBytes, randomId, b64u, encodePairing, PAIR_TTL, WORKER_URL } from './crypto.js';
 import { HostAcceptor, Pipe, wsPipe, relayUrl } from './link.js';
+import { exportUsage, importUsage } from '../usage.js';
 
 export const PAIR_WEB_URL = 'https://jeancodeeer.github.io/JeanCode/';
 const MAX_DEVICES = 10;
@@ -149,6 +150,7 @@ export function createRemoteHost({ desktop, app }) {
     changed();
     app.toast(`MÓVIL CONECTADO: ${String(dev.name).toUpperCase()} (${link.kind === 'lan' ? 'WI-FI' : link.kind === 'p2p' ? 'P2P' : 'RELAY'})`);
     link.send({ type: 'state', ...app.snapshot() });
+    link.send({ type: 'usage', data: exportUsage() }); // el gasto de tokens se suma entre el PC y el móvil
     for (const [id, p] of pending) link.send({ type: 'confirm', id, ...p.opts });
   }
 
@@ -188,6 +190,7 @@ export function createRemoteHost({ desktop, app }) {
         return undefined;
       }
       case 'stop': app.stop(); return undefined;
+      case 'usage': importUsage(m.data); return undefined;
       case 'new': app.newThread(); return link.send({ type: 'state', ...app.snapshot() });
       case 'perm': app.setPerm(String(m.value)); return broadcast({ type: 'state', ...app.snapshot() });
       case 'agent': app.setAgent(String(m.value)); return broadcast({ type: 'state', ...app.snapshot() });

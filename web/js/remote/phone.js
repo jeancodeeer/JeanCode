@@ -3,6 +3,7 @@
 // navegador sabe leer QR) o pega el enlace. Después conecta solo: Wi-Fi directa → internet (P2P) → relay.
 import { decodePairing } from './crypto.js';
 import { phoneConnect } from './link.js';
+import { exportUsage, importUsage } from '../usage.js';
 
 const KIND = { lan: 'WI-FI DIRECTA', p2p: 'P2P', relay: 'RELAY (WORKER)' };
 
@@ -79,6 +80,7 @@ export function initRemotePhone({ $, esc, store, toast, renderMarkdown, platform
       case 'event': onEvent(m.ev || {}); break;
       case 'confirm': showConfirm(m); break;
       case 'confirm-done': confirms.get(m.id)?.remove(); confirms.delete(m.id); break;
+      case 'usage': if (importUsage(m.data)) link?.send({ type: 'usage', data: exportUsage() }); break;
       case 'error': toast(String(m.message || 'error').toUpperCase().slice(0, 140)); break;
       default: break;
     }

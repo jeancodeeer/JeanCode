@@ -129,6 +129,10 @@ ipcMain.on('stream:start', async (e, id, req) => {
   try {
     const res = await fetch(req.url, { method: 'POST', headers: req.headers, body: req.body, signal: ctrl.signal });
     clearTimeout(timer);
+    // cabeceras de límite del proveedor (tokens y peticiones restantes): la ventana las muestra en «Uso de tokens»
+    const limits = {};
+    for (const [k, v] of res.headers) if (/ratelimit|^retry-after$/i.test(k)) limits[k] = v;
+    if (Object.keys(limits).length && !wc.isDestroyed()) wc.send('stream:headers', id, limits, res.status);
     if (!res.ok) { wc.send('stream:error', id, { status: res.status, body: await res.text().catch(() => '') }); return; }
     const dec = new TextDecoder();
     let buf = '';

@@ -1919,6 +1919,18 @@ test('uso de tokens: registro, presupuesto y límites del proveedor', async () =
   assert.deepEqual([g.tokens.limit, g.tokens.remaining, g.tokens.reset], [6000, 900, 90]);
   U.noteRateLimit({ id: 'h' }, new Headers({ 'retry-after': '20' }), 429);
   assert.ok(U.isLimited('h') && !U.isLimited('g'));
+  // otro dispositivo: se suma una vez, y repetir la importación no duplica
+  const before = U.usageSummary().today;
+  const other = { v: 1, device: 'abcdef0123456789', name: 'iPhone', at: Date.now(), days: { [new Date().toISOString().slice(0, 10)]: { x: { provider: 'P', model: 'm', prompt: 100, completion: 50, cost: 0, calls: 1 } } } };
+  const localDay = (d = new Date()) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  other.days = { [localDay()]: other.days[Object.keys(other.days)[0]] };
+  assert.ok(U.importUsage(other) && U.importUsage(other));
+  const after = U.usageSummary();
+  assert.equal(after.today.prompt + after.today.completion, before.prompt + before.completion + 150);
+  assert.equal(after.byDevice.length, 2);
+  assert.ok(!U.importUsage({ ...U.exportUsage() }), 'el propio gasto no se importa dos veces');
+  assert.ok(!U.importUsage({ v: 1, device: '../x', days: {} }));
+  assert.ok(Object.values(U.exportUsage().days).every((rows) => Object.values(rows).every((r) => r.device === U.deviceId())), 'solo se exporta lo propio');
   U.setBudget({ daily: 0, monthly: 0 });
 });
 

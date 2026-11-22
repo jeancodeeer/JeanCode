@@ -20,11 +20,16 @@ queue.fal.run api.replicate.com api.bfl.ai external.api.recraft.ai api.lumalabs.
 `.split(/\s+/).filter(Boolean));
 const FORWARD = ['authorization', 'content-type', 'accept', 'x-title', 'http-referer', 'anthropic-version', 'x-api-key', 'x-key', 'prefer'];
 
+/** Solo las cabeceras de límite del proveedor pasan a la app (nada de cookies ni otras cabeceras). */
+const limitHeaders = (h) => Object.fromEntries([...h].filter(([k]) => /ratelimit|^retry-after$/i.test(k)));
+
 const cors = (origin) => ({
   'Access-Control-Allow-Origin': origin || '*',
   Vary: 'Origin',
   'Access-Control-Allow-Headers': 'authorization, content-type, x-jean-key, x-title, http-referer, anthropic-version, x-key, prefer',
   'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+  // el navegador solo deja leer a la app las cabeceras expuestas: las de límite, para «Uso de tokens»
+  'Access-Control-Expose-Headers': 'x-ratelimit-limit-tokens, x-ratelimit-remaining-tokens, x-ratelimit-reset-tokens, x-ratelimit-limit-requests, x-ratelimit-remaining-requests, x-ratelimit-reset-requests, x-ratelimit-limit, x-ratelimit-remaining, x-ratelimit-reset, anthropic-ratelimit-tokens-limit, anthropic-ratelimit-tokens-remaining, anthropic-ratelimit-tokens-reset, anthropic-ratelimit-requests-limit, anthropic-ratelimit-requests-remaining, anthropic-ratelimit-requests-reset, retry-after',
 });
 const fail = (status, message, origin) => new Response(JSON.stringify({ error: { message, type: 'jean_relay_error' } }), {
   status, headers: { 'Content-Type': 'application/json', ...cors(origin) },
@@ -70,7 +75,7 @@ export default {
     // el cuerpo pasa en streaming, trozo a trozo
     return new Response(upstream.body, {
       status: upstream.status,
-      headers: { 'Content-Type': upstream.headers.get('Content-Type') || 'application/json', 'Cache-Control': 'no-cache', ...cors(origin) },
+      headers: { 'Content-Type': upstream.headers.get('Content-Type') || 'application/json', 'Cache-Control': 'no-cache', ...limitHeaders(upstream.headers), ...cors(origin) },
     });
   },
 };
