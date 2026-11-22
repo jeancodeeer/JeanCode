@@ -844,3 +844,14 @@ kbd { font: 600 11px/1 var(--mono); border: 1px solid var(--line-3); padding: 2p
 .msg-att.big { width: min(100%, 560px); height: auto; cursor: zoom-out; }
 .msg-att.big img { height: auto; object-fit: contain; }
 @media (max-width: 860px) { .att-list button { width: 32px; height: 32px; } .msg-att { width: 96px; height: 96px; } }
+
+/* Táctil: iOS hace zoom al enfocar campos con letra < 16px y con el doble toque. Sin zoom accidental,
+   el pellizco sigue disponible. Va al final y con !important porque hay reglas por id más específicas. */
+html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; touch-action: manipulation; }
+@media (pointer: coarse) {
+  input, select, textarea, [contenteditable="true"] { font-size: 16px !important; }
+}
+/* Aviso para instalar la web como aplicación */
+.install-bar { position: fixed; left: 50%; bottom: calc(16px + env(safe-area-inset-bottom)); transform: translateX(-50%); z-index: 95; display: flex; align-items: center; gap: var(--s3); width: min(520px, calc(100% - 32px)); padding: var(--s3) var(--s4); background: var(--raise); border: 1px solid var(--line-2); font-size: 14px; color: var(--smoke); }
+.install-bar p { margin: 0; flex: 1; min-width: 0; }
+.install-bar[hidden] { display: none; }
