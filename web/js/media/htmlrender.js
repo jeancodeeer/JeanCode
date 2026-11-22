@@ -1,7 +1,7 @@
 // Vídeo HTML en el navegador: abre la composición en un iframe aislado, la previsualiza y la codifica a MP4.
-import { buildCompositionDoc, extractHtml, htmlVideoSkill, lintComposition, HV_RATIOS } from './htmlvideo.js';
+import { buildCompositionDoc, extractHtml, htmlVideoSkill, lintComposition, repairComposition, treatmentPrompt, HV_RATIOS } from './htmlvideo.js';
+import { styleOf } from './htmlstyles.js';
 import { muxMp4 } from './mp4.js';
-import { buildComposition, fallbackBoard, normalizeBoard, parseStoryboard, storyboardPrompt } from './htmlscenes.js';
 import { encodeSoundtrack, renderSoundtrack, soundOf } from './htmlaudio.js';
 
 // Tipografías libres (SIL OFL) que puede usar una composición; se incrustan solo las que aparecen en ella
@@ -165,56 +165,46 @@ export async function auditComposition(source, { ratio, duration }) {
 }
 
 /**
- * Vídeo dirigido: el modelo escribe solo el guion y las plantillas lo convierten en composición. Si el modelo falla o
- * no devuelve un guion válido, el vídeo sale igualmente a partir del pedido.
- */
-export async function directComposition({ brief, ratio = '16:9', duration = 10, theme = '', sound = true, previous = null, chatText, signal, onStatus }) {
-  onStatus?.('Escribiendo el guion…');
-  const user = previous ? `Guion actual:\n${JSON.stringify(previous)}\n\nCambios pedidos: ${brief}\nDevuelve el guion completo con los cambios.` : `Pedido: ${brief}`;
-  let board = null;
-  let note = '';
-  try {
-    const system = storyboardPrompt({ duration });
-    const first = await chatText(system, user, signal);
-    board = parseStoryboard(first);
-    if (!board) board = parseStoryboard(await chatText(system, `${user}\n\nTu respuesta anterior no era JSON válido. Responde solo con el JSON.`, signal));
-  } catch (e) {
-    if (e.name === 'AbortError') throw e;
-    note = e.message;
-  }
-  if (!board && previous) board = previous;
-  if (!board) note ||= 'el modelo no devolvió un guion válido';
-  const clean = normalizeBoard(board || fallbackBoard(brief), { duration, brief });
-  onStatus?.('Montando el vídeo…');
-  return { html: buildComposition(clean, { ratio, duration, theme, sound }), board: clean, issues: [], note };
-}
-
-/**
- * El modelo de chat escribe la composición. Si lo que devuelve incumple el contrato, se le pide corregirlo una vez.
+ * El modelo escribe la composición desde cero, como lo haría un estudio:
+ *   1. plan creativo (concepto, paleta, tipografía, escenas con tiempos) con la dirección de arte elegida;
+ *   2. el código completo siguiendo ese plan;
+ *   3. revisión: el contrato y cómo se ve de verdad renderizado, y una corrección si hace falta.
  * chatText(system, user, signal) → texto. previous + brief = pedir cambios sobre una composición existente.
+ * → { html, issues, plan }
  */
-export async function writeComposition({ brief, ratio = '16:9', duration = 10, previous = '', chatText, signal, onStatus }) {
+export async function writeComposition({ brief, ratio = '16:9', duration = 10, style = 'auto', sound = true, previous = '', plan = '', chatText, signal, onStatus }) {
   const { width, height } = sizeOfRatio(ratio);
-  const system = htmlVideoSkill({ width, height, duration });
-  const user = previous
-    ? `Esta es la composición actual:\n\`\`\`html\n${previous}\n\`\`\`\n\nCambios pedidos: ${brief}\n\nDevuelve la composición completa con los cambios.`
-    : `Vídeo pedido: ${brief}`;
-  onStatus?.('Escribiendo la composición…');
+  const art = styleOf(style).brief;
+  const system = htmlVideoSkill({ width, height, duration, sound });
+  const fix = (h) => repairComposition(h, { duration, width, height, sound });
+  let user;
+  if (previous) {
+    user = `Composición actual (${width}×${height}, ${duration} s):\n\`\`\`html\n${previous}\n\`\`\`\n\nCambios pedidos: ${brief}\n\nDevuelve la composición completa con los cambios, manteniendo todo lo demás.`;
+  } else {
+    if (!plan) {
+      onStatus?.('Ideando el concepto…');
+      plan = await chatText(treatmentPrompt({ width, height, duration, style: art }), `Pedido del usuario: ${brief}`, signal).catch((e) => { if (e.name === 'AbortError') throw e; return ''; });
+      plan = String(plan || '').replace(/```[\s\S]*?```/g, '').trim().slice(0, 4000);
+    }
+    user = `PEDIDO DEL USUARIO\n${brief}\n\nDIRECCIÓN DE ARTE\n${art}${plan ? `\n\nPLAN CREATIVO (síguelo)\n${plan}` : ''}\n\nEscribe ahora la composición completa.`;
+  }
+  onStatus?.(previous ? 'Aplicando los cambios…' : 'Escribiendo la animación…');
   let html = extractHtml(await chatText(system, user, signal));
-  if (!html) throw new Error('El modelo no devolvió una composición HTML. Prueba otra vez o elige otro modelo de chat.');
+  if (!html) throw new Error('El modelo no devolvió una composición HTML. Prueba otra vez o elige un modelo más potente.');
+  html = fix(html);
   const issues = lintComposition(html);
   if (issues.length) {
     onStatus?.('Corrigiendo la composición…');
     const fixed = extractHtml(await chatText(system, `Corrige esta composición sin cambiar su idea:\n${issues.map((x) => `- ${x.message}`).join('\n')}\n\n\`\`\`html\n${html}\n\`\`\``, signal));
-    if (fixed) html = fixed;
+    if (fixed) html = fix(fixed);
   }
   // se mira cómo queda de verdad y se le devuelve lo que falla, una vez
-  onStatus?.('Revisando el resultado…');
+  onStatus?.('Revisando cómo se ve…');
   const seen = await auditComposition(html, { ratio, duration }).catch(() => []);
   if (seen.length) {
-    onStatus?.('Corrigiendo lo que se ve mal…');
-    const fixed = extractHtml(await chatText(system, `Al renderizar esta composición se detectó:\n${seen.map((x) => `- ${x.message}`).join('\n')}\nCorrígelo sin cambiar la idea.\n\n\`\`\`html\n${html}\n\`\`\``, signal).catch((e) => { if (e.name === 'AbortError') throw e; return ''; }));
-    if (fixed && !lintComposition(fixed).length) html = fixed;
+    onStatus?.('Puliendo lo que se ve mal…');
+    const fixed = extractHtml(await chatText(system, `Al renderizar esta composición se detectó:\n${seen.map((x) => `- ${x.message}`).join('\n')}\nCorrígelo sin cambiar la idea ni el estilo.\n\n\`\`\`html\n${html}\n\`\`\``, signal).catch((e) => { if (e.name === 'AbortError') throw e; return ''; }));
+    if (fixed) { const f = fix(fixed); if (!lintComposition(f).length) html = f; }
   }
-  return { html, issues: lintComposition(html) };
+  return { html, issues: lintComposition(html), plan };
 }

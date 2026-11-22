@@ -52,11 +52,16 @@ La pestaña **HTML** del estudio crea vídeo sin un modelo de vídeo y este disp
 fotograma. También funciona con `/videohtml`, pidiéndolo en el chat, con la herramienta `render_html_video` del agente y,
 si no tienes ningún modelo de vídeo, al pedir un vídeo en el chat.
 
-- **Dirigido (por defecto):** el modelo solo escribe el guion en JSON y JeanCode lo monta con una de sus seis direcciones
-  de arte (Impacto, Editorial, Tecno, Pop, Cálido y Minimal). Funciona bien con modelos pequeños o locales, y si el modelo
-  falla, el vídeo sale igualmente a partir de tu pedido. Cambiar estilo, formato o duración no gasta otra llamada.
-- **Libre:** el modelo escribe toda la animación. La app revisa cómo queda (texto que se sale, se pisa o no se lee) y le
-  pide corregirlo una vez.
+- **Desde cero, como un estudio:** el modelo de lenguaje que elijas (mejor cuanto más potente: Claude, GPT, Gemini,
+  Qwen Coder, DeepSeek…) primero idea un plan creativo (concepto, paleta, tipografía y escenas con sus tiempos) y luego
+  escribe toda la animación en HTML, CSS y JS. La app revisa cómo queda renderizada (texto que se sale, se pisa o no se
+  lee) y le pide corregirlo una vez.
+- **Estilos:** Automático, Tipografía cinética, Editorial suizo, Neón synthwave, Brutalista, Lujo, Producto tech, Datos
+  animados, Retro VHS, Pop/cómic, Papel recortado, Minimal y Tráiler de cine. No son plantillas: son el encargo de dirección
+  de arte que recibe el modelo.
+- **Técnicas:** línea de tiempo estilo GSAP, `@keyframes` de CSS, `<canvas>` y SVG con `HV.onFrame(t)`. Todo corre sobre un
+  reloj virtual, así que el mismo instante da siempre el mismo fotograma.
+- **Retocar:** «Pedir cambios» modifica la pieza; «Otra versión» la reescribe desde cero con el mismo pedido y estilo.
 - **Sonido:** música y efectos sintetizados en el dispositivo, sin muestras de terceros, con los cortes sobre el pulso.
 
 - **Formato:** el de [HyperFrames](https://github.com/heygen-com/hyperframes) (HeyGen, Apache-2.0): raíz con
@@ -92,6 +97,6 @@ si no tienes ningún modelo de vídeo, al pedir un vídeo en el chat.
 - `web/js/media/engine.js`: qué modelos sirven, qué admite cada uno, formato de cada proveedor y detección en el chat.
 - `web/js/media/service.js`: biblioteca (IndexedDB), trabajos y vídeos en curso.
 - `web/js/media/studio.js` y `edit.js`: la pestaña Imagen y el retoque local.
-- `web/js/media/htmlscenes.js`: guion, plantillas y direcciones de arte. `htmlaudio.js`: banda sonora.
+- `web/js/media/htmlstyles.js`: direcciones de arte. `htmlaudio.js`: banda sonora.
 - `web/js/media/htmlvideo.js`, `htmlrender.js`, `htmlstudio.js` y `mp4.js`: motor, exportación y pestaña HTML.
 - Pruebas: bloque «imagen y vídeo» de `tests/unit.test.mjs`.

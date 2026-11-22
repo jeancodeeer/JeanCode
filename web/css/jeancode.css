@@ -861,3 +861,11 @@ html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; touch-action: man
 .att-list li.att-doc button { top: 3px; right: 3px; width: 32px; height: 32px; border: 0; background: none; }
 .msg-docs { list-style: none; display: flex; flex-wrap: wrap; justify-content: flex-end; gap: var(--s2); margin: var(--s2) 0 0; padding: 0; }
 .msg-docs li { max-width: 260px; padding: 4px var(--s3); border: 1px solid var(--line-2); background: var(--raise); font-size: 12px; color: var(--smoke); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* vídeo HTML: rejilla de estilos */
+.hv-styles { display: grid; grid-template-columns: repeat(auto-fill, minmax(132px, 1fr)); gap: var(--s2); }
+.hv-style { display: grid; gap: 6px; padding: var(--s2); min-height: 64px; text-align: left; background: var(--raise); border: 1px solid var(--line-2); color: var(--smoke); font: 500 12px/1.25 var(--sans); cursor: pointer; }
+.hv-style:hover { border-color: var(--line-3); color: var(--ink); }
+.hv-style.on { border-color: var(--ink); color: var(--ink); box-shadow: inset 0 0 0 1px var(--ink); }
+.hv-sw { display: flex; height: 18px; }
+.hv-sw i { flex: 1; border: 1px solid rgba(255,255,255,.08); }
+#hv-model { width: 100%; }
