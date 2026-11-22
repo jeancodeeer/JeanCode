@@ -32,7 +32,7 @@ export function matchCommands(query, mode, custom = []) {
   const q = query.toLowerCase();
   const all = [
     ...BUILTIN.filter((c) => c.modes.includes(mode)),
-    ...(mode === 'agent' ? custom.map((c) => ({ name: c.name, desc: c.description || 'comando del proyecto', custom: true })) : []),
+    ...(mode === 'agent' || mode === 'chat' ? custom.map((c) => ({ name: c.name, desc: c.description || 'comando del proyecto', custom: true })) : []),
   ];
   // los de plugins van con prefijo (ecc:plan): "/plan" también los encuentra
   return all.filter((c) => c.name.startsWith(q) || c.name.split(':')[1]?.startsWith(q)).slice(0, 12);
