@@ -206,7 +206,9 @@ export function createPhoneDesktop(dev) {
     const f = procFiles(p, id);
     const r = await sh(`pid=$(cat ${sq(f.pid)} 2>/dev/null); if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then echo vivo; else echo fin; fi; grep -o '__JEANCODE_EXIT__[0-9]*' ${sq(f.log)} 2>/dev/null | tail -n 1`);
     const [state, exit] = r.out.trim().split('\n');
-    return { p, f, running: state === 'vivo', exit: exit ? exit.replace('__JEANCODE_EXIT__', '') : null };
+    // la marca de salida es lo último que escribe el trabajo: si está, terminó, aunque kill -0 aún vea su pid
+    // (un proceso terminado sin recoger, «zombi», sigue respondiendo a kill -0 hasta que alguien lo recoge)
+    return { p, f, running: state === 'vivo' && !exit, exit: exit ? exit.replace('__JEANCODE_EXIT__', '') : null };
   };
   const tailLog = async (f, n) => (await sh(`tail -c ${Math.min(Math.max(Number(n) || 4000, 200), 60000)} ${sq(f.log)} 2>/dev/null`)).out.replace(/__JEANCODE_EXIT__\d+\n?/g, '');
   const proc = {
