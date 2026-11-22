@@ -1725,7 +1725,7 @@ test('vídeo HTML: contrato de la composición, aislamiento y MP4', async () => 
   assert.deepEqual(HV.lintComposition(good), []);
   const codes = (h) => HV.lintComposition(h).map((x) => x.code);
   assert.ok(codes('<div>hola</div>').includes('root'));
-  for (const [snippet, code] of [['<script>Date.now()</script>', 'clock'], ['<script>Math.random()</script>', 'random'], ['<script>setTimeout(f, 1)</script>', 'timers'], ['<script>tl.to("a",{repeat:-1})</script>', 'infinite'], ['<script src="https://cdn.example/x.js"></script>', 'script-src'], ['<link rel="stylesheet" href="x.css">', 'link'], ['<img src="https://x.example/a.png">', 'remote'], ['<video></video>', 'media']])
+  for (const [snippet, code] of [['<script>fetch("x")</script>', 'network'], ['<script>tl.to("a",{repeat:-1})</script>', 'infinite'], ['<script src="https://cdn.example/x.js"></script>', 'script-src'], ['<link rel="stylesheet" href="x.css">', 'link'], ['<img src="https://x.example/a.png">', 'remote'], ['<video></video>', 'media']])
     assert.ok(codes(good + snippet).includes(code), code);
   assert.equal(HV.extractHtml('Aquí va:\n```html\n<div>x</div>\n```\nListo'), '<div>x</div>');
   assert.equal(HV.extractHtml('no hay nada'), '');
@@ -1878,33 +1878,23 @@ test('modelos locales: Ollama con el contexto que hace falta', () => {
   assert.ok(AG.toolSchemasFor({}).length > lean.length * 2);
 });
 
-test('vídeo dirigido: del guion a una composición válida, con cualquier modelo', async () => {
-  const S = await import('../web/js/media/htmlscenes.js');
+test('vídeo HTML desde cero: estilos, encargo y reparación', async () => {
   const HV = await import('../web/js/media/htmlvideo.js');
+  const ST = await import('../web/js/media/htmlstyles.js');
   const A = await import('../web/js/media/htmlaudio.js');
-  assert.equal(S.parseStoryboard('Claro:\n```json\n{"mood":"pop","scenes":[{"type":"hook","headline":"Hola",},]}\n```').mood, 'pop', 'tolera texto y comas de más');
-  assert.equal(S.parseStoryboard('no hay guion'), null);
-  const board = S.normalizeBoard({ mood: 'tecno', accent: 'rojo', scenes: [{ type: 'stat', value: 'muchos' }, { type: 'list', items: ['a', 'b', 'c', 'd', 'e', 'f'] }, { type: 'nada' }, { type: 'hook', headline: 'x'.repeat(200) }] }, { duration: 10, brief: 'Café "Altura": rico' });
-  assert.equal(board.scenes.at(-1).type, 'cta', 'siempre hay cierre');
-  assert.equal(board.scenes.find((x) => x.type === 'list').items.length, 4);
-  assert.equal(board.scenes.some((x) => x.type === 'stat'), false, 'sin una cifra real no hay escena de cifra');
-  assert.equal(board.accent, '', 'un color no válido se ignora');
-  const empty = S.normalizeBoard(null, { duration: 6, brief: 'Tienda "Sol". Abrimos hoy. Envíos gratis' });
-  assert.deepEqual([empty.scenes[0].type, empty.scenes.at(-1).headline], ['hook', 'Sol'], 'un modelo que falla no deja sin vídeo');
-  const times = S.sceneTimes(board.scenes, 10);
-  assert.equal(times.at(-1).end, 10);
-  times.forEach((t, i) => { if (i) assert.equal(t.start, times[i - 1].end); });
-  const fit = S.fitText('el café que te despierta de verdad', { width: 1500, height: 500, max: 200, charWidth: 0.5 });
-  assert.ok(fit.size * Math.max(...fit.lines.map((l) => l.length)) * 0.5 <= 1500 && fit.lines.length > 1);
-  for (const theme of Object.keys(S.THEMES)) for (const ratio of ['16:9', '9:16', '1:1', '4:5']) {
-    const html = S.buildComposition(S.normalizeBoard({ scenes: [{ type: 'hook', headline: 'Hola <mundo>' }, { type: 'words', words: ['Uno', 'Dos'] }, { type: 'stat', value: '1.200', label: 'x' }, { type: 'quote', text: 'Una frase' }, { type: 'compare', left: { title: 'A', text: 'a' }, right: { title: 'B', text: 'b' } }, { type: 'cta', headline: 'Fin' }] }, { duration: 12 }), { ratio, duration: 12, theme });
-    assert.deepEqual(HV.lintComposition(html), [], `${theme} ${ratio}`);
-    assert.ok(!html.includes('<mundo>'), 'el texto del modelo va escapado');
-  }
-  const html = S.buildComposition(board, { duration: 10, sound: true });
-  assert.equal(A.soundOf(html).music, S.THEMES.tecno.music);
-  assert.ok(A.soundOf(html).cues.length >= 1);
-  assert.equal(A.soundOf(S.buildComposition(board, { duration: 10, sound: false })), null);
+  assert.ok(Object.keys(ST.HV_STYLES).length >= 10 && ST.HV_STYLES.auto);
+  for (const [id, st] of Object.entries(ST.HV_STYLES)) assert.ok(st.label && st.brief.length > 60 && st.swatch.length === 3, id);
+  assert.equal(ST.styleOf('no-existe'), ST.HV_STYLES.auto);
+  assert.match(HV.htmlVideoSkill({ width: 1080, height: 1920, duration: 10 }), /15 % inferior/);
+  assert.doesNotMatch(HV.htmlVideoSkill({ width: 1920, height: 1080, duration: 10, sound: false }), /data-music/);
+  assert.match(HV.treatmentPrompt({ width: 1920, height: 1080, duration: 10, style: ST.HV_STYLES.neon.brief }), /synthwave/i);
+  // lo que escribe el modelo sin raíz, con infinitos o con música no pedida se arregla sin otra llamada
+  const fixed = HV.repairComposition('<!doctype html><html><body><h1>Hola</h1><style>h1{animation:a 1s infinite}</style><script>tl.to("h1",{repeat:-1})</script></body></html>', { duration: 8, width: 1920, height: 1080 });
+  assert.deepEqual(HV.lintComposition(fixed).map((x) => x.code), []);
+  assert.match(fixed, /data-duration="8"/);
+  const quiet = HV.repairComposition('<div data-composition-id="main" data-duration="5" data-music="drive" data-cues="1,2"></div>', { duration: 5, width: 10, height: 10, sound: false });
+  assert.equal(A.soundOf(quiet), null);
+  assert.equal(A.soundOf('<div data-composition-id="main" data-duration="5" data-music="drive" data-cues="1,2"></div>').music, 'drive');
   const { muxMp4 } = await import('../web/js/media/mp4.js');
   const file = muxMp4({ codec: 'avc1', width: 640, height: 360, fps: 30, description: new Uint8Array([1, 100, 0, 40]), samples: [{ data: new Uint8Array([1, 2]), key: true }], audio: { codec: 'mp4a', sampleRate: 48000, channels: 2, description: new Uint8Array([0x11, 0x90]), samples: [{ data: new Uint8Array([9, 8, 7]), key: true, duration: 1024 }] } });
   const text = Buffer.from(file).toString('latin1');
@@ -1921,7 +1911,7 @@ test('la app sin conexión: todo lo que guarda el service worker existe', () => 
   const files = [...shell.matchAll(/'([^']+)'/g)].map((m) => m[1]).filter((f) => f !== './');
   assert.ok(files.length > 50);
   for (const f of files) assert.ok(existsSync(new URL(`../web/${f}`, import.meta.url)), f);
-  for (const f of ['media/engine', 'media/service', 'media/studio', 'media/edit', 'media/htmlvideo', 'media/htmlrender', 'media/htmlstudio', 'media/htmlscenes', 'media/htmlaudio', 'media/mp4', 'mascot']) assert.ok(files.includes(`js/${f}.js`), f);
+  for (const f of ['media/engine', 'media/service', 'media/studio', 'media/edit', 'media/htmlvideo', 'media/htmlrender', 'media/htmlstudio', 'media/htmlstyles', 'media/htmlaudio', 'media/mp4', 'mascot']) assert.ok(files.includes(`js/${f}.js`), f);
 });
 
 test('adjuntos: qué se acepta y qué viaja al modelo', async () => {

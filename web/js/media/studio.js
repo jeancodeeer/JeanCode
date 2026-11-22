@@ -56,7 +56,7 @@ export function initStudio(deps) {
     </div>`;
 
   const html = createHtmlPanel({
-    esc, store, toast, chatText: deps.chatText, showError: (m) => showError(m),
+    esc, store, toast, chatText: deps.chatText, chatModels: deps.chatModels, showError: (m) => showError(m),
     refresh: () => { renderControls(); renderStage(); },
     saveVideo: (blob, meta) => service.saveHtmlVideo(blob, meta),
     showItem: async (id) => { html.leave(); st.kind = 'video'; store.set('media:kind', 'video'); st.items = await gallery(); renderControls(); select(id); },

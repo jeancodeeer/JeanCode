@@ -65,12 +65,16 @@ function openStudio() {
     $, esc, store, toast, confirmDialog, downloadBlob, service: mediaService,
     endpoints: getEndpoints, providerName: (ep) => providerOf(ep).name, openSettings: () => openPanel('settings'),
     chatText: mediaChatText,
+    chatModels: () => {
+      const cur = modelKey(decide(routeFor('chat'), { models: state.visible || [], mode: 'chat', endpoints: getEndpoints(), need: {} }).model);
+      return (state.visible || []).filter((m) => !capsOf(m.ep, m.id).image && !capsOf(m.ep, m.id).video).map((m) => ({ key: modelKey(m), label: `${m.id} · ${providerOf(m.ep).name}`, current: modelKey(m) === cur }));
+    },
   }));
   return studio;
 }
 /** Pregunta al modelo de chat del usuario (mejorar prompts y escribir composiciones). */
-async function mediaChatText(system, user, signal) {
-  const m = decide(routeFor('chat'), { models: state.visible || [], mode: 'chat', endpoints: getEndpoints(), need: {} }).model;
+async function mediaChatText(system, user, signal, key = '') {
+  const m = (key && (state.visible || []).find((x) => modelKey(x) === key)) || decide(routeFor('chat'), { models: state.visible || [], mode: 'chat', endpoints: getEndpoints(), need: {} }).model;
   if (!m) throw new Error('Elige un modelo de chat en el selector de arriba (en catálogos grandes, como NVIDIA, hay que fijarlo primero).');
   return (await routedChat(m, { signal, think: false, temperature: 0.7, firstByteMs: 420000, messages: [{ role: 'system', content: system }, { role: 'user', content: user }] }, routeCtx(() => {}))).text.replace(/<think>[\s\S]*?<\/think>/g, '').trim();
 }
@@ -1433,8 +1437,9 @@ async function sendHtmlVideo(t, intent, chatModel) {
     const ratio = /vertical|9:16|reel|tiktok|short/i.test(intent.prompt) ? '9:16' : /cuadrad|1:1/i.test(intent.prompt) ? '1:1' : '16:9';
     const duration = Math.min(30, Number(intent.prompt.match(/(\d+)\s*(?:s\b|seg)/i)?.[1]) || 10);
     const signal = state.abort.signal;
-    const { exportHtmlVideo, directComposition } = await htmlTools();
-    const { html } = await directComposition({ brief: intent.prompt, ratio, duration, chatText: mediaChatText, signal, onStatus: say });
+    const { exportHtmlVideo, writeComposition } = await htmlTools();
+    const style = store.get('media:draft:html', {}).style || 'auto';
+    const { html } = await writeComposition({ brief: intent.prompt, ratio, duration, style, chatText: mediaChatText, signal, onStatus: (s) => say(s.toLowerCase()) });
     const blob = await exportHtmlVideo(html, { ratio, duration, signal, onProgress: (p) => say(`exportando… ${Math.round(p * 100)} %`) });
     const item = await mediaService.saveHtmlVideo(blob, { prompt: intent.prompt, html, ratio, duration, source: 'chat' });
     const content = `Vídeo creado con HTML (${ratio}, ${duration} s). Puedes seguir editándolo en la pestaña Imagen.`;

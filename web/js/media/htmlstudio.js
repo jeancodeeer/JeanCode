@@ -1,20 +1,21 @@
 // Pestaña HTML del estudio: pedir una composición, verla, retocarla y exportarla a MP4.
-import { HV_DURATIONS, HV_RATIOS, HV_STYLES, lintComposition } from './htmlvideo.js';
-import { directComposition, exportHtmlVideo, mountComposition, sizeOfRatio, withFonts, writeComposition } from './htmlrender.js';
-import { buildComposition, THEMES } from './htmlscenes.js';
+import { HV_DURATIONS, HV_RATIOS, lintComposition } from './htmlvideo.js';
+import { exportHtmlVideo, mountComposition, sizeOfRatio, withFonts, writeComposition } from './htmlrender.js';
+import { HV_STYLES } from './htmlstyles.js';
 import { renderSoundtrack, soundOf } from './htmlaudio.js';
 
 const mood = (detail) => window.dispatchEvent(new CustomEvent('jc:mascot', { detail }));
 const clock = (s) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
 const icon = (name) => `<svg class="i" aria-hidden="true"><use href="#i-${name}"/></svg>`;
 
-/** deps: { esc, store, toast, chatText, saveVideo(blob, meta) → item, showItem(id) } */
+/** deps: { esc, store, toast, chatText(system, user, signal, modelKey), chatModels() → [{ key, label }], saveVideo(blob, meta) → item, showItem(id) } */
 export function createHtmlPanel(deps) {
   const { esc, store, toast } = deps;
-  const s = { brief: '', ratio: '16:9', duration: 10, html: '', view: 'preview', mode: 'directed', theme: '', sound: 'on', board: null, ...store.get('media:draft:html', {}) };
+  const s = { brief: '', ratio: '16:9', duration: 10, html: '', view: 'preview', style: 'auto', model: '', sound: 'on', plan: '', ...store.get('media:draft:html', {}) };
+  if (!HV_STYLES[s.style]) s.style = 'auto';
   const live = { busy: '', progress: 0, error: '', ctl: null, comp: null, t: 0, length: 0, playing: false, raf: 0, refine: '', issues: [] };
   let els = {};
-  const save = () => store.set('media:draft:html', { brief: s.brief, ratio: s.ratio, duration: s.duration, html: s.html, view: s.view, mode: s.mode, theme: s.theme, sound: s.sound, board: s.board });
+  const save = () => store.set('media:draft:html', { brief: s.brief, ratio: s.ratio, duration: s.duration, html: s.html, view: s.view, style: s.style, model: s.model, sound: s.sound, plan: s.plan });
 
   let audio = null; // { ctx, buffer, node } para oír la vista previa
   function silence() { try { audio?.node?.stop(); } catch { /* ya parado */ } if (audio) audio.node = null; }
@@ -37,15 +38,25 @@ export function createHtmlPanel(deps) {
 
   const seg = (name, values, cur, label = (v) => v) => `<div class="seg st-seg" role="group">${values.map((v) => `<button type="button" class="${String(v) === String(cur) ? 'active' : ''}" data-hv="${name}" data-value="${esc(String(v))}" aria-pressed="${String(v) === String(cur)}">${esc(String(label(v)))}</button>`).join('')}</div>`;
 
+  function modelPicker() {
+    const list = deps.chatModels?.() || [];
+    if (!list.length) return '<p class="fine">Conecta un modelo de chat en Ajustes: es quien escribe la animación.</p>';
+    return `<select id="hv-model" data-hv-f="model" aria-label="Modelo que escribe el vídeo"><option value="">El del chat (${esc(list.find((m) => m.current)?.label || 'automático')})</option>${list.map((m) => `<option value="${esc(m.key)}"${m.key === s.model ? ' selected' : ''}>${esc(m.label)}</option>`).join('')}</select>
+      <span class="fine">Cuanto más potente el modelo, mejor la animación: los grandes (Claude, GPT, Gemini, Qwen Coder, DeepSeek…) escriben piezas de estudio.</span>`;
+  }
+
+  function styleGrid() {
+    return `<div class="hv-styles" role="radiogroup" aria-label="Estilo visual">${Object.entries(HV_STYLES).map(([id, st]) => `<button type="button" role="radio" class="hv-style${s.style === id ? ' on' : ''}" data-hv-style="${id}" aria-checked="${s.style === id}" title="${esc(st.brief)}"><span class="hv-sw" aria-hidden="true">${st.swatch.map((c) => `<i style="background:${c}"></i>`).join('')}</span>${esc(st.label)}</button>`).join('')}</div>`;
+  }
+
   function controls() {
     return `<div class="st-field st-prompt">
         <label class="label" for="hv-brief">Qué vídeo quieres</label>
-        <textarea id="hv-brief" data-hv-f="brief" rows="6" placeholder="Anuncio de 10 segundos para una cafetería: titular grande, tres beneficios y cierre con el logo escrito en texto.">${esc(s.brief)}</textarea>
-        <div class="chips st-presets" aria-label="Tipo de pieza">${HV_STYLES.map((p) => `<button type="button" class="chip${s.brief.includes(p) ? ' on' : ''}" data-hv-style="${esc(p)}" aria-pressed="${s.brief.includes(p)}">${esc(p)}</button>`).join('')}</div>
-        <p class="fine">Tu modelo de chat escribe la animación y este dispositivo la convierte en MP4. No gasta créditos de vídeo.</p>
+        <textarea id="hv-brief" data-hv-f="brief" rows="5" placeholder="Anuncio de 10 segundos para una cafetería: titular grande, tres beneficios y cierre con el logo escrito en texto.">${esc(s.brief)}</textarea>
+        <p class="fine">Un modelo de lenguaje idea el concepto y escribe la animación desde cero en HTML; este dispositivo la graba en MP4. No gasta créditos de vídeo.</p>
       </div>
-      <div class="st-field"><span class="label">Cómo se crea</span>${seg('mode', ['directed', 'free'], s.mode, (v) => (v === 'directed' ? 'Dirigido' : 'Libre'))}<span class="fine">${s.mode === 'directed' ? 'El modelo escribe el guion y JeanCode lo monta con dirección de arte propia. Va bien con modelos pequeños o locales.' : 'El modelo escribe toda la animación. Más creativo; necesita un modelo potente.'}</span></div>
-      ${s.mode === 'directed' ? `<div class="st-field"><span class="label">Estilo visual</span>${seg('theme', ['', ...Object.keys(THEMES)], s.theme, (v) => (v ? THEMES[v].label : 'Automático'))}</div>` : ''}
+      <div class="st-field"><span class="label">Estilo</span>${styleGrid()}</div>
+      <div class="st-field"><label class="label" for="hv-model">Modelo que lo escribe</label>${modelPicker()}</div>
       <div class="st-field"><span class="label">Sonido</span>${seg('sound', ['on', 'off'], s.sound, (v) => (v === 'on' ? 'Música y efectos' : 'Sin sonido'))}</div>
       <div class="st-field"><span class="label">Proporción</span>${seg('ratio', Object.keys(HV_RATIOS), s.ratio)}</div>
       <div class="st-field"><span class="label">Duración</span>${seg('duration', HV_DURATIONS, s.duration, (v) => `${v} s`)}</div>
@@ -61,10 +72,11 @@ export function createHtmlPanel(deps) {
 
   function stage() {
     els.actions.innerHTML = s.html ? `${seg('view', ['preview', 'code'], s.view, (v) => (v === 'preview' ? 'Vista previa' : 'Código'))}<span class="st-gap"></span>
-      ${s.html ? `<button class="btn ghost sm" type="button" data-hv-act="redo" ${live.busy ? 'disabled' : ''}>${icon('undo')}Rehacer</button>` : ''}` : '';
+      <button class="btn ghost sm" type="button" data-hv-act="variant" ${live.busy ? 'disabled' : ''} title="Otra versión desde cero con el mismo pedido y estilo">${icon('rotate')}Otra versión</button>
+      <button class="btn ghost sm" type="button" data-hv-act="redo" ${live.busy ? 'disabled' : ''}>${icon('undo')}Empezar de nuevo</button>` : '';
     unmount();
     if (live.busy && !s.html) {
-      els.view.innerHTML = `<div class="st-empty"><h2 class="st-h">${esc(live.busy)}</h2><p class="note">El modelo está escribiendo la animación.</p></div>`;
+      els.view.innerHTML = `<div class="st-empty"><h2 class="st-h">${esc(live.busy)}</h2><p class="note">${esc(HV_STYLES[s.style].label)} · ${esc(s.ratio)} · ${s.duration} s. Un buen modelo tarda entre 30 s y 2 min en escribir la pieza.</p></div>`;
       return;
     }
     if (!s.html) {
@@ -154,21 +166,15 @@ export function createHtmlPanel(deps) {
     if (!deps.chatText) { setError('Conecta un modelo de chat para escribir la composición.'); return; }
     setError('');
     live.ctl = new AbortController();
-    live.busy = 'Escribiendo…';
+    live.busy = 'Ideando…';
     mood({ work: 'writing' });
     deps.refresh();
     try {
-      const onStatus = (t) => { live.busy = t; button(); };
-      const sound = s.sound === 'on';
-      // un cambio sobre lo dirigido vuelve al guion, salvo que hayas tocado el código a mano
-      const untouched = s.board && s.html === buildComposition(s.board, { ratio: s.boardRatio || s.ratio, duration: s.boardDuration || s.duration, theme: s.boardTheme ?? s.theme, sound: s.boardSound ?? sound });
-      const r = s.mode === 'directed' && (!previous || untouched)
-        ? await directComposition({ brief, ratio: s.ratio, duration: s.duration, theme: s.theme, sound, previous: previous ? s.board : null, chatText: deps.chatText, signal: live.ctl.signal, onStatus })
-        : await writeComposition({ brief, ratio: s.ratio, duration: s.duration, previous, chatText: deps.chatText, signal: live.ctl.signal, onStatus });
-      s.board = r.board || null;
-      Object.assign(s, { boardRatio: s.ratio, boardDuration: s.duration, boardTheme: s.theme, boardSound: sound });
+      const onStatus = (t) => { live.busy = t; button(); if (!s.html) { const h = els.view.querySelector('.st-h'); if (h) h.textContent = t; } };
+      const chatText = (system, user, signal) => deps.chatText(system, user, signal, s.model || '');
+      const r = await writeComposition({ brief, ratio: s.ratio, duration: s.duration, style: s.style, sound: s.sound === 'on', previous, chatText, signal: live.ctl.signal, onStatus });
       s.html = r.html;
-      if (r.note) toast('EL MODELO FALLÓ: SE USÓ UN GUION BÁSICO');
+      if (!previous) s.plan = r.plan || '';
       s.view = 'preview';
       live.refine = '';
       save();
@@ -210,7 +216,7 @@ export function createHtmlPanel(deps) {
     button,
     leave: unmount,
     /** Abre una composición ya exportada para seguir trabajándola. */
-    load(item) { s.board = null; s.html = item.html; s.brief = item.prompt; s.ratio = item.params?.ratio || s.ratio; s.duration = Number(item.params?.duration) || s.duration; s.view = 'preview'; save(); },
+    load(item) { s.plan = ''; s.html = item.html; s.brief = item.prompt; s.ratio = item.params?.ratio || s.ratio; s.duration = Number(item.params?.duration) || s.duration; s.view = 'preview'; save(); },
     async submit() {
       if (live.busy) { live.ctl?.abort(); return; }
       if (s.html) return exportNow();
@@ -224,22 +230,15 @@ export function createHtmlPanel(deps) {
         const before = s[name];
         s[name] = name === 'duration' ? Number(value) : value;
         save();
-        // la composición está medida para un formato: si cambia, se adapta en vez de verse cortada
+        // la composición está medida para un formato: si cambia, el modelo la adapta en vez de verse cortada
         const changed = String(before) !== String(s[name]);
-        // lo dirigido se vuelve a montar al instante, sin gastar otra llamada al modelo
-        if (s.html && s.board && changed && ['ratio', 'duration', 'theme', 'sound'].includes(name)) {
-          s.html = buildComposition(s.board, { ratio: s.ratio, duration: s.duration, theme: s.theme, sound: s.sound === 'on' });
-          Object.assign(s, { boardRatio: s.ratio, boardDuration: s.duration, boardTheme: s.theme, boardSound: s.sound === 'on' });
-          save();
-          deps.refresh();
-        } else if (s.html && !s.board && ['ratio', 'duration'].includes(name) && changed && !live.busy) write(`Adapta la composición a ${s.ratio} y ${s.duration} segundos.`, s.html);
+        if (s.html && ['ratio', 'duration'].includes(name) && changed && !live.busy) write(`Adapta la composición a ${s.ratio} (${sizeOfRatio(s.ratio).width}×${sizeOfRatio(s.ratio).height}) y ${s.duration} segundos, recolocando y reescalando todo para que se vea bien.`, s.html);
         else deps.refresh();
         return true;
       }
       const style = t.closest('[data-hv-style]');
       if (style) {
-        const p = style.dataset.hvStyle;
-        s.brief = s.brief.includes(p) ? s.brief.replace(new RegExp(`[,.]?\\s*${p}`), '').trim() : [s.brief.trim().replace(/[.,]$/, ''), p].filter(Boolean).join(', ');
+        s.style = style.dataset.hvStyle;
         save();
         deps.refresh();
         return true;
@@ -248,7 +247,8 @@ export function createHtmlPanel(deps) {
       if (!act) return false;
       if (act === 'play') togglePlay();
       if (act === 'refine') { if (live.refine.trim()) write(live.refine.trim(), s.html); else els.view.ownerDocument.querySelector('#hv-refine')?.focus(); }
-      if (act === 'redo') { s.html = ''; s.board = null; save(); deps.refresh(); }
+      if (act === 'redo') { s.html = ''; s.plan = ''; save(); deps.refresh(); }
+      if (act === 'variant' && s.brief.trim()) { s.html = ''; s.plan = ''; save(); write(s.brief.trim()); }
       return true;
     },
     onInput(t) {

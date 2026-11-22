@@ -5,36 +5,55 @@
 
 export const HV_RATIOS = { '16:9': [1920, 1080], '9:16': [1080, 1920], '1:1': [1080, 1080], '4:5': [1080, 1350] };
 export const HV_DURATIONS = [5, 10, 15, 30];
-export const HV_STYLES = ['tipografía cinética', 'explicativo', 'lanzamiento de producto', 'datos animados', 'revelado de logo', 'anuncio vertical'];
 
-/** Skill que recibe el modelo: el contrato de la composición y el oficio de motion design. */
-export function htmlVideoSkill({ width, height, duration }) {
-  return `Eres director de motion graphics. Escribes UNA composición HTML que se convierte, fotograma a fotograma, en un vídeo de ${width}×${height} y ${duration} s a 30 fps.
+/** Encargo para la primera pasada: el plan creativo, corto, antes de escribir código. */
+export function treatmentPrompt({ width, height, duration, style }) {
+  return `Eres director creativo de motion graphics. Vas a planificar un vídeo de ${width}×${height}, ${duration} s.
 
-FORMATO (obligatorio)
-- Responde SOLO con un bloque \`\`\`html. Sin explicaciones.
-- Raíz: <div id="stage" data-composition-id="main" data-start="0" data-duration="${duration}" data-width="${width}" data-height="${height}">. Todo va dentro, con position:absolute y medidas en px para ${width}×${height}.
-- Cada escena o elemento temporal: class="clip" data-start="segundos" data-duration="segundos" data-track-index="0". Fuera de su intervalo no se ve. El orden de pintado lo decide z-index.
-- Animación: const tl = gsap.timeline({ paused: true }); añade los tweens; al final window.__timelines["main"] = tl; El tiempo de la línea es el tiempo del vídeo.
-- Ayudas: HV.split(selector, "words"|"chars") parte el texto en <span class="hv-w"> para animarlo; HV.onFrame(function (t) { ... }) ejecuta código en cada fotograma según el tiempo t (contadores, gráficos).
-- Música opcional: añade a la raíz data-music="drive|tech|bounce|elegant|warm|opium" y data-cues con los segundos de cada cambio de escena separados por comas.
-- API disponible, ya cargada: gsap.timeline, tl.to, tl.from, tl.fromTo, tl.set, tl.addLabel, posiciones (número, "+=0.2", "-=0.2", "<", ">", etiqueta), stagger, repeat finito, yoyo, eases power1-4, sine, expo, circ, back, elastic, bounce (.in, .out, .inOut). Propiedades: x, y, xPercent, yPercent, scale, scaleX, scaleY, rotation, skewX, skewY, opacity, autoAlpha, colores, filter, clipPath y cualquier CSS numérico.
+DIRECCIÓN DE ARTE
+${style}
 
-REGLAS PARA QUE EL RENDER SEA EXACTO
-- Todo lo visible depende solo del tiempo de la línea. Prohibido: Date.now, Math.random sin semilla, setTimeout, setInterval, requestAnimationFrame, fetch, repeat: -1, autoplay, <video> y <audio>.
-- Sin recursos externos: nada de CDN, <link>, <script src> ni imágenes remotas. Usa CSS, SVG en línea, degradados y data: URI. Fuentes incluidas: "Anton", "Bebas Neue", "Archivo Black", "Playfair Display", "DM Serif Display", "Space Grotesk", "IBM Plex Sans", "IBM Plex Mono".
-- No animes display ni visibility de un .clip: anima un hijo. No combines transform de CSS con transformaciones animadas en el mismo elemento.
-- Anima transform y opacity antes que left, top, width o height.
-- No uses backdrop-filter, mix-blend-mode sobre el fondo ni <iframe>.
+Escribe un plan breve en texto plano (máx. 220 palabras), sin código:
+1. CONCEPTO: la idea visual en una frase (qué lo hace memorable).
+2. PALETA: 3-4 colores en hexadecimal y para qué se usa cada uno.
+3. TIPOGRAFÍA: familias (solo de: Anton, Bebas Neue, Archivo Black, Playfair Display, DM Serif Display, Space Grotesk, IBM Plex Sans, IBM Plex Sans Condensed, IBM Plex Mono) y tamaños.
+4. ESCENAS: lista con segundo de inicio y fin, qué se ve, el texto exacto en pantalla y cómo entra y sale. Entre 3 y ${Math.max(4, Math.round(duration / 2))} escenas, cubriendo de 0 a ${duration} s sin huecos.
+5. HILO CONDUCTOR: el elemento o movimiento que conecta las escenas (transiciones).
+Respeta literalmente cualquier texto, marca o dato que dé el usuario.`;
+}
 
-OFICIO
-- Una idea por escena, cada una en su propio .clip. Título legible en 1 s; cada escena dura lo que tarda en leerse. Una jerarquía clara: un elemento protagonista por escena.
-- Nada se queda encima de lo siguiente: antes de que entre un elemento en un lugar, lo anterior ya salió o su clip terminó. Usa todo el encuadre, no una columna pequeña en el centro.
-- Zona segura: el contenido dentro del 90 % central y el texto clave dentro del 80 %. En vertical, deja libre el 15 % inferior.
-- Tipografía grande: en ${width}×${height}, el texto principal mide al menos ${Math.round(Math.min(width, height) * 0.14)} px y el secundario al menos ${Math.round(Math.min(width, height) * 0.06)} px.
-- El movimiento guía la atención: entradas de 0.4 a 0.8 s con power3.out o expo.out, salidas más cortas con power2.in, y stagger de 0.04 a 0.1 s. Solapa las transiciones entre escenas; nunca dejes un fotograma vacío.
-- Paleta de 2 o 3 colores con contraste alto y un fondo con profundidad (degradado, formas, textura SVG). Nada de plantilla genérica: una decisión visual fuerte y coherente.
-- Respeta cualquier texto literal del usuario. Termina con un cierre deliberado que se sostenga al menos 0.5 s.`;
+/** Skill que recibe el modelo: el contrato técnico y el oficio. El estilo y el plan llegan aparte. */
+export function htmlVideoSkill({ width, height, duration, sound = true }) {
+  const big = Math.round(Math.min(width, height) * 0.12), small = Math.round(Math.min(width, height) * 0.045);
+  return `Eres un motion designer y desarrollador front-end de primer nivel. Escribes desde cero UNA composición HTML/CSS/JS que se graba fotograma a fotograma como vídeo de ${width}×${height} px, ${duration} s, 30 fps. Debe parecer hecha por un estudio, no una plantilla.
+
+FORMATO
+- Responde SOLO con un bloque \`\`\`html completo. Sin explicaciones antes ni después.
+- Raíz obligatoria: <div id="stage" data-composition-id="main" data-duration="${duration}"${sound ? ' data-music="…" data-cues="…"' : ''}>. Todo dentro, posicionado en px para un lienzo exacto de ${width}×${height}. Pon tus <style> y <script> después de la raíz.
+- Escenas: cada una en un contenedor class="clip" data-start="s" data-duration="s" (solo se ve dentro de su intervalo). Puedes solapar clips para transiciones.${sound ? `
+- Música (síntesis propia, opcional pero recomendada): data-music="drive|tech|bounce|elegant|warm|opium" según el tono, y data-cues con los segundos de cada cambio de escena, separados por comas.` : ''}
+
+CÓMO ANIMAR (el tiempo es virtual: la app lo avanza y captura; todo debe depender solo del tiempo)
+Elige lo que mejor sirva; puedes combinarlo:
+1. Línea de tiempo estilo GSAP (recomendado para coreografía): const tl = gsap.timeline({ paused: true }); tl.from/to/fromTo/set(selector, { ...props, duration, ease, stagger }, posición); al final window.__timelines["main"] = tl;
+   Posiciones: número absoluto en segundos, "+=0.2", "-=0.3", "<", ">", etiquetas. Eases: power1-4, sine, expo, circ, back, elastic, bounce con .in/.out/.inOut, "none". Props: x, y, xPercent, yPercent, scale, scaleX, scaleY, rotation, skewX, skewY, opacity, autoAlpha, transformOrigin, colores, filter, clipPath, backgroundPosition, strokeDashoffset, variables CSS (--algo) y cualquier propiedad CSS numérica. repeat finito y yoyo.
+2. CSS @keyframes con animation-delay en segundos absolutos y animation-fill-mode: both (la app las sincroniza con el tiempo del vídeo).
+3. HV.onFrame(function (t) { ... }) para lo procedural: contadores, partículas, gráficos en <canvas> 2D, ruido, ondas. t = segundos. Math.random está sembrado y se resiembra en cada fotograma: genera datos fijos una vez fuera de onFrame.
+4. Ayuda: HV.split(selector, "words"|"chars") parte el texto en spans .hv-w (inline-block) para animarlo con stagger.
+
+LÍMITES TÉCNICOS
+- Sin red: nada de CDN, <link>, <script src>, @import ni imágenes remotas. Usa CSS, SVG en línea (formas, paths, filtros feTurbulence/feGaussianBlur, degradados), <canvas> y data: URI. Sin <video>, <audio>, <iframe>, backdrop-filter ni mix-blend-mode.
+- Fuentes disponibles (ya incluidas): "Anton", "Bebas Neue", "Archivo Black", "Playfair Display", "DM Serif Display", "Space Grotesk", "IBM Plex Sans", "IBM Plex Sans Condensed", "IBM Plex Mono". Ninguna otra.
+- No animes display/visibility de un .clip (lo controla la app): anima sus hijos. No mezcles un transform de CSS fijo con transformaciones animadas en el mismo elemento: envuelve en otro div.
+- Nada infinito (repeat: -1, animation infinite): todo tiene final.
+
+OFICIO (lo que separa un vídeo bueno de uno malo)
+- Concepto visual fuerte y coherente; fondos con profundidad (capas, degradados, formas, textura), nunca un color plano solo.
+- Tipografía protagonista: texto principal ≥ ${big} px, secundario ≥ ${small} px. Máximo ~7 palabras en pantalla a la vez. Cada texto visible el tiempo suficiente para leerlo (~0.3 s por palabra + 0.6 s).
+- Movimiento con intención: entradas 0.4-0.9 s (power3.out / expo.out), salidas más cortas (power2.in), stagger 0.03-0.08 s, transiciones solapadas; algo se mueve siempre (deriva lenta del fondo, parallax) pero nunca todo a la vez.
+- Composición: usa todo el encuadre, jerarquía clara (un protagonista por escena), alineaciones deliberadas, zona segura del 90 %${height > width ? ', y en vertical deja libre el 15 % inferior' : ''}. Nada se sale del encuadre ni se pisa sin querer: antes de que algo ocupe un lugar, lo anterior ya salió.
+- El primer fotograma ya muestra algo atractivo (no negro). El cierre se sostiene ≥ 0.8 s.
+- Respeta literalmente textos, marcas y datos del usuario. Idioma del texto en pantalla: el del pedido.`;
 }
 
 /** El HTML de la respuesta del modelo. */
@@ -57,13 +76,27 @@ export function lintComposition(html) {
   if (/<link\b/i.test(s)) add('link', 'No se pueden cargar hojas de estilo externas: usa <style>.');
   if (/(?:src|href)\s*=\s*["']https?:|url\(\s*["']?https?:|@import/i.test(s)) add('remote', 'Hay recursos remotos: el render no tiene red. Usa SVG o data: URI.');
   if (/<(?:video|audio|iframe)\b/i.test(s)) add('media', 'No se admiten <video>, <audio> ni <iframe>.');
-  if (/Date\.now|new Date\(\)/.test(code)) add('clock', 'Usa el tiempo de la línea, no el reloj.');
-  if (/Math\.random/.test(code)) add('random', 'Math.random cambia entre fotogramas: usa valores fijos.');
-  if (/\b(?:setTimeout|setInterval|requestAnimationFrame|fetch|XMLHttpRequest)\s*\(/.test(code)) add('timers', 'Temporizadores y red no son deterministas: usa la línea de tiempo.');
-  if (/repeat\s*:\s*-1/.test(code)) add('infinite', 'repeat: -1 no tiene final: usa un número de repeticiones.');
+  if (/\b(?:fetch|XMLHttpRequest|WebSocket)\s*\(/.test(code)) add('network', 'La composición no tiene red.');
+  if (/repeat\s*:\s*-1/.test(code) || /animation[^;{}]*\binfinite\b/i.test(s)) add('infinite', 'Hay animaciones infinitas: todo debe tener final.');
   if (/gsap\.timeline/.test(code) && !/__timelines/.test(code)) add('register', 'Registra la línea en window.__timelines["main"].');
   if (/gsap\.timeline\((?![^)]*paused\s*:\s*true)/.test(code)) add('paused', 'La línea debe crearse con { paused: true }.');
   return out;
+}
+
+/** Arregla lo que se puede arreglar sin el modelo: raíz que falta, infinitos y la música si no se quiere. */
+export function repairComposition(html, { duration, width, height, sound = true }) {
+  let s = String(html || '').replace(/<!doctype[^>]*>/gi, '').replace(/<\/?(?:html|head|body)\b[^>]*>/gi, '').trim();
+  if (!/data-composition-id\s*=/.test(s)) {
+    const scripts = (s.match(/<script\b[\s\S]*?<\/script>/gi) || []).join('\n');
+    const styles = (s.match(/<style\b[\s\S]*?<\/style>/gi) || []).join('\n');
+    const body = s.replace(/<script\b[\s\S]*?<\/script>/gi, '').replace(/<style\b[\s\S]*?<\/style>/gi, '');
+    s = `<div id="stage" data-composition-id="main" data-duration="${duration}" style="position:relative;width:${width}px;height:${height}px;overflow:hidden">${body}</div>\n${styles}\n${scripts}`;
+  } else if (!/data-composition-id[^>]*data-duration|data-duration[^>]*data-composition-id/.test(s)) {
+    s = s.replace(/data-composition-id\s*=\s*(["'][^"']*["'])/, `data-composition-id=$1 data-duration="${duration}"`);
+  }
+  s = s.replace(/repeat\s*:\s*-1/g, 'repeat: 0').replace(/(animation[^;{}]*?)\binfinite\b/gi, '$1 1');
+  if (!sound) s = s.replace(/\sdata-(?:music|cues)\s*=\s*("[^"]*"|'[^']*')/g, '');
+  return s;
 }
 
 /** Quita del HTML lo que nunca debe llegar al documento, aunque el modelo lo escriba. */
@@ -330,6 +363,7 @@ export function jcHvRuntime(cfg) {
   /* ---- saltar a un instante ---- */
   function seek(t) {
     T = t;
+    seed = 0x2f6e2b1 + Math.round(t * 30); // lo aleatorio por fotograma (grano, ruido) es estable: el mismo instante, el mismo dibujo
     frameState = new WeakMap();
     for (const [id, x] of [...timers]) {
       while (timers.has(id) && x.at <= T) { x.fn(...x.a); if (x.every) x.at += x.every; else timers.delete(id); }
