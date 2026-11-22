@@ -30,11 +30,15 @@ import { createMascot } from './mascot.js';
 import { MAX_ATTACHMENTS, prepareImage, rejectReason, withImages } from './attachments.js';
 import { isDocument, readDocument, docBlock, splitDocs } from './documents.js';
 import { SKILL_CATALOG, SKILL_CATEGORIES } from './skills-catalog.js';
+import * as webExt from './webext.js';
+import { recordUsage, usageSummary, budgetStatus, getBudget, setBudget, rateLimits, isLimited, keyBalance } from './usage.js';
 import { PLUGIN_CATALOG, pluginUrl } from './plugins-catalog.js';
 
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => [...el.querySelectorAll(s)];
 const desktop = window.jeancodeDesktop || null;
+// skills y plugins: en el escritorio, en disco; en la web y el móvil, en el navegador (webext.js)
+const ext = desktop?.skills ? desktop : webExt;
 // El modo CODE (proyectos descargables, estilo Abacus) es solo de la web: en el escritorio está el agente,
 // que trabaja en tus carpetas, y en el móvil se queda el chat.
 const CODE_MODE = !desktop && !isNativeApp();
@@ -1135,6 +1139,7 @@ function updateContext() {
   const total = t?.usage ? ` · sesión: ↑ ${fmtTok(t.usage.prompt)} ↓ ${fmtTok(t.usage.completion)} tokens${t.cost ? ` · ≈ ${fmtCost(t.cost)}` : ''}` : '';
   $('#ctx-meter').title = `${real ? '' : '≈ '}${used.toLocaleString()} de ${win.limit.toLocaleString()} tokens (${win.known ? 'ventana del modelo' : 'ventana desconocida: se suponen 128k'})${total}. Usa /compact para resumir; /context para ver el detalle.`;
   $('#ctx-meter').classList.toggle('warn', pct >= 75);
+  usageBadge();
   return pct;
 }
 
@@ -1152,7 +1157,89 @@ function addUsage(t, u, m = null) {
   t.usage = { prompt: (t.usage?.prompt || 0) + u.prompt, completion: (t.usage?.completion || 0) + u.completion };
   t.lastContext = u.prompt + u.completion;
   const price = m ? capsOf(m.ep, m.id).price : null;
-  if (price) t.cost = (t.cost || 0) + u.prompt * price.prompt + u.completion * price.completion;
+  const cost = price ? u.prompt * price.prompt + u.completion * price.completion : 0;
+  if (price) t.cost = (t.cost || 0) + cost;
+  recordUsage({ ep: m?.ep, model: m?.id, provider: m?.ep ? providerOf(m.ep).name : '' }, u, cost);
+  usageBadge();
+}
+
+/* ------------------------------------------------------ gasto de tokens y límites (usage.js) */
+const fmtBig = (n) => (n >= 1e6 ? `${(n / 1e6).toFixed(n >= 1e7 ? 0 : 1)} M` : n >= 1e3 ? `${Math.round(n / 1e3)} k` : String(n));
+/** Aviso en el medidor: presupuesto cerca o pasado, o proveedor que ha dicho «límite alcanzado». */
+function usageBadge() {
+  const b = budgetStatus();
+  const m = currentModel();
+  const limited = m && isLimited(m.ep.id);
+  const meter = $('#ctx-meter');
+  if (!meter) return;
+  meter.classList.toggle('over', b.level === 'over' || !!limited);
+  meter.classList.toggle('near', b.level === 'near');
+  meter.dataset.badge = limited ? 'LÍMITE' : b.level === 'over' ? `${b.pct}%` : b.level === 'near' ? `${b.pct}%` : '';
+}
+async function renderUsage() {
+  const s = usageSummary();
+  const b = getBudget();
+  const st = budgetStatus(s);
+  const t = thread();
+  const m = currentModel();
+  const win = contextWindow();
+  const ctxUsed = t?.lastContext || estimateTokens(t?.messages || []);
+  const bar = (pct, cls = '') => `<span class="u-bar ${cls}"><i style="width:${Math.min(100, pct)}%"></i></span>`;
+  const line = (label, x, limit) => `<li><span class="ep-prov">${esc(label)}</span><span class="ep-url">${fmtBig(x.prompt + x.completion)} tokens <span class="fine">(↑ ${fmtBig(x.prompt)} · ↓ ${fmtBig(x.completion)} · ${x.calls} respuestas${x.cost ? ` · ≈ ${fmtCost(x.cost)}` : ''})</span></span>${limit ? `${bar(((x.prompt + x.completion) / limit) * 100, (x.prompt + x.completion) >= limit ? 'bad' : (x.prompt + x.completion) >= limit * 0.8 ? 'warn' : '')}<span class="ep-meta">de ${fmtBig(limit)}</span>` : ''}</li>`;
+  const max = Math.max(1, ...s.week.map((d) => d.prompt + d.completion));
+  const rl = rateLimits();
+  const limits = rl.map((r) => {
+    const part = (k, label) => r[k]?.limit != null ? `${label}: ${fmtBig(r[k].remaining ?? 0)} de ${fmtBig(r[k].limit)} disponibles${r[k].reset != null ? ` · se renueva en ${Math.ceil(r[k].reset)} s` : ''}` : '';
+    const limited = (r.limited || 0) > Date.now();
+    return `<li><span class="ep-prov">${esc(r.name || r.id)}</span><span class="ep-url">${limited ? `<strong class="bad">Límite alcanzado</strong> · vuelve a intentarlo en ${Math.ceil((r.limited - Date.now()) / 1000)} s. ` : ''}${[part('tokens', 'Tokens/min'), part('requests', 'Peticiones')].filter(Boolean).join(' · ') || (limited ? '' : 'Sin datos de límite')}</span>${r.tokens?.limit ? bar(100 - ((r.tokens.remaining ?? 0) / r.tokens.limit) * 100, (r.tokens.remaining ?? 0) < r.tokens.limit * 0.1 ? 'bad' : '') : ''}<span class="ep-meta">visto ${new Date(r.at).toLocaleTimeString()}</span></li>`;
+  }).join('');
+  $('#usage-body').innerHTML = `
+    ${st.level !== 'ok' ? `<p class="u-alert ${st.level}">${st.level === 'over' ? 'Has pasado' : 'Estás cerca de'} tu límite ${st.which === 'daily' ? 'diario' : 'mensual'}: ${fmtBig(st.used)} de ${fmtBig(st.limit)} tokens (${st.pct} %).</p>` : ''}
+    <h3>Esta conversación</h3>
+    <ul class="rows">
+      <li><span class="ep-prov">Contexto</span><span class="ep-url">${fmtBig(ctxUsed)} de ${fmtBig(win.limit)} tokens${win.known ? '' : ' (ventana supuesta)'}${m ? ` · ${esc(m.id)}` : ''}</span>${bar((ctxUsed / win.limit) * 100, ctxUsed >= win.limit * 0.75 ? 'warn' : '')}<span class="ep-meta">${Math.round((ctxUsed / win.limit) * 100)} %</span></li>
+      ${t?.usage ? line('Gastado', { ...t.usage, cost: t.cost || 0, calls: (t.messages || []).filter((x) => x.role === 'assistant' && x.usage).length }) : '<li>Sin gasto todavía.</li>'}
+    </ul>
+    <h3>Tu gasto</h3>
+    <ul class="rows">${line('Hoy', s.today, b.daily)}${line('Este mes', s.month, b.monthly)}</ul>
+    <div class="u-week" aria-label="Últimos 7 días">${s.week.map((d) => `<div title="${d.day}: ${fmtBig(d.prompt + d.completion)} tokens"><i style="height:${Math.round(((d.prompt + d.completion) / max) * 100)}%"></i><span>${new Date(`${d.day}T12:00`).toLocaleDateString(undefined, { weekday: 'narrow' })}</span></div>`).join('')}</div>
+    ${s.byModel.length ? `<h3>Por modelo · este mes</h3><ul class="rows">${s.byModel.slice(0, 8).map((x) => line(`${x.model} · ${x.provider}`, x)).join('')}</ul>` : ''}
+    <h3>Límites del proveedor</h3>
+    <ul class="rows" id="usage-limits">${limits || '<li>Todavía no hay datos. Aparecen cuando el proveedor los informa en sus respuestas (OpenAI, Groq, Anthropic, OpenRouter…) o cuando responde «límite alcanzado».</li>'}</ul>
+    <p class="fine">El gasto se cuenta con lo que informa cada respuesta y se guarda solo en este dispositivo. Tu límite real de pago está en la web de cada proveedor.</p>`;
+  $('#budget-daily').value = b.daily || '';
+  $('#budget-monthly').value = b.monthly || '';
+  // saldo de la clave (OpenRouter lo informa)
+  for (const ep of getEndpoints().filter((e) => providerOf(e).id === 'openrouter')) {
+    keyBalance(ep, 'openrouter').then((k) => {
+      if (!k) return;
+      const li = document.createElement('li');
+      li.innerHTML = `<span class="ep-prov">OpenRouter · saldo</span><span class="ep-url">${k.limit != null ? `Gastado $${k.usage.toFixed(2)} de $${k.limit.toFixed(2)} · quedan $${(k.remaining ?? 0).toFixed(2)}` : `Gastado $${k.usage.toFixed(2)} (sin tope en la clave)`}${k.free ? ' · cuenta gratuita' : ''}</span>`;
+      $('#usage-limits')?.prepend(li);
+    }).catch(() => {});
+  }
+}
+$('#ctx-meter').addEventListener('click', () => openPanel('usage'));
+$('#usage-budget').addEventListener('submit', (e) => {
+  e.preventDefault();
+  setBudget({ daily: $('#budget-daily').value, monthly: $('#budget-monthly').value });
+  toast('LÍMITE GUARDADO');
+  usageBadge();
+  renderUsage();
+});
+/** Antes de enviar: con el límite propio pasado se pregunta; cerca, se avisa una vez al día. */
+async function budgetGate() {
+  const b = budgetStatus();
+  if (b.level === 'over') {
+    return confirmDialog({ title: 'HAS PASADO TU LÍMITE DE TOKENS', command: `${b.which === 'daily' ? 'Hoy' : 'Este mes'} llevas ${fmtBig(b.used)} de ${fmtBig(b.limit)} tokens (${b.pct} %). Puedes cambiar el límite en Uso de tokens.`, alwaysLabel: 'ENVIAR IGUALMENTE' });
+  }
+  const m = currentModel();
+  if (m && isLimited(m.ep.id)) toast(`${providerOf(m.ep).name.toUpperCase()} DIJO «LÍMITE ALCANZADO» HACE POCO: PUEDE FALLAR`);
+  if (b.level === 'near' && store.get('budgetWarned') !== new Date().toDateString()) {
+    store.set('budgetWarned', new Date().toDateString());
+    toast(`LLEVAS EL ${b.pct} % DE TU LÍMITE ${b.which === 'daily' ? 'DIARIO' : 'MENSUAL'}`);
+  }
+  return true;
 }
 
 /* ------------------------------------------------------------- composer */
@@ -1283,8 +1370,9 @@ function paletteItems() {
     ['Buscar conversaciones', 'Ctrl+Shift+F', () => { $('#rail').classList.add('open'); $('#thread-search').focus(); }],
     ['Modo Chat', 'Ctrl+1', () => setMode('chat')], ...(CODE_MODE ? [['Modo Code', 'Ctrl+2', () => setMode('code')]] : []),
     ...(desktop ? [['Modo Agent', 'Ctrl+3', () => setMode('agent')]] : []),
-    ['Ajustes', '', () => openPanel('settings')], ['Skills', '', () => openPanel('skills')],
-    ...(desktop ? [['Automatizaciones', '', () => openPanel('automations')], ['Plugins', '', () => openPanel('plugins')]] : []),
+    ['Ajustes', '', () => openPanel('settings')], ['Skills', '', () => openPanel('skills')], ['Uso de tokens y límites', '', () => openPanel('usage')],
+    ['Plugins', '', () => openPanel('plugins')],
+    ...(desktop ? [['Automatizaciones', '', () => openPanel('automations')]] : []),
     ['Novedades de JeanCode', '', () => openNews()],
     ...(t ? [['Exportar a Markdown', '', () => exportThread(t, 'md')], ['Exportar a JSON', '', () => exportThread(t, 'json')], ['Exportar a PDF', '', () => exportThread(t, 'pdf')],
       [t.pinned ? 'Quitar de fijadas' : 'Fijar esta conversación', '', () => { t.pinned = !t.pinned; saveThreads(); renderThreads(); }],
@@ -1376,7 +1464,7 @@ $('#composer').addEventListener('submit', async (e) => {
   const cmd = parseCommand(text);
   if (cmd) {
     const custom = state.custom.find((c) => c.name === cmd.name);
-    if (custom && state.mode === 'agent') {
+    if (custom && (state.mode === 'agent' || state.mode === 'chat')) {
       text = expandCustom(custom.body, cmd.args);
     } else {
       input.value = ''; autosize();
@@ -1541,6 +1629,7 @@ async function send(text) {
   if (!m) { toast(decision.reasons[0] ? decision.reasons[0].toUpperCase() : 'SIN API CONECTADA — REVISA AJUSTES'); return; }
   state.decision = decision;
   if (state.mode === 'agent' && !state.workspace) { toast('ELIGE UNA CARPETA DE TRABAJO'); return; }
+  if (!(await budgetGate())) return;
 
   // datos sensibles pegados por error (claves, tarjetas, contraseñas): se avisa ANTES de que salgan de la PC
   const sensitive = billingOf(m.ep, m.id) === 'local' ? [] : detectSensitive(text);
@@ -2534,7 +2623,8 @@ function setAgent(agent) {
 $$('#agent-toggle button').forEach((b) => b.addEventListener('click', () => setAgent(b.dataset.agent)));
 
 async function loadProject() {
-  if (!desktop || !state.workspace) { state.custom = []; state.agents = []; return; }
+  if (!desktop) { [state.custom, state.agents] = await Promise.all([webExt.commands().catch(() => []), webExt.plugins.agents().catch(() => [])]); return; }
+  if (!state.workspace) { state.custom = []; state.agents = []; return; }
   [state.custom, state.agents] = await Promise.all([
     desktop.project.commands(state.workspace).catch(() => []),
     desktop.project.agents(state.workspace).catch(() => []),
@@ -2872,6 +2962,7 @@ function openPanel(name) {
   if (name === 'download') loadReleases();
   if (name === 'skills') renderSkills();
   if (name === 'plugins') renderPlugins();
+  if (name === 'usage') renderUsage();
   if (name === 'help') renderHelp();
   if (name === 'hf') initHf();
   d.showModal();
@@ -3505,11 +3596,11 @@ $('#wipe-btn').addEventListener('click', () => {
 });
 
 async function renderSkills() {
-  if (!desktop) return;
   const list = $('#skill-list');
-  const skills = await desktop.skills.list();
+  const skills = await ext.skills.list();
   list.innerHTML = skills.map((s) => `<li><span class="ep-url"><strong>${esc(s.name)}</strong> — ${esc(s.description)}</span><button class="btn ghost sm" data-skill-del="${esc(s.id)}">QUITAR</button></li>`).join('') || '<li>Sin skills instaladas.</li>';
   renderSkillCatalog(new Set(skills.map((s) => s.name)));
+  if (!desktop) loadProject(); // en la web, cada skill es un /comando del chat
 }
 
 /* catálogo de 100 skills (web/js/skills-catalog.js): se instalan desde su repositorio de GitHub */
@@ -3531,18 +3622,18 @@ function renderSkillCatalog(installed = new Set()) {
 async function installCatalogSkills(entries) {
   let ok = 0;
   for (const c of entries) {
-    try { await desktop.skills.installGithub(c.repo, c.dir); ok++; } catch (err) { toast(`${c.name.toUpperCase()}: ${String(err.message).toUpperCase().slice(0, 90)}`); }
+    try { await ext.skills.installGithub(c.repo, c.dir); ok++; } catch (err) { toast(`${c.name.toUpperCase()}: ${String(err.message).toUpperCase().slice(0, 90)}`); }
   }
   if (ok) toast(ok === 1 ? `SKILL INSTALADA: ${entries[0].name.toUpperCase()}` : `${ok} SKILLS INSTALADAS`);
   renderSkills();
 }
-if (desktop) {
+{
   $('#skill-list').addEventListener('click', async (e) => {
     const b = e.target.closest('[data-skill-del]');
-    if (b) { await desktop.skills.remove(b.dataset.skillDel); renderSkills(); }
+    if (b) { await ext.skills.remove(b.dataset.skillDel); renderSkills(); }
   });
   $('#skill-folder').addEventListener('click', async () => {
-    try { const r = await desktop.skills.installFolder(); if (r) toast('SKILL INSTALADA: ' + r); renderSkills(); } catch (err) { toast(err.message); }
+    try { const r = await ext.skills.installFolder(); if (r) toast('SKILL INSTALADA: ' + r); renderSkills(); } catch (err) { toast(err.message); }
   });
   $('#skill-catalog').addEventListener('click', async (e) => {
     const b = e.target.closest('[data-skill-add]');
@@ -3550,9 +3641,9 @@ if (desktop) {
     b.disabled = true; b.textContent = 'Instalando…';
     await installCatalogSkills(SKILL_CATALOG.filter((c) => c.id === b.dataset.skillAdd));
   });
-  $('#skill-search').addEventListener('input', () => desktop.skills.list().then((s) => renderSkillCatalog(new Set(s.map((x) => x.name)))));
+  $('#skill-search').addEventListener('input', () => ext.skills.list().then((s) => renderSkillCatalog(new Set(s.map((x) => x.name)))));
   $('#skill-recommended').addEventListener('click', async (e) => {
-    const installed = new Set((await desktop.skills.list()).map((s) => s.name));
+    const installed = new Set((await ext.skills.list()).map((s) => s.name));
     const todo = SKILL_CATALOG.filter((c) => RECOMMENDED.includes(c.name) && !installed.has(c.name));
     if (!todo.length) { toast('YA ESTÁN INSTALADAS'); return; }
     e.target.disabled = true; e.target.textContent = `Instalando ${todo.length}…`;
@@ -3561,15 +3652,14 @@ if (desktop) {
   });
   $('#skill-url-form').addEventListener('submit', async (e) => {
     e.preventDefault();
-    try { const r = await desktop.skills.installUrl($('#skill-url').value); toast('SKILL INSTALADA: ' + r); $('#skill-url').value = ''; renderSkills(); } catch (err) { toast(err.message); }
+    try { const r = await ext.skills.installUrl($('#skill-url').value); toast('SKILL INSTALADA: ' + r); $('#skill-url').value = ''; renderSkills(); } catch (err) { toast(err.message); }
   });
 }
 
 /* plugins (web/js/plugins-catalog.js): skills + subagentes + comandos con formato de Claude Code */
 const countsText = (c) => `${c.skills} skills · ${c.agents} subagentes · ${c.commands} comandos`;
 async function renderPlugins() {
-  if (!desktop) return;
-  const installed = await desktop.plugins.list().catch(() => []);
+  const installed = await ext.plugins.list().catch(() => []);
   $('#plugin-list').innerHTML = installed.map((p) => `<li>
     <span class="ep-prov">${esc(PLUGIN_CATALOG.find((c) => c.id === p.id)?.name || p.displayName)}</span>
     <span class="ep-url apps-desc">${esc(countsText(p.counts))}${p.enabled ? '' : ' · DESACTIVADO'}</span>
@@ -3593,26 +3683,28 @@ async function installPlugin(run, btn) {
   } catch (err) { toast(String(err.message).toUpperCase().slice(0, 140)); }
   renderPlugins();
 }
-if (desktop?.plugins) {
+{
   $('#plugin-catalog').addEventListener('click', (e) => {
     const b = e.target.closest('[data-plugin-add]');
     const c = b && PLUGIN_CATALOG.find((x) => x.id === b.dataset.pluginAdd);
-    if (c) installPlugin(() => desktop.plugins.installGit(pluginUrl(c)), b);
+    if (c) installPlugin(() => ext.plugins.installGit(pluginUrl(c), (p) => { b.textContent = `Descargando… ${Math.round(p * 100)} %`; }), b);
   });
   $('#plugin-list').addEventListener('click', async (e) => {
     const t = e.target.closest('[data-plugin-toggle]');
     const d = e.target.closest('[data-plugin-del]');
-    if (t) await desktop.plugins.setEnabled(t.dataset.pluginToggle, !t.dataset.on);
-    if (d) await desktop.plugins.remove(d.dataset.pluginDel);
+    if (t) await ext.plugins.setEnabled(t.dataset.pluginToggle, !t.dataset.on);
+    if (d) await ext.plugins.remove(d.dataset.pluginDel);
     if (t || d) { await loadProject(); renderPlugins(); }
   });
-  $('#plugin-folder').addEventListener('click', () => installPlugin(() => desktop.plugins.installFolder()));
+  $('#plugin-folder').addEventListener('click', () => installPlugin(() => ext.plugins.installFolder()));
   $('#plugin-url-form').addEventListener('submit', (e) => {
     e.preventDefault();
     const url = $('#plugin-url').value.trim();
-    if (url) installPlugin(() => desktop.plugins.installGit(url)).then(() => { $('#plugin-url').value = ''; });
+    if (url) installPlugin(() => ext.plugins.installGit(url)).then(() => { $('#plugin-url').value = ''; });
   });
 }
+
+if (!desktop) loadProject().catch(() => {});
 
 /* ------------------------------------------------------------------ init */
 /* Modo de razonamiento (NORMAL / PENSAR / ESFUERZO). Se recuerda por modelo; si el modelo no admite

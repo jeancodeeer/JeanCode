@@ -6,6 +6,7 @@ import { applyReasoning } from './reasoning.js';
 import { supportsThinkToggle, wantsStreamUsage, providerOf, adapterOf } from './providers.js';
 import { learnCap, reportCaps, capsOf } from './capabilities.js';
 import { looksBuffered } from './quality.js';
+import { noteRateLimit } from './usage.js';
 
 const bridge = () => (typeof window !== 'undefined' ? window.jeancodeDesktop : null);
 
@@ -654,6 +655,7 @@ async function chatOnce({ ep, model, messages, signal, onDelta, onReasoning, onT
   } finally {
     clearTimeout(timer);
   }
+  try { noteRateLimit({ id: ep.id, name: providerOf(ep).name }, res.headers, res.status); } catch { /* sin cabeceras de límite */ }
   if (!res.ok) {
     const text = await res.text().catch(() => '');
     if (useOllama && res.status === 404 && !/model/i.test(text)) throw Object.assign(new Error('sin /api/chat'), { ollamaLegacy: true });

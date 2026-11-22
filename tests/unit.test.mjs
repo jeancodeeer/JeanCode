@@ -1904,6 +1904,35 @@ test('vídeo HTML desde cero: estilos, encargo y reparación', async () => {
   assert.deepEqual([...file.subarray(view.getUint32(second + 12), view.getUint32(second + 12) + 3)], [9, 8, 7], 'el índice del sonido apunta a sus datos');
 });
 
+test('uso de tokens: registro, presupuesto y límites del proveedor', async () => {
+  const U = await import('../web/js/usage.js');
+  U.setBudget({ daily: 1000, monthly: 0 });
+  U.recordUsage({ ep: { id: 'e' }, model: 'm', provider: 'P' }, { prompt: 700, completion: 150 }, 0.01);
+  const s = U.usageSummary();
+  assert.equal(s.today.prompt + s.today.completion, 850);
+  assert.equal(s.byModel[0].model, 'm');
+  assert.equal(U.budgetStatus(s).level, 'near');
+  U.recordUsage({ ep: { id: 'e' }, model: 'm' }, { prompt: 200, completion: 0 });
+  assert.equal(U.budgetStatus().level, 'over');
+  U.noteRateLimit({ id: 'g', name: 'Groq' }, new Headers({ 'x-ratelimit-limit-tokens': '6000', 'x-ratelimit-remaining-tokens': '900', 'x-ratelimit-reset-tokens': '1m30s' }));
+  const g = U.rateLimits().find((r) => r.id === 'g');
+  assert.deepEqual([g.tokens.limit, g.tokens.remaining, g.tokens.reset], [6000, 900, 90]);
+  U.noteRateLimit({ id: 'h' }, new Headers({ 'retry-after': '20' }), 429);
+  assert.ok(U.isLimited('h') && !U.isLimited('g'));
+  U.setBudget({ daily: 0, monthly: 0 });
+});
+
+test('skills y plugins en la web: URLs de GitHub y encabezados', async () => {
+  const X = await import('../web/js/webext.js');
+  const M = await import('../web/js/skills-meta.js');
+  assert.deepEqual(X.parseGithub('https://github.com/obra/superpowers.git'), { repo: 'obra/superpowers', branch: 'HEAD', dir: '', file: false });
+  assert.deepEqual(X.parseGithub('https://github.com/anthropics/skills/tree/main/skills/pdf'), { repo: 'anthropics/skills', branch: 'main', dir: 'skills/pdf', file: false });
+  assert.equal(X.parseGithub('https://github.com/a/b/blob/main/x/SKILL.md').file, true);
+  assert.throws(() => X.parseGithub('http://github.com/a/b'));
+  assert.throws(() => X.parseGithub('https://gitlab.com/a/b'));
+  assert.deepEqual(M.parseFrontmatter('---\nname: pdf\ndescription: >\n  Lee PDFs\n  y más\n---\n# x'), { name: 'pdf', description: 'Lee PDFs y más' });
+});
+
 test('la app sin conexión: todo lo que guarda el service worker existe', () => {
   const { readFileSync, existsSync } = require('node:fs');
   const sw = readFileSync(new URL('../web/sw.js', import.meta.url), 'utf8');

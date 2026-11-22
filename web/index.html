@@ -289,7 +289,8 @@
           <summary aria-label="Más acciones del agente"><svg class="i"><use href="#i-more"/></svg></summary>
           <div class="menu-list" role="menu">
             <button role="menuitem" data-panel="skills">Skills</button>
-            <button role="menuitem" class="desktop-only" data-panel="plugins" hidden>Plugins</button>
+            <button role="menuitem" data-panel="usage">Uso de tokens</button>
+            <button role="menuitem" data-panel="plugins">Plugins</button>
             <button role="menuitem" data-news>Novedades</button>
             <button role="menuitem" class="desktop-only" data-panel="automations" hidden>Automatizaciones</button>
             <button role="menuitem" id="undo-btn">Deshacer el último cambio</button>
@@ -405,9 +406,9 @@
             <summary class="toggle" id="think-btn" title="Cuánto razona el modelo antes de responder">Normal</summary>
             <div class="menu-list" role="menu" aria-label="Modo de razonamiento" id="reason-list"></div>
           </details>
-          <div class="ctx" id="ctx-meter" title="Contexto usado">
+          <button type="button" class="ctx" id="ctx-meter" title="Contexto y gasto de tokens" aria-label="Ver uso de tokens y límites">
             <span class="ctx-bar"><i id="ctx-fill"></i></span><span class="mono" id="ctx-text">0%</span>
-          </div>
+          </button>
           <span class="hint mono" id="hint"></span>
           <span class="hint mono est" id="send-est" aria-live="off"></span>
           <button type="button" class="btn ghost" id="stop-btn" hidden><svg class="i"><use href="#i-stop"/></svg>Parar</button>
@@ -653,7 +654,7 @@
 
 <dialog class="panel wide" id="panel-skills">
   <div class="panel-head"><h2>Skills</h2><button class="icon-btn" data-close aria-label="Cerrar"><svg class="i"><use href="#i-close"/></svg></button></div>
-  <p class="note">Una skill es una carpeta con un <code>SKILL.md</code>. El agente ve la lista y carga la que necesite.</p>
+  <p class="note">Una skill es una carpeta con un <code>SKILL.md</code>. En el agente, él ve la lista y carga la que necesite. En el chat (también en la web y el móvil), cada skill se usa como comando: escribe <code>/nombre-de-la-skill</code> y tu petición.</p>
   <ul class="rows" id="skill-list"></ul>
   <div class="row gap wrap">
     <button class="btn" id="skill-folder">Instalar desde carpeta</button>
@@ -671,9 +672,21 @@
   <div id="skill-catalog"></div>
 </dialog>
 
+<dialog class="panel wide" id="panel-usage">
+  <div class="panel-head"><h2>Uso de tokens</h2><button class="icon-btn" data-close aria-label="Cerrar"><svg class="i"><use href="#i-close"/></svg></button></div>
+  <div id="usage-body"></div>
+  <h3>Tu límite</h3>
+  <p class="note">Pon un tope de tokens propio. Al llegar al 80 % se avisa y al pasarlo se pide confirmación antes de cada mensaje. Vacío o 0 = sin límite.</p>
+  <form id="usage-budget" class="row gap wrap">
+    <label class="grow">Por día <input id="budget-daily" type="number" min="0" step="1000" inputmode="numeric" placeholder="p. ej. 200000"></label>
+    <label class="grow">Por mes <input id="budget-monthly" type="number" min="0" step="10000" inputmode="numeric" placeholder="p. ej. 5000000"></label>
+    <button class="btn" type="submit">Guardar</button>
+  </form>
+</dialog>
+
 <dialog class="panel wide" id="panel-plugins">
   <div class="panel-head"><h2>Plugins</h2><button class="icon-btn" data-close aria-label="Cerrar"><svg class="i"><use href="#i-close"/></svg></button></div>
-  <p class="note">Un plugin agrupa skills, subagentes y comandos con el formato de los plugins de Claude Code (<code>.claude-plugin/plugin.json</code>). Sus skills se cargan con <code>load_skill</code>, sus subagentes con <code>spawn_subagent</code> y sus comandos se escriben como <code>/plugin:comando</code>. Solo se usa su texto: los hooks, servidores MCP y scripts del plugin no se ejecutan.</p>
+  <p class="note">Un plugin agrupa skills, subagentes y comandos con el formato de los plugins de Claude Code (<code>.claude-plugin/plugin.json</code>). En el agente, sus skills se cargan con <code>load_skill</code> y sus subagentes con <code>spawn_subagent</code>. En el chat (también en la web y el móvil), sus comandos y skills se usan escribiendo <code>/plugin:comando</code> o <code>/skill</code>. Solo se usa su texto: los hooks, servidores MCP y scripts del plugin no se ejecutan.</p>
   <ul class="rows" id="plugin-list"></ul>
   <div class="row gap wrap">
     <button class="btn" id="plugin-folder" type="button">Instalar desde carpeta</button>
@@ -683,7 +696,7 @@
     </form>
   </div>
   <h3>Catálogo</h3>
-  <p class="note">Se descargan de GitHub al instalarlos (clon superficial; ECC tarda un poco, son miles de archivos).</p>
+  <p class="note">Se descargan de GitHub al instalarlos. En la web se guardan en este navegador; los plugins muy grandes pueden tardar o superar el límite del navegador.</p>
   <div id="plugin-catalog"></div>
 </dialog>
 
