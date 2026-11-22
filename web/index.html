@@ -393,12 +393,12 @@
     <form class="composer" id="composer">
       <ul class="popup" id="popup" role="listbox" hidden></ul>
       <div class="composer-box">
-        <ul class="att-list" id="att-list" aria-label="Imágenes adjuntas" hidden></ul>
+        <ul class="att-list" id="att-list" aria-label="Archivos adjuntos" hidden></ul>
         <textarea id="input" rows="1" placeholder="Escribe a Jean…" aria-label="Mensaje" aria-autocomplete="list" aria-controls="popup"></textarea>
         <div class="composer-row">
-          <label class="icon-btn att-btn" id="att-btn" title="Adjuntar imágenes" hidden>
+          <label class="icon-btn att-btn" id="att-btn" title="Adjuntar imágenes o documentos">
             <svg class="i" aria-hidden="true"><use href="#i-clip"/></svg><span class="sr">Adjuntar imágenes</span>
-            <input type="file" id="att-input" accept="image/png,image/jpeg,image/webp,image/gif" multiple>
+            <input type="file" id="att-input" accept="image/png,image/jpeg,image/webp,image/gif,.pdf,.docx,.xlsx,.pptx,.odt,.txt,.md,.csv,.tsv,.json,.xml,.html,.css,.js,.ts,.py,.java,.c,.cpp,.cs,.go,.rs,.rb,.php,.sh,.sql,.yaml,.yml,.toml,.log,.ipynb,text/*,application/pdf" multiple>
           </label>
           <!-- modo de razonamiento: solo lo que admite el modelo elegido (reasoning.js) -->
           <details class="menu up reason-menu" id="reason-menu">
